@@ -1,0 +1,42 @@
+[project]
+name = "studyguru-pro"
+version = "1.0.0"
+description = "StudyGuru Pro - AI-powered study assistant"
+authors = [
+    {name = "StudyGuru Team", email = "team@studyguru.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[standard]>=0.104.1",
+    "strawberry-graphql[fastapi]>=0.216.1",
+    "sqlalchemy>=2.0.23",
+    "alembic>=1.12.1",
+    "asyncpg>=0.29.0",
+    "python-multipart>=0.0.6",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "pydantic-settings>=2.1.0",
+    "boto3>=1.34.0",
+    "aiofiles>=23.2.1",
+    "pillow>=10.1.0",
+    "openai>=1.3.0",
+    "paddle-python-sdk>=1.0.0",
+    "python-crontab>=3.0.0",
+    "emails>=0.6",
+    "jinja2>=3.1.2",
+    "httpx>=0.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+]
