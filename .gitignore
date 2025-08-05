@@ -1,26 +1,10 @@
 
 # Dependency directories
-node_modules/
-images/
-./node_modules
-jspm_packages/
+
 
 .env
 
-# TypeScript v1 declaration files
-typings/
 
-# TypeScript cache
-*.tsbuildinfo
-
-# Optional npm cache directory
-.npm
-
-# Optional eslint cache
-.eslintcache
-
-# Yarn Integrity file
-.yarn-integrity
 
 # dotenv environment variables file
 # .env
@@ -37,3 +21,5 @@ dist
 
 #output
 build
+*.pyc
+.venv
