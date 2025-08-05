@@ -4,17 +4,21 @@ from sqlalchemy import MetaData
 from app.core.config import settings
 
 # Create async engine
-engine = create_async_engine(
-    settings.DATABASE_URL.replace("mysql://", "mysql+asyncmy://"),
-    echo=settings.ENVIRONMENT == "development"
-)
+# Ensure the URL uses the correct format for asyncmy
+db_url = settings.DATABASE_URL
+if db_url.startswith("mysql://"):
+    db_url = db_url.replace("mysql://", "mysql+asyncmy://", 1)
+elif "mysql+asyncpg://" in db_url:
+    # Fix common mistake: asyncpg is for PostgreSQL, not MySQL
+    db_url = db_url.replace("mysql+asyncpg://", "mysql+asyncmy://", 1)
+
+engine = create_async_engine(db_url, echo=settings.ENVIRONMENT == "development")
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(
-    engine, 
-    class_=AsyncSession, 
-    expire_on_commit=False
+    engine, class_=AsyncSession, expire_on_commit=False
 )
+
 
 # Base class for models
 class Base(DeclarativeBase):
@@ -31,8 +35,14 @@ async def get_db() -> AsyncSession:
 
 async def init_db():
     """Initialize database tables"""
-    async with engine.begin() as conn:
-        # Import all models here to ensure they are registered
-        from app.models import user, subscription, media, session as session_models
-        # Create tables if they don't exist
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            # Import all models here to ensure they are registered
+            from app.models import user, subscription, media
+
+            # Create tables if they don't exist
+            await conn.run_sync(Base.metadata.create_all)
+        print("Database initialized successfully")
+    except Exception as e:
+        print(f"Database initialization failed: {e}")
+        print("Continuing without database connection...")

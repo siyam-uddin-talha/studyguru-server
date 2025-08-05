@@ -3,14 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from app.models.subscription import SubscriptionPlan
 
-
-@strawberry.enum
-class SubscriptionPlanEnum(SubscriptionPlan):
-    FREE = "FREE"
-    STARTER = "STARTER" 
-    BASIC = "BASIC"
-    PREMIUM = "PREMIUM"
-    LIFE_TIME = "LIFE_TIME"
+SubscriptionPlanEnum = strawberry.enum(SubscriptionPlan)
 
 
 @strawberry.type

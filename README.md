@@ -41,28 +41,33 @@ alembic/                   # Database migrations
 ## Installation
 
 1. **Install UV (if not already installed)**
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 2. **Clone the repository**
+
 ```bash
 git clone <repository-url>
 cd studyguru-pro
 ```
 
 3. **Install dependencies**
+
 ```bash
 uv sync
 ```
 
 4. **Environment Configuration**
+
 ```bash
 cp .env.example .env
 # Edit .env with your configuration
 ```
 
 5. **Database Setup**
+
 ```bash
 # Run migrations
 uv run alembic upgrade head
@@ -72,6 +77,7 @@ uv run python app/database/seed.py
 ```
 
 6. **Run the application**
+
 ```bash
 # Development
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 5000
@@ -83,28 +89,34 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 5000
 ## API Endpoints
 
 ### GraphQL
+
 - **POST** `/graphql` - GraphQL endpoint
 
 ### REST Endpoints
+
 - **POST** `/webhook/paddle` - Paddle webhooks
 - **POST** `/doc-material/upload` - Upload and analyze documents
 
 ## Subscription Plans
 
 ### Free Plan
+
 - **Price**: $0
 - **Points**: 30 points on signup
 - **Token Limit**: 1,000 tokens per analysis
 
 ### Basic Plan
+
 - **Price**: $1/month
 - **Points**: 100 points per month
 
 ### Pro Plan
+
 - **Price**: $5/month
 - **Points**: 700 points per month
 
 ### Point Add-ons
+
 - **Price**: $0.01 per point
 - **Minimum**: 100 points
 
@@ -130,12 +142,14 @@ The AI analysis provides:
 ## GraphQL Schema
 
 ### Key Queries
+
 - `account` - Get current user account and points
 - `subscriptions` - Get available subscription plans
 - `docMaterials` - Get user's analyzed documents
 - `pointsHistory` - Get points transaction history
 
 ### Key Mutations
+
 - `register` - User registration
 - `login` - User login
 - `uploadDocument` - Upload and analyze document
@@ -152,17 +166,20 @@ The AI analysis provides:
 ## Development
 
 ### Running Tests
+
 ```bash
 uv run pytest
 ```
 
 ### Code Formatting
+
 ```bash
 uv run black .
 uv run isort .
 ```
 
 ### Type Checking
+
 ```bash
 uv run mypy .
 ```
@@ -183,7 +200,7 @@ uv run gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 
 Key environment variables (see `.env.example`):
 
-- `DATABASE_URL` - PostgreSQL connection string
+- `DATABASE_URL` - MySQL connection string
 - `JWT_SECRET_KEY` - JWT signing secret
 - `PADDLE_API_KEY` - Paddle payment API key
 - `OPENAI_API_KEY` - OpenAI API key

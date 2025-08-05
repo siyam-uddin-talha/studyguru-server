@@ -4,18 +4,8 @@ from datetime import datetime
 from app.models.user import AccountProvider, UserAccountType
 from .subscription import PurchasedSubscriptionType
 
-
-@strawberry.enum
-class AccountProviderEnum(AccountProvider):
-    EMAIL = "EMAIL"
-    GOOGLE = "GOOGLE"
-
-
-@strawberry.enum  
-class UserAccountTypeEnum(UserAccountType):
-    SUPER_ADMIN = "SUPER_ADMIN"
-    ADMIN = "ADMIN"
-    USER = "USER"
+AccountProviderEnum = strawberry.enum(AccountProvider)
+UserAccountTypeEnum = strawberry.enum(UserAccountType)
 
 
 @strawberry.type
