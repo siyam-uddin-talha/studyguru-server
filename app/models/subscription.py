@@ -28,6 +28,7 @@ class Subscription(Base):
     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
     subscription_name = Column(String(191), nullable=False)
     usd_amount = Column(Float, nullable=False)
+    bdt_amount = Column(Float, nullable=False)
     subscription_plan = Column(Enum(SubscriptionPlan), nullable=False)
     points_per_month = Column(Integer, nullable=False, default=0)
     is_addon = Column(Boolean, default=False, nullable=False)  # For point add-ons
