@@ -9,6 +9,16 @@ class DefaultResponse:
     message: Optional[str] = None
 
 
+@strawberry.type
+class CountryType:
+    id: str
+    name: str
+    currency_code: Optional[str] = None
+    country_code: Optional[str] = None
+    calling_code: Optional[str] = None
+    deleted: Optional[bool] = None
+
+
 @strawberry.scalar
 class DateTime:
     serialize = lambda v: v.isoformat() if v else None

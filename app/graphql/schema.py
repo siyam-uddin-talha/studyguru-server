@@ -9,6 +9,7 @@ from app.graphql.resolvers.public import PublicQuery
 
 from app.helpers.auth import get_current_user_optional
 from app.models.user import User
+from strawberry.schema.config import StrawberryConfig
 
 
 @strawberry.type
@@ -33,7 +34,11 @@ class Mutation(
     pass
 
 
-schema = strawberry.Schema(query=Query, mutation=Mutation)
+schema = strawberry.Schema(
+    query=Query,
+    mutation=Mutation,
+    config=StrawberryConfig(auto_camel_case=False),
+)
 
 
 async def get_context(request: Request, db: AsyncSession = Depends(get_db)) -> Context:

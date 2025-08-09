@@ -1,15 +1,15 @@
 import strawberry
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from fastapi import HTTPException
+from sqlalchemy import select, or_, func
+from datetime import datetime, timedelta
+
 
 from app.graphql.types.auth import (
     AuthType,
     AuthLoginType,
     LoginInput,
-    RegisterInput,
-    Account,
+    AccountAccessInput,
 )
 from app.graphql.types.common import DefaultResponse
 from app.models.user import User, AccountProvider
@@ -22,7 +22,7 @@ from app.helpers.auth import (
 )
 from app.helpers.subscription import get_or_create_free_subscription
 from app.helpers.user import create_user_profile
-from app.helpers.email import send_verification_email  # <-- ADD THIS
+from app.helpers.email import send_verification_email, send_reset_email
 
 
 @strawberry.type
@@ -46,9 +46,12 @@ class AuthQuery:
 @strawberry.type
 class AuthMutation:
     @strawberry.mutation
-    async def register(self, info, input: RegisterInput) -> AuthType:
+    async def account_access(self, info, input: AccountAccessInput) -> AuthType:
+
         context = info.context
         db: AsyncSession = context.db
+
+        print(input)
 
         if input.provider == "GOOGLE":
             if not input.credential:
@@ -79,6 +82,7 @@ class AuthMutation:
 
             # Create new user
             free_sub = await get_or_create_free_subscription(db)
+            print("Payload:", payload)
 
             new_user = User(
                 email=email,
@@ -105,11 +109,23 @@ class AuthMutation:
             )
 
         # Email registration
-        if not all([input.email, input.password, input.first_name, input.last_name]):
+        if not all(
+            [
+                input.email,
+                input.password,
+                input.first_name,
+                input.last_name,
+                input.phone_number,
+            ]
+        ):
             return AuthType(success=False, message="Please fill out all the fields")
 
         # Check if user exists
-        result = await db.execute(select(User).where(User.email == input.email))
+        result = await db.execute(
+            select(User).where(
+                or_(User.email == input.email, User.phone_number == input.phone_number)
+            )
+        )
         existing_user = result.scalar_one_or_none()
 
         if existing_user:
@@ -138,13 +154,14 @@ class AuthMutation:
         new_user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
         await db.commit()
 
-        await send_verification_email(
-            new_user.email, pin, f"{new_user.first_name} {new_user.last_name}"
-        )
+        token = create_access_token(data={"sub": new_user.id})
+        account = await create_user_profile(new_user)
 
         return AuthType(
             success=True,
-            message=f"A verification code has been sent to {new_user.email}. Please check your inbox and enter the code to proceed",
+            message="New account created successfully",
+            account=account,
+            token=token,
         )
 
     @strawberry.mutation

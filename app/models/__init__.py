@@ -1,16 +1,17 @@
 from .user import User, AccountProvider, UserAccountType
 from .subscription import (
-    Subscription, 
-    PurchasedSubscription, 
+    Subscription,
+    PurchasedSubscription,
     PointTransaction,
     BillingLog,
-    SubscriptionPlan
+    SubscriptionPlan,
 )
 from .doc_material import DocMaterial, Media
+from .pivot import Country
 
 __all__ = [
     "User",
-    "AccountProvider", 
+    "AccountProvider",
     "UserAccountType",
     "Subscription",
     "PurchasedSubscription",
@@ -18,5 +19,6 @@ __all__ = [
     "BillingLog",
     "SubscriptionPlan",
     "DocMaterial",
-    "Media"
+    "Media",
+    "Country",
 ]

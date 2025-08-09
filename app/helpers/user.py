@@ -1,6 +1,11 @@
 from app.models.user import User
 from app.graphql.types.auth import Account, AccountProviderEnum
-from app.graphql.types.subscription import PurchasedSubscriptionType, SubscriptionType, SubscriptionPlanEnum, UsageLimitType
+from app.graphql.types.subscription import (
+    PurchasedSubscriptionType,
+    SubscriptionType,
+    SubscriptionPlanEnum,
+    UsageLimitType,
+)
 from app.core.config import settings
 
 
@@ -8,16 +13,16 @@ def parse_photo_url(photo_url: str) -> str:
     """Parse photo URL to include S3 bucket URL if needed"""
     if not photo_url:
         return None
-    
+
     if photo_url.startswith("https://"):
         return photo_url
-    
+
     return f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{photo_url}"
 
 
 async def create_user_profile(user: User) -> Account:
     """Create user profile from User model"""
-    
+
     purchased_subscription = None
     if user.purchased_subscription:
         subscription = None
@@ -26,33 +31,29 @@ async def create_user_profile(user: User) -> Account:
             if user.purchased_subscription.subscription.usage_limit:
                 usage_limit = UsageLimitType(
                     id=user.purchased_subscription.subscription.usage_limit.id,
-                    total_user_track=user.purchased_subscription.subscription.usage_limit.total_user_track,
-                    image_deck=user.purchased_subscription.subscription.usage_limit.image_deck,
-                    custom_deck=user.purchased_subscription.subscription.usage_limit.custom_deck,
-                    advanced_analytics=user.purchased_subscription.subscription.usage_limit.advanced_analytics,
-                    export_feature=user.purchased_subscription.subscription.usage_limit.export_feature,
-                    note=user.purchased_subscription.subscription.usage_limit.note
                 )
-            
+
             subscription = SubscriptionType(
                 id=user.purchased_subscription.subscription.id,
                 subscription_name=user.purchased_subscription.subscription.subscription_name,
                 usd_amount=user.purchased_subscription.subscription.usd_amount,
                 gbp_amount=user.purchased_subscription.subscription.gbp_amount,
-                subscription_plan=SubscriptionPlanEnum(user.purchased_subscription.subscription.subscription_plan.value),
+                subscription_plan=SubscriptionPlanEnum(
+                    user.purchased_subscription.subscription.subscription_plan.value
+                ),
                 usage_limit=usage_limit,
-                created_at=user.purchased_subscription.subscription.created_at
+                created_at=user.purchased_subscription.subscription.created_at,
             )
-        
+
         purchased_subscription = PurchasedSubscriptionType(
             id=user.purchased_subscription.id,
             subscription_id=user.purchased_subscription.subscription_id,
             subscription=subscription,
             past_due_time=user.purchased_subscription.past_due_time,
             created_at=user.purchased_subscription.created_at,
-            updated_at=user.purchased_subscription.updated_at
+            updated_at=user.purchased_subscription.updated_at,
         )
-    
+
     return Account(
         id=user.id,
         first_name=user.first_name,
@@ -71,6 +72,10 @@ async def create_user_profile(user: User) -> Account:
         last_login_at=user.last_login_at,
         verify_status=user.verify_status,
         super_admin=user.super_admin,
-        account_provider=AccountProviderEnum(user.account_provider.value) if user.account_provider else None,
-        purchased_subscription=purchased_subscription
+        account_provider=(
+            AccountProviderEnum(user.account_provider.value)
+            if user.account_provider
+            else None
+        ),
+        purchased_subscription=purchased_subscription,
     )

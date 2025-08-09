@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column("usd_amount", sa.Float(), nullable=False),
         sa.Column(
             "subscription_plan",
-            sa.Enum("FREE", "BASIC", "PRO", name="subscriptionplan"),
+            sa.Enum("ESSENTIAL", "PLUS", "ELITE", name="subscriptionplan"),
             nullable=False,
         ),
         sa.Column("points_per_month", sa.Integer(), nullable=False, server_default="0"),

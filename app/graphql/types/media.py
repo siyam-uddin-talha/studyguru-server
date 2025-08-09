@@ -1,9 +1,6 @@
 import strawberry
 from typing import Optional, List
 from datetime import datetime
-from app.models.subscription import Versionize
-
-VersionizeEnum = strawberry.enum(Versionize)
 
 
 @strawberry.type

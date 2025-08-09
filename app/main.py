@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 
-from app.graphql.schema import schema
+from app.graphql.schema import schema, get_context
 from app.api.routes import webhook_router, doc_material_router
 from app.core.database import init_db
 from app.workers.scheduler import start_scheduler
@@ -42,14 +42,14 @@ if settings.ENVIRONMENT == "development":
 else:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.CLIENT_ORIGIN],
+        # allow_origins=[settings.CLIENT_ORIGIN],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
 # GraphQL router (temporarily disabled due to dependency issues)
-graphql_app = GraphQLRouter(schema)
+graphql_app = GraphQLRouter(schema, context_getter=get_context)
 app.include_router(graphql_app, prefix="/graphql")
 
 # REST routes

@@ -25,7 +25,7 @@ class Base(DeclarativeBase):
     metadata = MetaData()
 
 
-async def get_db() -> AsyncSession:
+async def get_db():
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -38,7 +38,7 @@ async def init_db():
     try:
         async with engine.begin() as conn:
             # Import all models here to ensure they are registered
-            from app.models import user, subscription, media
+            from app.models import user, subscription, media, pivot, doc_material
 
             # Create tables if they don't exist
             await conn.run_sync(Base.metadata.create_all)

@@ -16,15 +16,10 @@ import enum
 import uuid
 
 
-class Versionize(enum.Enum):
-    FREE = "FREE"
-    PAID = "PAID"
-
-
 class SubscriptionPlan(enum.Enum):
-    FREE = "FREE"
-    BASIC = "BASIC"
-    PRO = "PRO"
+    ESSENTIAL = "ESSENTIAL"
+    PLUS = "PLUS"
+    ELITE = "ELITE"
 
 
 class Subscription(Base):

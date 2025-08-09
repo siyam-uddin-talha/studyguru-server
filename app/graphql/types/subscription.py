@@ -9,12 +9,6 @@ SubscriptionPlanEnum = strawberry.enum(SubscriptionPlan)
 @strawberry.type
 class UsageLimitType:
     id: str
-    total_user_track: int
-    image_deck: int
-    custom_deck: bool
-    advanced_analytics: bool
-    export_feature: bool
-    note: bool
 
 
 @strawberry.type
@@ -22,7 +16,7 @@ class SubscriptionType:
     id: str
     subscription_name: str
     usd_amount: float
-    gbp_amount: float
+    bdt_amount: float
     subscription_plan: SubscriptionPlanEnum
     usage_limit: Optional[UsageLimitType] = None
     created_at: Optional[datetime] = None
