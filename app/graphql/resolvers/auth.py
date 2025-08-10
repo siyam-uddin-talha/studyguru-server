@@ -1,9 +1,9 @@
 import strawberry
-from typing import Optional
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
 from datetime import datetime, timedelta
-
+from app.core.config import settings
 
 from app.graphql.types.auth import (
     AuthType,
@@ -13,6 +13,8 @@ from app.graphql.types.auth import (
 )
 from app.graphql.types.common import DefaultResponse
 from app.models.user import User, AccountProvider
+from app.models.subscription import PurchasedSubscription
+
 from app.helpers.auth import (
     create_access_token,
     verify_password,
@@ -22,7 +24,11 @@ from app.helpers.auth import (
 )
 from app.helpers.subscription import get_or_create_free_subscription
 from app.helpers.user import create_user_profile
-from app.helpers.email import send_verification_email, send_reset_email
+from app.helpers.email import (
+    send_verification_email,
+    send_reset_email,
+    send_welcome_email,
+)
 
 
 @strawberry.type
@@ -51,8 +57,6 @@ class AuthMutation:
         context = info.context
         db: AsyncSession = context.db
 
-        print(input)
-
         if input.provider == "GOOGLE":
             if not input.credential:
                 return AuthType(
@@ -60,16 +64,29 @@ class AuthMutation:
                 )
 
             # Verify Google token
+
             payload = await verify_google_token(input.credential)
+
             if not payload:
-                return AuthType(success=False, message="Invalid Google token")
+                return AuthType(
+                    success=False,
+                    message="Unable to verify your google account! Please try again.",
+                )
 
             email = payload.get("email")
             if not email:
                 return AuthType(success=False, message="Email is required")
 
             # Check if user exists
-            result = await db.execute(select(User).where(User.email == email))
+            result = await db.execute(
+                select(User)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    )
+                )
+                .where(User.email == email)
+            )
             existing_user = result.scalar_one_or_none()
 
             if existing_user:
@@ -82,7 +99,6 @@ class AuthMutation:
 
             # Create new user
             free_sub = await get_or_create_free_subscription(db)
-            print("Payload:", payload)
 
             new_user = User(
                 email=email,
@@ -99,7 +115,24 @@ class AuthMutation:
             await db.refresh(new_user)
 
             token = create_access_token(data={"sub": new_user.id})
-            account = await create_user_profile(new_user)
+
+            new_user_result = await db.execute(
+                select(User)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    )
+                )
+                .where(User.id == new_user.id)
+            )
+            get_new_user = new_user_result.scalar_one_or_none()
+
+            account = await create_user_profile(get_new_user)
+            await send_welcome_email(
+                get_new_user.email,
+                f"{get_new_user.first_name} {get_new_user.last_name}",
+                settings.APP_LINK,
+            )
 
             return AuthType(
                 success=True,
@@ -122,7 +155,13 @@ class AuthMutation:
 
         # Check if user exists
         result = await db.execute(
-            select(User).where(
+            select(User)
+            .options(
+                selectinload(User.purchased_subscription).selectinload(
+                    PurchasedSubscription.subscription
+                )
+            )
+            .where(
                 or_(User.email == input.email, User.phone_number == input.phone_number)
             )
         )
@@ -134,6 +173,11 @@ class AuthMutation:
         # Create user
         hashed_password = get_password_hash(input.password)
         free_sub = await get_or_create_free_subscription(db)
+        await send_welcome_email(
+            new_user.email,
+            f"{new_user.first_name} {new_user.last_name}",
+            settings.APP_LINK,
+        )
 
         new_user = User(
             email=input.email,
@@ -149,9 +193,9 @@ class AuthMutation:
         await db.refresh(new_user)
 
         # Send verification email
-        pin = generate_verify_pin()
-        new_user.verify_pin = pin
-        new_user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
+        # pin = generate_verify_pin()
+        # new_user.verify_pin = pin
+        # new_user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
         await db.commit()
 
         token = create_access_token(data={"sub": new_user.id})

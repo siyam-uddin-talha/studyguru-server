@@ -22,7 +22,7 @@ class PublicQuery:
         # Get all subscriptions except FREE
         result = await db.execute(
             select(Subscription)
-            .where(Subscription.subscription_plan != SubscriptionPlan.FREE)
+            .where(Subscription.subscription_plan != SubscriptionPlan.ESSENTIAL)
             .options(selectinload(Subscription.usage_limit))
             .order_by(Subscription.usd_amount.asc())
         )

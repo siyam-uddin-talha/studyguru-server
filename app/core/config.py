@@ -2,10 +2,18 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 import os
 from os import getenv
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
     # Server settings
+    APP_NAME: str = "Study Guru - Pro"
+    APP_LINK: str = getenv(
+        "APP_LINK",
+        "studygurupro://open/",
+    )
     PORT: int = int(getenv("PORT", 8000))
     ENVIRONMENT: str = getenv("ENVIRONMENT", "development")
 
@@ -43,7 +51,7 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "test-key")
 
-    GOOGLE_CLIENT_ID: str = getenv("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_ID: str = getenv("GOOGLE_CLIENT_ID", "google-id")
 
     class Config:
         env_file = ".env"

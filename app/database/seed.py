@@ -15,7 +15,7 @@ async def seed_subscriptions():
         # Check if subscriptions already exist
         existing = await db.execute(
             select(Subscription).where(
-                Subscription.subscription_plan == SubscriptionPlan.FREE
+                Subscription.subscription_plan == SubscriptionPlan.ESSENTIAL
             )
         )
         if existing.scalar_one_or_none():
@@ -25,36 +25,30 @@ async def seed_subscriptions():
         subscriptions = [
             # Free Plan
             Subscription(
-                subscription_name="Free Plan",
+                subscription_name="Essential",
                 usd_amount=0.0,
-                subscription_plan=SubscriptionPlan.FREE,
+                bdt_amount=0,
+                subscription_plan=SubscriptionPlan.ESSENTIAL,
                 points_per_month=30,  # 30 points on signup
                 is_addon=False,
             ),
             # Basic Plan
             Subscription(
-                subscription_name="Basic Plan",
+                subscription_name="Plus",
                 usd_amount=1.0,
-                subscription_plan=SubscriptionPlan.BASIC,
+                bdt_amount=100,
+                subscription_plan=SubscriptionPlan.PLUS,
                 points_per_month=100,
                 is_addon=False,
             ),
             # Pro Plan
             Subscription(
-                subscription_name="Pro Plan",
+                subscription_name="Elite",
                 usd_amount=5.0,
-                subscription_plan=SubscriptionPlan.PRO,
+                bdt_amount=500,
+                subscription_plan=SubscriptionPlan.ELITE,
                 points_per_month=700,
                 is_addon=False,
-            ),
-            # Point Add-on
-            Subscription(
-                subscription_name="Additional Points",
-                usd_amount=0.01,  # $0.01 per point
-                subscription_plan=SubscriptionPlan.FREE,  # Not tied to a specific plan
-                points_per_month=1,  # 1 point per $0.01
-                is_addon=True,
-                min_points=100,  # Minimum 100 points purchase
             ),
         ]
 

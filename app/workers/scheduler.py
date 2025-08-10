@@ -26,7 +26,7 @@ async def cleanup_inactive_users():
                     and_(
                         User.last_login_at < six_months_ago,
                         PurchasedSubscription.subscription.subscription_plan
-                        == SubscriptionPlan.FREE,
+                        == SubscriptionPlan.ESSENTIAL,
                     )
                 )
             )

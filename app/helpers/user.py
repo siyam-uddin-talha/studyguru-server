@@ -27,29 +27,26 @@ async def create_user_profile(user: User) -> Account:
     if user.purchased_subscription:
         subscription = None
         if user.purchased_subscription.subscription:
-            usage_limit = None
-            if user.purchased_subscription.subscription.usage_limit:
-                usage_limit = UsageLimitType(
-                    id=user.purchased_subscription.subscription.usage_limit.id,
-                )
-
+            # usage_limit = None
+            # if user.purchased_subscription.subscription.usage_limit:
+            #     usage_limit = UsageLimitType(
+            #         id=user.purchased_subscription.subscription.usage_limit.id,
+            #     )
             subscription = SubscriptionType(
                 id=user.purchased_subscription.subscription.id,
                 subscription_name=user.purchased_subscription.subscription.subscription_name,
                 usd_amount=user.purchased_subscription.subscription.usd_amount,
-                gbp_amount=user.purchased_subscription.subscription.gbp_amount,
+                bdt_amount=user.purchased_subscription.subscription.bdt_amount,
                 subscription_plan=SubscriptionPlanEnum(
                     user.purchased_subscription.subscription.subscription_plan.value
                 ),
-                usage_limit=usage_limit,
-                created_at=user.purchased_subscription.subscription.created_at,
             )
 
         purchased_subscription = PurchasedSubscriptionType(
             id=user.purchased_subscription.id,
             subscription_id=user.purchased_subscription.subscription_id,
             subscription=subscription,
-            past_due_time=user.purchased_subscription.past_due_time,
+            # past_due_time=user.purchased_subscription.past_due_time,
             created_at=user.purchased_subscription.created_at,
             updated_at=user.purchased_subscription.updated_at,
         )
@@ -59,7 +56,6 @@ async def create_user_profile(user: User) -> Account:
         first_name=user.first_name,
         last_name=user.last_name,
         email=user.email,
-        country_name=user.country_name,
         primary_state=user.primary_state,
         primary_city=user.primary_city,
         profession_title=user.profession_title,
@@ -77,5 +73,6 @@ async def create_user_profile(user: User) -> Account:
             if user.account_provider
             else None
         ),
+        account_type=user.account_type,
         purchased_subscription=purchased_subscription,
     )
