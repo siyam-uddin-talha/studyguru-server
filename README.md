@@ -69,6 +69,9 @@ cp .env.example .env
 5. **Database Setup**
 
 ```bash
+# Run init
+alembic revision --autogenerate -m "init"
+
 # Run migrations
 uv run alembic upgrade head
 

@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
 from datetime import datetime, timedelta
 from app.core.config import settings
+from typing import Optional
 
 from app.graphql.types.auth import (
     AuthType,
@@ -52,7 +53,12 @@ class AuthQuery:
 @strawberry.type
 class AuthMutation:
     @strawberry.mutation
-    async def account_access(self, info, input: AccountAccessInput) -> AuthType:
+    async def account_access(
+        self,
+        info,
+        input: AccountAccessInput,
+        check_valid: Optional[bool] = False,
+    ) -> AuthType:
 
         context = info.context
         db: AsyncSession = context.db
@@ -142,15 +148,18 @@ class AuthMutation:
             )
 
         # Email registration
-        if not all(
-            [
-                input.email,
-                input.password,
-                input.first_name,
-                input.last_name,
-                input.phone_number,
-            ]
-        ):
+        required_fields = [
+            input.email,
+            input.first_name,
+            input.last_name,
+            input.phone_number,
+            input.education_level,
+            input.address,
+        ]
+        if not check_valid:
+            required_fields.append(input.password)
+
+        if not all(required_fields):
             return AuthType(success=False, message="Please fill out all the fields")
 
         # Check if user exists
@@ -166,6 +175,24 @@ class AuthMutation:
             )
         )
         existing_user = result.scalar_one_or_none()
+        print(check_valid)
+
+        if check_valid:
+
+            if existing_user:
+                print("found")
+                return AuthType(
+                    success=False,
+                    response_status="account_registered",
+                    message="Looks like you already have an account. Try logging in!",
+                )
+            if not existing_user:
+                print("not found")
+                return AuthType(
+                    success=True,
+                    response_status="no_account_found",
+                    message="No account found with this email. Let’s create one!",
+                )
 
         if existing_user:
             return AuthType(success=False, message="This account is already registered")
@@ -173,11 +200,6 @@ class AuthMutation:
         # Create user
         hashed_password = get_password_hash(input.password)
         free_sub = await get_or_create_free_subscription(db)
-        await send_welcome_email(
-            new_user.email,
-            f"{new_user.first_name} {new_user.last_name}",
-            settings.APP_LINK,
-        )
 
         new_user = User(
             email=input.email,
@@ -185,6 +207,8 @@ class AuthMutation:
             last_name=input.last_name,
             password=hashed_password,
             account_provider=AccountProvider.EMAIL,
+            education_level=input.education_level,
+            phone_number=input.phone_number.replace(" ", ""),
             purchased_subscription_id=free_sub.id,
         )
 
@@ -198,8 +222,24 @@ class AuthMutation:
         # new_user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
         await db.commit()
 
-        token = create_access_token(data={"sub": new_user.id})
-        account = await create_user_profile(new_user)
+        new_user_result = await db.execute(
+            select(User)
+            .options(
+                selectinload(User.purchased_subscription).selectinload(
+                    PurchasedSubscription.subscription
+                )
+            )
+            .where(User.id == new_user.id)
+        )
+        get_new_user = new_user_result.scalar_one_or_none()
+
+        await send_welcome_email(
+            get_new_user.email,
+            f"{get_new_user.first_name} {get_new_user.last_name}",
+            isByEmail=True,
+        )
+        token = create_access_token(data={"sub": get_new_user.id})
+        account = await create_user_profile(get_new_user)
 
         return AuthType(
             success=True,
@@ -235,23 +275,23 @@ class AuthMutation:
             )
 
         # Check verification status
-        if not user.verify_status:
-            # Send new verification code
-            pin = generate_verify_pin()
-            user.verify_pin = pin
-            user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
-            await db.commit()
+        # if not user.verify_status:
+        #     # Send new verification code
+        #     pin = generate_verify_pin()
+        #     user.verify_pin = pin
+        #     user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
+        #     await db.commit()
 
-            await send_verification_email(
-                user.email, pin, f"{user.first_name} {user.last_name}"
-            )
+        #     await send_verification_email(
+        #         user.email, pin, f"{user.first_name} {user.last_name}"
+        #     )
 
-            return AuthLoginType(
-                success=False,
-                message=f"Your account is not verified. We've sent a 6-digit verification code to your registered email {user.email}",
-                verify=False,
-                email=user.email,
-            )
+        #     return AuthLoginType(
+        #         success=False,
+        #         message=f"Your account is not verified. We've sent a 6-digit verification code to your registered email {user.email}",
+        #         verify=False,
+        #         email=user.email,
+        #     )
 
         # Update last login
         user.last_login_at = func.now()

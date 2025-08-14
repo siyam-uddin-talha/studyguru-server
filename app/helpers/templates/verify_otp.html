@@ -67,6 +67,24 @@
         line-height: 0;
       }
 
+      .otp-code {
+        background: linear-gradient(135deg, #971cff, #b84cff);
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+        margin: 20px 0;
+        border: 2px solid #971cff;
+      }
+
+      .otp-digits {
+        font-family: "Courier New", monospace;
+        font-size: 32px;
+        font-weight: bold;
+        color: #ffffff;
+        letter-spacing: 8px;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+
       @media (max-width: 620px) {
         .desktop_hide table.icons-inner {
           display: inline-block !important;
@@ -109,6 +127,11 @@
         .desktop_hide table {
           display: table !important;
           max-height: none !important;
+        }
+
+        .otp-digits {
+          font-size: 24px;
+          letter-spacing: 4px;
         }
       }
     </style>
@@ -392,8 +415,8 @@
                                       style="margin: 0; word-break: break-word"
                                     >
                                       <span style="word-break: break-word"
-                                        >Hello <strong>{{name}}</strong>,
-                                        registration completed</span
+                                        >Hello <strong>{{name}}</strong>, verify
+                                        your account</span
                                       >
                                     </p>
                                   </div>
@@ -435,18 +458,15 @@
                                     "
                                   >
                                     <p style="margin: 0">
-                                      Welcome aboard! 🎓 We’re thrilled to have
-                                      you join the Study Guru-Pro family.
+                                      We're excited to help you get started with
+                                      Study Guru-Pro! 🚀
                                     </p>
                                     <p style="margin: 0">
-                                      Think of us as your personal study partner
-                                      — here to help you stay motivated, stay
-                                      organized, and make learning feel a little
-                                      easier (and a lot more fun). Whether
-                                      you’re tackling tough topics, looking for
-                                      inspiration, or just trying to keep your
-                                      study routine on track, we’ve got your
-                                      back.
+                                      To complete your registration and secure
+                                      your account, please verify your email
+                                      address using the One-Time Password (OTP)
+                                      code below. This code is valid for 15
+                                      minutes only.
                                     </p>
                                   </div>
                                 </td>
@@ -535,11 +555,11 @@
                                       style="margin: 0; word-break: break-word"
                                     >
                                       <span style="word-break: break-word"
-                                        >Thanks so much for joining our
-                                        community!&nbsp;</span
+                                        >We're verifying this request
+                                        for:&nbsp;</span
                                       ><br /><span
                                         style="word-break: break-word"
-                                        >Your email address is:
+                                        >Email address:
                                         <span
                                           style="
                                             word-break: break-word;
@@ -561,7 +581,6 @@
                 </tr>
               </tbody>
             </table>
-            {% if not isByEmail %}
             <table
               class="row row-4"
               align="center"
@@ -570,13 +589,7 @@
               cellpadding="0"
               cellspacing="0"
               role="presentation"
-              style="
-                mso-table-lspace: 0pt;
-                mso-table-rspace: 0pt;
-                background-image: url('https://d1oco4z2z1fhwp.cloudfront.net/templates/default/271/bg_password.gif');
-                background-position: top center;
-                background-repeat: no-repeat;
-              "
+              style="mso-table-lspace: 0pt; mso-table-rspace: 0pt"
             >
               <tbody>
                 <tr>
@@ -608,7 +621,7 @@
                               mso-table-rspace: 0pt;
                               font-weight: 400;
                               text-align: left;
-                              padding-bottom: 2px;
+                              padding-bottom: 25px;
                               padding-left: 35px;
                               padding-right: 35px;
                               padding-top: 15px;
@@ -632,7 +645,7 @@
                                 <td
                                   class="pad"
                                   style="
-                                    padding-bottom: 15px;
+                                    padding-bottom: 20px;
                                     padding-left: 10px;
                                     padding-right: 10px;
                                     padding-top: 15px;
@@ -640,31 +653,105 @@
                                 >
                                   <div
                                     style="
-                                      color: #c8c8c8;
+                                      color: #ffffff;
                                       font-family: 'Cabin', Arial,
                                         'Helvetica Neue', Helvetica, sans-serif;
-                                      font-size: 16px;
+                                      font-size: 18px;
                                       line-height: 1.2;
-                                      text-align: left;
-                                      mso-line-height-alt: 19px;
+                                      text-align: center;
+                                      mso-line-height-alt: 22px;
                                     "
                                   >
                                     <p
                                       style="margin: 0; word-break: break-word"
                                     >
                                       <strong
-                                        >To finish signing up and
-                                        <span
-                                          style="
-                                            word-break: break-word;
-                                            color: #971cff;
-                                          "
-                                          >activate your account,</span
-                                        ></strong
-                                      ><br />just set up your contact details —
-                                      it only takes a minute. Once that’s done,
-                                      you’ll be ready to start using all the
-                                      features Study Guru - Pro has to offer.
+                                        >Your verification code is:</strong
+                                      >
+                                    </p>
+                                  </div>
+                                </td>
+                              </tr>
+                            </table>
+
+                            <!-- OTP Code Display -->
+                            <table
+                              class="paragraph_block block-2"
+                              width="100%"
+                              border="0"
+                              cellpadding="0"
+                              cellspacing="0"
+                              role="presentation"
+                              style="
+                                mso-table-lspace: 0pt;
+                                mso-table-rspace: 0pt;
+                                word-break: break-word;
+                              "
+                            >
+                              <tr>
+                                <td class="pad" style="padding: 10px">
+                                  <div class="otp-code">
+                                    <div class="otp-digits">{{otp}}</div>
+                                    <p
+                                      style="
+                                        margin: 10px 0 0 0;
+                                        color: #ffffff;
+                                        font-size: 12px;
+                                        opacity: 0.9;
+                                      "
+                                    >
+                                      Enter this code to verify your account
+                                    </p>
+                                  </div>
+                                </td>
+                              </tr>
+                            </table>
+
+                            <table
+                              class="paragraph_block block-3"
+                              width="100%"
+                              border="0"
+                              cellpadding="0"
+                              cellspacing="0"
+                              role="presentation"
+                              style="
+                                mso-table-lspace: 0pt;
+                                mso-table-rspace: 0pt;
+                                word-break: break-word;
+                              "
+                            >
+                              <tr>
+                                <td
+                                  class="pad"
+                                  style="
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    padding-top: 20px;
+                                  "
+                                >
+                                  <div
+                                    style="
+                                      color: #c8c8c8;
+                                      font-family: 'Cabin', Arial,
+                                        'Helvetica Neue', Helvetica, sans-serif;
+                                      font-size: 14px;
+                                      line-height: 1.5;
+                                      text-align: center;
+                                      mso-line-height-alt: 21px;
+                                    "
+                                  >
+                                    <p
+                                      style="margin: 0; word-break: break-word"
+                                    >
+                                      <strong>⏰ Important:</strong> This code
+                                      expires in 15 minutes for security
+                                      reasons.
+                                    </p>
+                                    <p style="margin: 10px 0 0 0">
+                                      If you didn't request this verification,
+                                      please ignore this email or contact our
+                                      support team if you have concerns about
+                                      your account security.
                                     </p>
                                   </div>
                                 </td>
@@ -678,7 +765,6 @@
                 </tr>
               </tbody>
             </table>
-            {% endif %}
             <table
               class="row row-5"
               align="center"
@@ -753,8 +839,8 @@
                                     "
                                   >
                                     <p style="margin: 0">
-                                      If you have any questions, please don't
-                                      hesitate to contact our support team.
+                                      Need help with verification? Our support
+                                      team is here to assist you.
                                     </p>
                                     <p style="margin: 0">&nbsp;</p>
                                     <p style="margin: 0">

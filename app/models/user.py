@@ -42,6 +42,7 @@ class User(Base):
     photo_url = Column(String(191), nullable=True)
     birthday = Column(DateTime, nullable=True)
     profession_title = Column(Text, nullable=True)
+    education_level = Column(Text, nullable=True)
     primary_city = Column(Text, nullable=True)
     primary_state = Column(Text, nullable=True)
     primary_address = Column(Text, nullable=True)

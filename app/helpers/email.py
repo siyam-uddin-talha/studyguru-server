@@ -49,9 +49,11 @@ async def send_email(to_email: str, subject: str, html_content: str):
 
 
 async def send_verification_email(email: str, pin: int, recipient_name: str):
-    """Send verification email with OTP"""
+    """Send verification email wit OTP"""
     subject = "Verify Your Email"
-    html_content = generate_otp_email(str(pin), recipient_name)
+    html_content = render_template(
+        "verify_otp.html", otp=str(pin), name=recipient_name, email=email
+    )
     return await send_email(email, subject, html_content)
 
 
@@ -62,10 +64,10 @@ async def send_reset_email(email: str, pin: int, recipient_name: str):
     return await send_email(email, subject, html_content)
 
 
-async def send_welcome_email(email: str, recipient_name: str, start_link: str):
+async def send_welcome_email(email: str, recipient_name: str, isByEmail: bool):
     """Send Welcome email"""
     subject = "Welcome to " + settings.APP_NAME
     html_content = render_template(
-        "welcome_email.html", name=recipient_name, email=email, start_link=start_link
+        "welcome_email.html", name=recipient_name, email=email, isByEmail=isByEmail
     )
     return await send_email(email, subject, html_content)

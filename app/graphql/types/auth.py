@@ -42,6 +42,7 @@ class AuthType:
     message: Optional[str] = None
     account: Optional[Account] = None
     token: Optional[str] = None
+    response_status: Optional[str] = None
 
 
 @strawberry.type
@@ -62,7 +63,6 @@ class LoginInput:
 
 @strawberry.input
 class CountryInput:
-    id: str
     name: str
     currency_code: Optional[str] = None
     country_code: Optional[str] = None
@@ -76,6 +76,8 @@ class AccountAccessInput:
     email: Optional[str] = None
     phone_number: Optional[str] = None
     password: Optional[str] = None
+    address: Optional[str] = None
     provider: str
+    education_level: Optional[str] = None
     credential: Optional[str] = None
     country: Optional[CountryInput] = None

@@ -9,6 +9,7 @@ __all__ = [
     "AuthType",
     "Account",
     "LoginInput",
+    "VerifyInput",
     "RegisterInput",
     "SubscriptionType",
     "PurchasedSubscriptionType",
