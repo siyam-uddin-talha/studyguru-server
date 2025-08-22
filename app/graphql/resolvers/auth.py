@@ -2,7 +2,7 @@ import strawberry
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from typing import Optional
 
@@ -15,6 +15,7 @@ from app.graphql.types.auth import (
 from app.graphql.types.common import DefaultResponse
 from app.models.user import User, AccountProvider
 from app.models.subscription import PurchasedSubscription
+from app.models.pivot import Country
 
 from app.helpers.auth import (
     create_access_token,
@@ -24,6 +25,7 @@ from app.helpers.auth import (
     generate_verify_pin,
 )
 from app.helpers.subscription import get_or_create_free_subscription
+from app.helpers.pivot import get_or_create_country_from_object
 from app.helpers.user import create_user_profile
 from app.helpers.email import (
     send_verification_email,
@@ -175,19 +177,18 @@ class AuthMutation:
             )
         )
         existing_user = result.scalar_one_or_none()
-        print(check_valid)
 
         if check_valid:
 
             if existing_user:
-                print("found")
+
                 return AuthType(
                     success=False,
                     response_status="account_registered",
                     message="Looks like you already have an account. Try logging in!",
                 )
             if not existing_user:
-                print("not found")
+
                 return AuthType(
                     success=True,
                     response_status="no_account_found",
@@ -195,11 +196,18 @@ class AuthMutation:
                 )
 
         if existing_user:
-            return AuthType(success=False, message="This account is already registered")
+            return AuthType(
+                success=False,
+                message="This email number is already linked to an existing account. Try logging in or using a different email!",
+            )
 
         # Create user
         hashed_password = get_password_hash(input.password)
         free_sub = await get_or_create_free_subscription(db)
+        user_country = await get_or_create_country_from_object(
+            db,
+            country_obj=input.country,
+        )
 
         new_user = User(
             email=input.email,
@@ -210,6 +218,7 @@ class AuthMutation:
             education_level=input.education_level,
             phone_number=input.phone_number.replace(" ", ""),
             purchased_subscription_id=free_sub.id,
+            country_id=user_country.id,
         )
 
         db.add(new_user)
@@ -253,44 +262,124 @@ class AuthMutation:
         context = info.context
         db: AsyncSession = context.db
 
-        if not input.email or not input.password:
+        if input.provider == "EMAIL":
+            # Validate email input
+            if not input.email or not input.password:
+                return AuthLoginType(
+                    success=False, message="Please fill out all the fields"
+                )
+
+            # Find user by email with subscription data
+            result = await db.execute(
+                select(User)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    )
+                )
+                .where(User.email == input.email)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                return AuthLoginType(
+                    success=False,
+                    message="We couldn’t locate an account with this email. Please check for typos or sign up for a new account.",
+                )
+
+            # Verify password
+            if not user.password or not verify_password(input.password, user.password):
+                return AuthLoginType(
+                    success=False, message="The password you entered is incorrect"
+                )
+
+            # Check email verification status
+            # if not user.email_verified:
+            #     # Send new verification code
+            #     pin = generate_verify_pin()
+            #     user.verify_pin = pin
+            #     user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
+            #     await db.commit()
+
+            #     await send_verification_email(
+            #         user.email, pin, f"{user.first_name} {user.last_name}"
+            #     )
+
+            #     return AuthLoginType(
+            #         success=False,
+            #         message=f"Your email is not verified. We've sent a 6-digit verification code to {user.email}",
+            #         verify=False,
+            #         email=user.email,
+            #     )
+
+        elif input.provider == "PHONE":
+            selected_country = input.country
+
+            phone_number = (input.phone_number.replace(" ", ""),)
+            # Validate phone input
+            if not phone_number or not input.password:
+                return AuthLoginType(
+                    success=False, message="Please fill out all the fields"
+                )
+
+            # Find user by phone with subscription data
+            result = await db.execute(
+                select(User)
+                .join(Country, User.country_id == Country.id)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    )
+                )
+                .where(
+                    User.phone_number == phone_number,
+                    Country.country_code == selected_country.country_code,
+                )
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                return AuthLoginType(
+                    success=False,
+                    message="It looks like there’s no account connected to this phone number!",
+                )
+
+            # Verify password
+            if not user.password or not verify_password(input.password, user.password):
+                return AuthLoginType(
+                    success=False, message="The password you entered is incorrect!"
+                )
+
+            # Check phone verification status
+            # if not user.phone_verified:
+            #     # Send new verification code via SMS
+            #     pin = generate_verify_pin()
+            #     user.phone_verify_pin = pin
+            #     user.phone_verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
+            #     await db.commit()
+
+            #     # Send SMS verification (implement your SMS service)
+            #     await send_verification_sms(
+            #         user.phone, pin, f"{user.first_name} {user.last_name}"
+            #     )
+
+            #     return AuthLoginType(
+            #         success=False,
+            #         message=f"Your phone number is not verified. We've sent a 6-digit verification code to {user.phone}",
+            #         verify=False,
+            #         phone=user.phone,
+            #     )
+
+        else:
             return AuthLoginType(
-                success=False, message="Please fill out all the fields"
+                success=False, message="Invalid provider. Please use EMAIL or PHONE"
             )
 
-        # Find user
-        result = await db.execute(select(User).where(User.email == input.email))
-        user = result.scalar_one_or_none()
-
-        if not user:
-            return AuthLoginType(
-                success=False,
-                message="We couldn't find an account associated with this email address",
-            )
-
-        # Verify password
-        if not user.password or not verify_password(input.password, user.password):
-            return AuthLoginType(
-                success=False, message="The password you entered is incorrect"
-            )
-
-        # Check verification status
-        # if not user.verify_status:
-        #     # Send new verification code
-        #     pin = generate_verify_pin()
-        #     user.verify_pin = pin
-        #     user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
-        #     await db.commit()
-
-        #     await send_verification_email(
-        #         user.email, pin, f"{user.first_name} {user.last_name}"
-        #     )
-
+        # Check if account is active/not banned
+        # if hasattr(user, 'is_active') and not user.is_active:
         #     return AuthLoginType(
         #         success=False,
-        #         message=f"Your account is not verified. We've sent a 6-digit verification code to your registered email {user.email}",
-        #         verify=False,
-        #         email=user.email,
+        #         message="Your account has been deactivated. Please contact support."
         #     )
 
         # Update last login
@@ -315,17 +404,31 @@ class AuthMutation:
 
         # Find user with valid pin
         result = await db.execute(
-            select(User).where(
-                User.email == email, User.verify_pin_expire_date > datetime.utcnow()
+            select(User)
+            .options(
+                selectinload(User.purchased_subscription).selectinload(
+                    PurchasedSubscription.subscription
+                )
+            )
+            .where(
+                User.email == email,
+                User.verify_pin_expire_date > datetime.now(timezone.utc),
             )
         )
+
         user = result.scalar_one_or_none()
 
         if not user:
-            return AuthType(success=False, message="Invalid or expired OTP")
+            return AuthType(
+                success=False,
+                message="Oops! That code didn’t work. It may be incorrect or expired—please try again with a new one.",
+            )
 
         if user.verify_pin != int(pin):
-            return AuthType(success=False, message="Invalid verification code")
+            return AuthType(
+                success=False,
+                message="The verification code you entered is incorrect. Please check and try again.",
+            )
 
         # Update user
         user.verify_pin = None
@@ -375,7 +478,8 @@ class AuthMutation:
         )
 
         return DefaultResponse(
-            success=True, message=f"A verification code has been sent to {email}"
+            success=True,
+            message=f"We’ve just sent a 6-digit verification code to {email}. Please check your inbox (and spam/junk folder if needed) to continue.",
         )
 
     @strawberry.mutation
@@ -396,12 +500,6 @@ class AuthMutation:
             return DefaultResponse(
                 success=False,
                 message="We couldn't locate an account under that email address",
-            )
-
-        if not user.verify_status:
-            return DefaultResponse(
-                success=False,
-                message="We're unable to reset your password until your email address is verified",
             )
 
         # Generate reset PIN

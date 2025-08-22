@@ -65,7 +65,7 @@ async def create_user_profile(user: User) -> Account:
         zip_code=user.zip_code,
         photo_url=parse_photo_url(user.photo_url),
         created_at=user.created_at,
-        last_login_at=user.last_login_at,
+        # last_login_at=user.last_login_at,
         verify_status=user.verify_status,
         super_admin=user.super_admin,
         account_provider=(

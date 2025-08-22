@@ -24,8 +24,8 @@ class Country(Base):
 
     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(191), unique=True, nullable=False)
+    country_code = Column(String(6), unique=True, nullable=False)
     currency_code = Column(Text, nullable=False)
-    country_code = Column(Text, nullable=False)
     calling_code = Column(Text, nullable=True)
     deleted = Column(Boolean, default=False)
 

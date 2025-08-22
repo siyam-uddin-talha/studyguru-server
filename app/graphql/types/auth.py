@@ -56,17 +56,20 @@ class AuthLoginType:
 
 
 @strawberry.input
-class LoginInput:
-    email: str
-    password: str
-
-
-@strawberry.input
 class CountryInput:
     name: str
     currency_code: Optional[str] = None
     country_code: Optional[str] = None
     calling_code: Optional[str] = None
+
+
+@strawberry.input
+class LoginInput:
+    email: Optional[str] = None
+    password: str
+    phone_number: Optional[str] = None
+    provider: str
+    country: Optional[CountryInput] = None
 
 
 @strawberry.input
