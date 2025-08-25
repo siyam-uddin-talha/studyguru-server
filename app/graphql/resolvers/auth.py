@@ -22,9 +22,12 @@ from app.helpers.auth import (
     verify_password,
     get_password_hash,
     verify_google_token,
-    generate_verify_pin,
+    generate_pin,
 )
-from app.helpers.subscription import get_or_create_free_subscription
+from app.helpers.subscription import (
+    get_or_create_free_subscription,
+    add_earned_points_async,
+)
 from app.helpers.pivot import get_or_create_country_from_object
 from app.helpers.user import create_user_profile
 from app.helpers.email import (
@@ -32,6 +35,7 @@ from app.helpers.email import (
     send_reset_email,
     send_welcome_email,
 )
+from app.constants.constant import CONSTANTS, COIN
 
 
 @strawberry.type
@@ -47,6 +51,7 @@ class AuthQuery:
         await context.db.commit()
 
         account = await create_user_profile(context.current_user)
+        print(account, "-----------account -------")
         return AuthType(
             success=True, message="Account retrieved successfully", account=account
         )
@@ -91,7 +96,8 @@ class AuthMutation:
                 .options(
                     selectinload(User.purchased_subscription).selectinload(
                         PurchasedSubscription.subscription
-                    )
+                    ),
+                    selectinload(User.country),
                 )
                 .where(User.email == email)
             )
@@ -129,7 +135,8 @@ class AuthMutation:
                 .options(
                     selectinload(User.purchased_subscription).selectinload(
                         PurchasedSubscription.subscription
-                    )
+                    ),
+                    selectinload(User.country),
                 )
                 .where(User.id == new_user.id)
             )
@@ -170,7 +177,8 @@ class AuthMutation:
             .options(
                 selectinload(User.purchased_subscription).selectinload(
                     PurchasedSubscription.subscription
-                )
+                ),
+                selectinload(User.country),
             )
             .where(
                 or_(User.email == input.email, User.phone_number == input.phone_number)
@@ -236,7 +244,8 @@ class AuthMutation:
             .options(
                 selectinload(User.purchased_subscription).selectinload(
                     PurchasedSubscription.subscription
-                )
+                ),
+                selectinload(User.country),
             )
             .where(User.id == new_user.id)
         )
@@ -265,9 +274,7 @@ class AuthMutation:
         if input.provider == "EMAIL":
             # Validate email input
             if not input.email or not input.password:
-                return AuthLoginType(
-                    success=False, message="Please fill out all the fields"
-                )
+                return AuthLoginType(success=False, message=CONSTANTS.NOT_FILLED)
 
             # Find user by email with subscription data
             result = await db.execute(
@@ -275,7 +282,8 @@ class AuthMutation:
                 .options(
                     selectinload(User.purchased_subscription).selectinload(
                         PurchasedSubscription.subscription
-                    )
+                    ),
+                    selectinload(User.country),
                 )
                 .where(User.email == input.email)
             )
@@ -284,13 +292,13 @@ class AuthMutation:
             if not user:
                 return AuthLoginType(
                     success=False,
-                    message="We couldn’t locate an account with this email. Please check for typos or sign up for a new account.",
+                    message=CONSTANTS.NOT_FOUND,
                 )
 
             # Verify password
             if not user.password or not verify_password(input.password, user.password):
                 return AuthLoginType(
-                    success=False, message="The password you entered is incorrect"
+                    success=False, message=CONSTANTS.INCORRECT_PASSWORD
                 )
 
             # Check email verification status
@@ -318,9 +326,7 @@ class AuthMutation:
             phone_number = (input.phone_number.replace(" ", ""),)
             # Validate phone input
             if not phone_number or not input.password:
-                return AuthLoginType(
-                    success=False, message="Please fill out all the fields"
-                )
+                return AuthLoginType(success=False, message=CONSTANTS.NOT_FILLED)
 
             # Find user by phone with subscription data
             result = await db.execute(
@@ -329,7 +335,8 @@ class AuthMutation:
                 .options(
                     selectinload(User.purchased_subscription).selectinload(
                         PurchasedSubscription.subscription
-                    )
+                    ),
+                    selectinload(User.country),
                 )
                 .where(
                     User.phone_number == phone_number,
@@ -341,13 +348,13 @@ class AuthMutation:
             if not user:
                 return AuthLoginType(
                     success=False,
-                    message="It looks like there’s no account connected to this phone number!",
+                    message=CONSTANTS.INVALID_PHONE,
                 )
 
             # Verify password
             if not user.password or not verify_password(input.password, user.password):
                 return AuthLoginType(
-                    success=False, message="The password you entered is incorrect!"
+                    success=False, message=CONSTANTS.INCORRECT_PASSWORD
                 )
 
             # Check phone verification status
@@ -395,12 +402,18 @@ class AuthMutation:
         )
 
     @strawberry.mutation
-    async def verify(self, info, pin: str, email: str) -> AuthType:
+    async def verify(
+        self,
+        info,
+        pin: str,
+        email: str,
+        verify_reset: Optional[bool] = False,
+    ) -> AuthType:
         context = info.context
         db: AsyncSession = context.db
 
         if not pin or not email:
-            return AuthType(success=False, message="Please fill out all the fields")
+            return AuthType(success=False, message=CONSTANTS.NOT_FILLED)
 
         # Find user with valid pin
         result = await db.execute(
@@ -408,7 +421,8 @@ class AuthMutation:
             .options(
                 selectinload(User.purchased_subscription).selectinload(
                     PurchasedSubscription.subscription
-                )
+                ),
+                selectinload(User.country),
             )
             .where(
                 User.email == email,
@@ -419,15 +433,29 @@ class AuthMutation:
         user = result.scalar_one_or_none()
 
         if not user:
+            return AuthType(success=False, message=CONSTANTS.NOT_FOUND)
+
+        if verify_reset:
+            if user.reset_password_pin != int(pin):
+                return AuthType(
+                    success=False,
+                    message=CONSTANTS.INVALID_OR_EXPIRE_PIN,
+                )
+
+            # Update user
+            user.reset_password_pin = None
+            user.reset_password_expire_date = None
+            await db.commit()
+
             return AuthType(
-                success=False,
-                message="Oops! That code didn’t work. It may be incorrect or expired—please try again with a new one.",
+                success=True,
+                message=CONSTANTS.PIN_SUCCESS,
             )
 
         if user.verify_pin != int(pin):
             return AuthType(
                 success=False,
-                message="The verification code you entered is incorrect. Please check and try again.",
+                message=CONSTANTS.INVALID_OR_EXPIRE_PIN,
             )
 
         # Update user
@@ -435,6 +463,12 @@ class AuthMutation:
         user.verify_pin_expire_date = None
         user.verify_status = True
         await db.commit()
+        await add_earned_points_async(
+            db=db,
+            user_id=user.id,
+            points=int(COIN.EARN_VERIFY_EMAIL),
+            description="Free coins as a welcome gift.",
+        )
 
         # Create token
         token = create_access_token(data={"sub": user.id})
@@ -448,7 +482,9 @@ class AuthMutation:
         )
 
     @strawberry.mutation
-    async def send_verification(self, info, email: str) -> DefaultResponse:
+    async def send_verification(
+        self, info, email: str, for_reset: Optional[bool] = False
+    ) -> DefaultResponse:
         context = info.context
         db: AsyncSession = context.db
 
@@ -464,11 +500,25 @@ class AuthMutation:
         if not user:
             return DefaultResponse(
                 success=False,
-                message="We couldn't find an account associated with this email address",
+                message=CONSTANTS.NOT_FOUND_2,
+            )
+
+        if for_reset:
+            pin = generate_pin()
+            user.reset_password_pin = pin
+            user.reset_password_expire_date = datetime.utcnow() + timedelta(minutes=15)
+            await db.commit()
+            # Send reset email
+            await send_reset_email(
+                user.email, pin, f"{user.first_name} {user.last_name}"
+            )
+
+            return DefaultResponse(
+                success=True, message="OTP has been sent to your email."
             )
 
         # Generate and send verification code
-        pin = generate_verify_pin()
+        pin = generate_pin()
         user.verify_pin = pin
         user.verify_pin_expire_date = datetime.utcnow() + timedelta(minutes=15)
         await db.commit()
@@ -503,7 +553,7 @@ class AuthMutation:
             )
 
         # Generate reset PIN
-        pin = generate_verify_pin()
+        pin = generate_pin()
         user.reset_password_pin = pin
         user.reset_password_expire_date = datetime.utcnow() + timedelta(minutes=15)
         await db.commit()
@@ -511,7 +561,7 @@ class AuthMutation:
         # Send reset email
         await send_reset_email(user.email, pin, f"{user.first_name} {user.last_name}")
 
-        return DefaultResponse(success=True, message="Reset OTP sent successfully")
+        return DefaultResponse(success=True, message="OTP has been sent to your email.")
 
     @strawberry.mutation
     async def update_reset_password(
@@ -521,9 +571,7 @@ class AuthMutation:
         db: AsyncSession = context.db
 
         if not all([email, password, pin]):
-            return DefaultResponse(
-                success=False, message="Incorrect information! Try again"
-            )
+            return DefaultResponse(success=False, message=CONSTANTS.NOT_FILLED)
 
         # Find user with valid reset pin
         result = await db.execute(
@@ -536,11 +584,13 @@ class AuthMutation:
         if not user:
             return DefaultResponse(
                 success=False,
-                message="The password reset OTP has expired or is no longer valid",
+                message=CONSTANTS.NOT_FOUND,
             )
 
         if user.reset_password_pin != int(pin):
-            return DefaultResponse(success=False, message="Invalid reset PIN")
+            return DefaultResponse(
+                success=False, message=CONSTANTS.INVALID_OR_EXPIRE_PIN
+            )
 
         # Update password
         user.password = get_password_hash(password)
@@ -549,5 +599,6 @@ class AuthMutation:
         await db.commit()
 
         return DefaultResponse(
-            success=True, message="Your password has been updated successfully"
+            success=True,
+            message="Password change complete. Your account security has been enhanced.",
         )

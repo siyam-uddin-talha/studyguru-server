@@ -61,9 +61,7 @@ async def send_reset_email(email: str, pin: int, recipient_name: str):
     """Send password reset email with PIN"""
     subject = "Use this OTP to reset your password"
     html_content = render_template(
-        "reset_password.html",
-        name=recipient_name,
-        otp=str(pin),
+        "reset_password.html", name=recipient_name, otp=str(pin), email=email
     )
     return await send_email(email, subject, html_content)
 

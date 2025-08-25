@@ -52,7 +52,7 @@ async def verify_google_token(token: str) -> Optional[dict]:
         return None
 
 
-def generate_verify_pin() -> int:
+def generate_pin() -> int:
     return secrets.randbelow(900000) + 100000
 
 

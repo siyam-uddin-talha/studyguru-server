@@ -57,9 +57,9 @@ class User(Base):
 
     # Points system
     current_points = Column(
-        Integer, default=30, nullable=False
+        Integer, default=0, nullable=False
     )  # Free users get 30 points
-    total_points_earned = Column(Integer, default=30, nullable=False)
+    total_points_earned = Column(Integer, default=0, nullable=False)
     total_points_used = Column(Integer, default=0, nullable=False)
 
     # Subscription

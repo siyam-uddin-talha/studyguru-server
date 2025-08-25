@@ -67,6 +67,15 @@
         line-height: 0;
       }
 
+      .top-rounded {
+        border-top-left-radius: 15px;
+        border-top-right-radius: 15px;
+      }
+
+      .bottom-rounded {
+        border-bottom-left-radius: 15px;
+        border-bottom-right-radius: 15px;
+      }
       @media (max-width: 620px) {
         .desktop_hide table.icons-inner {
           display: inline-block !important;
@@ -228,7 +237,7 @@
                 <tr>
                   <td>
                     <table
-                      class="row-content stack"
+                      class="row-content stack top-rounded"
                       align="center"
                       border="0"
                       cellpadding="0"
@@ -239,6 +248,8 @@
                         mso-table-rspace: 0pt;
                         background-color: #000000;
                         border-radius: 0;
+                        border-top-left-radius: 15px;
+                        border-top-right-radius: 15px;
                         color: #000000;
                         width: 600px;
                         margin: 0 auto;
@@ -693,7 +704,7 @@
                 <tr>
                   <td>
                     <table
-                      class="row-content"
+                      class="row-content bottom-rounded"
                       align="center"
                       border="0"
                       cellpadding="0"
@@ -706,6 +717,8 @@
                         color: #333;
                         width: 600px;
                         margin: 0 auto;
+                        border-bottom-left-radius: 15px;
+                        border-bottom-right-radius: 15px;
                       "
                       width="600"
                     >

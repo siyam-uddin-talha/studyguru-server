@@ -75,4 +75,5 @@ async def create_user_profile(user: User) -> Account:
         ),
         account_type=user.account_type,
         purchased_subscription=purchased_subscription,
+        country=user.country,
     )
