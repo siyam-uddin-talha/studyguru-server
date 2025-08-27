@@ -162,7 +162,7 @@ The AI analysis provides:
 
 - **User** - User accounts with points tracking
 - **Subscription** - Available plans and add-ons
-- **DocMaterial** - Analyzed documents and results
+- **Interaction** - Analyzed documents and results
 - **PointTransaction** - Points usage history
 - **Media** - File storage information
 

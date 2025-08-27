@@ -295,6 +295,12 @@ class AuthMutation:
                     message=CONSTANTS.NOT_FOUND,
                 )
 
+            if user.account_provider == AccountProvider.GOOGLE and not user.password:
+                return AuthLoginType(
+                    success=False,
+                    message="This account is linked to Google sign-in. Please log in using Google, or reset your password via “Forgot Password” to create a new one.",
+                )
+
             # Verify password
             if not user.password or not verify_password(input.password, user.password):
                 return AuthLoginType(
@@ -349,6 +355,12 @@ class AuthMutation:
                 return AuthLoginType(
                     success=False,
                     message=CONSTANTS.INVALID_PHONE,
+                )
+
+            if user.account_provider == AccountProvider.GOOGLE and not user.password:
+                return AuthLoginType(
+                    success=False,
+                    message="This account is linked to Google sign-in. Please log in using Google, or reset your password via “Forgot Password” to create a new one.",
                 )
 
             # Verify password

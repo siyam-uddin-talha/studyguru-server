@@ -16,7 +16,7 @@ class MediaType:
 
 
 @strawberry.type
-class DocMaterialType:
+class InteractionType:
     id: str
     user_id: str
     file_id: str
@@ -35,22 +35,22 @@ class DocMaterialType:
 
 
 @strawberry.type
-class DocMaterialResponse:
+class InteractionResponse:
     success: bool
     message: Optional[str] = None
-    result: Optional[DocMaterialType] = None
+    result: Optional[InteractionType] = None
 
 
 @strawberry.type
-class DocMaterialListResponse:
+class InteractionListResponse:
     success: bool
     message: Optional[str] = None
-    result: Optional[List[DocMaterialType]] = None
+    result: Optional[List[InteractionType]] = None
     total: Optional[int] = None
     has_next_page: Optional[bool] = None
 
 
 @strawberry.input
-class DocMaterialUploadInput:
+class InteractionUploadInput:
     file: str  # This would be handled differently in actual implementation
     max_tokens: Optional[int] = 1000

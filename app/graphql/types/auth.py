@@ -34,6 +34,10 @@ class Account:
     account_provider: Optional[AccountProviderEnum] = None
     purchased_subscription: Optional[PurchasedSubscriptionType] = None
     country: Optional[CountryType] = None
+    # points system
+    current_points: Optional[int] = None
+    total_points_earned: Optional[int] = None
+    total_points_used: Optional[int] = None
 
 
 @strawberry.type

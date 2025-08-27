@@ -6,8 +6,9 @@ from .subscription import (
     BillingLog,
     SubscriptionPlan,
 )
-from .doc_material import DocMaterial, Media
+from .interaction import Interaction
 from .pivot import Country
+from .media import Media
 
 __all__ = [
     "User",
@@ -18,7 +19,7 @@ __all__ = [
     "PointTransaction",
     "BillingLog",
     "SubscriptionPlan",
-    "DocMaterial",
+    "Interaction",
     "Media",
     "Country",
 ]

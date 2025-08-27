@@ -6,12 +6,29 @@ from app.core.database import Base
 import uuid
 
 
-class ImageMedia(Base):
-    __tablename__ = "image_media"
+# class ImageMedia(Base):
+#     __tablename__ = "image_media"
+
+#     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
+#     url = Column(String(191), nullable=False)
+#     file_name = Column(String(191), nullable=False)
+#     size = Column(Float, nullable=False)
+#     meme_type = Column(String(191), nullable=False)
+#     created_at = Column(DateTime, default=func.now(), nullable=True)
+
+
+class Media(Base):
+    __tablename__ = "media"
 
     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
-    url = Column(String(191), nullable=False)
-    file_name = Column(String(191), nullable=False)
-    size = Column(Float, nullable=False)
-    meme_type = Column(String(191), nullable=False)
+    original_filename = Column(String(500), nullable=False)
+    s3_key = Column(String(500), nullable=False)
+    file_type = Column(String(100), nullable=False)
+    meme_type = Column(String(191), nullable=True)
+    original_size = Column(Float, nullable=False)  # in bytes
+    compressed_size = Column(Float, nullable=True)  # in bytes after compression
+    compression_ratio = Column(Float, nullable=True)  # original/compressed
     created_at = Column(DateTime, default=func.now(), nullable=True)
+
+    # Relationships
+    interactions = relationship("Interaction", back_populates="file")

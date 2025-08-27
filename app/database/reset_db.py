@@ -6,7 +6,7 @@ async def reset_db():
     """⚠ Dev only: Drop and recreate all tables."""
     try:
         async with engine.begin() as conn:
-            from app.models import user, media, pivot, doc_material, subscription
+            from app.models import user, media, pivot, subscription, interaction
 
             # Drop all tables
             await conn.run_sync(Base.metadata.drop_all)

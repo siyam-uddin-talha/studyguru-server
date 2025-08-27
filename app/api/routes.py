@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.helpers.auth import get_current_user
 from app.models.user import User
-from app.models.doc_material import DocMaterial, Media
+from app.models.interaction import Interaction, Media
 from app.models.subscription import PointTransaction
 from app.services.openai_service import OpenAIService
 from app.services.file_service import FileService
@@ -33,7 +33,7 @@ if paddle:
 
 # Routers
 webhook_router = APIRouter()
-doc_material_router = APIRouter()
+interaction_router = APIRouter()
 
 
 @webhook_router.post("/paddle")
@@ -94,13 +94,13 @@ async def process_document_analysis(
         try:
             # Get doc material
             result = await db.execute(
-                select(DocMaterial).where(DocMaterial.id == doc_material_id)
+                select(Interaction).where(Interaction.id == doc_material_id)
             )
-            doc_material = result.scalar_one()
+            interaction = result.scalar_one()
 
             # Get user
             user_result = await db.execute(
-                select(User).where(User.id == doc_material.user_id)
+                select(User).where(User.id == interaction.user_id)
             )
             user = user_result.scalar_one()
 
@@ -114,8 +114,8 @@ async def process_document_analysis(
 
             # Check if user still has enough points
             if user.current_points < points_cost:
-                doc_material.status = "failed"
-                doc_material.error_message = "Insufficient points"
+                interaction.status = "failed"
+                interaction.error_message = "Insufficient points"
                 await db.commit()
                 return
 
@@ -129,26 +129,26 @@ async def process_document_analysis(
                 transaction_type="used",
                 points=points_cost,
                 description=f"Document analysis - {tokens_used} tokens",
-                doc_material_id=doc_material.id,
+                doc_material_id=interaction.id,
             )
             db.add(point_transaction)
 
             # Update doc material
-            doc_material.analysis_response = analysis_result
-            doc_material.question_type = analysis_result.get("type")
-            doc_material.detected_language = analysis_result.get("language")
-            doc_material.title = analysis_result.get("title")
-            doc_material.summary_title = analysis_result.get("summary_title")
-            doc_material.tokens_used = tokens_used
-            doc_material.points_cost = points_cost
-            doc_material.status = "completed"
+            interaction.analysis_response = analysis_result
+            interaction.question_type = analysis_result.get("type")
+            interaction.detected_language = analysis_result.get("language")
+            interaction.title = analysis_result.get("title")
+            interaction.summary_title = analysis_result.get("summary_title")
+            interaction.tokens_used = tokens_used
+            interaction.points_cost = points_cost
+            interaction.status = "completed"
 
             await db.commit()
 
         except Exception as e:
             # Update status to failed
-            doc_material.status = "failed"
-            doc_material.error_message = str(e)
+            interaction.status = "failed"
+            interaction.error_message = str(e)
             await db.commit()
 
 

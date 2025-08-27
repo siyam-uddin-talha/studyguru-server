@@ -76,4 +76,7 @@ async def create_user_profile(user: User) -> Account:
         account_type=user.account_type,
         purchased_subscription=purchased_subscription,
         country=user.country,
+        current_points=user.current_points,
+        total_points_earned=user.total_points_earned,
+        total_points_used=user.total_points_used,
     )

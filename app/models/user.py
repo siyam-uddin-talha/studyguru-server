@@ -79,6 +79,6 @@ class User(Base):
         "PurchasedSubscription", back_populates="users"
     )
     country = relationship("Country", back_populates="users")
-    doc_materials = relationship("DocMaterial", back_populates="user")
+    interactions = relationship("Interaction", back_populates="user")
     point_transactions = relationship("PointTransaction", back_populates="user")
     billing_logs = relationship("BillingLog", back_populates="user")
