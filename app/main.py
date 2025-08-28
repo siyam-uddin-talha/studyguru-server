@@ -8,7 +8,9 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 
 from app.graphql.schema import schema, get_context
-from app.api.routes import webhook_router, interaction_router
+from app.api.webhook import webhook_router
+from app.api.app_routes import account_router
+
 from app.core.database import init_db
 from app.workers.scheduler import start_scheduler
 
@@ -54,7 +56,7 @@ app.include_router(graphql_app, prefix="/graphql")
 
 # REST routes
 app.include_router(webhook_router, prefix="/webhook")
-app.include_router(interaction_router, prefix="/interaction")
+app.include_router(account_router, prefix="/api/app")
 
 
 @app.get("/")

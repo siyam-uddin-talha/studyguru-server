@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY: str = getenv("AWS_ACCESS_KEY", "test-key")
     SECRET_ACCESS_KEY: str = getenv("SECRET_ACCESS_KEY", "test-secret")
     AWS_S3_BUCKET: str = getenv("AWS_S3_BUCKET", "studyguru-pro")
+    AWS_ORIGIN: str = getenv("AWS_ORIGIN", "ap-southeast-1")
 
     # Paddle Configuration
     PADDLE_API_KEY: str = getenv("PADDLE_API_KEY", "test-key")

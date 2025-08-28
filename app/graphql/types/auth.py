@@ -2,7 +2,7 @@ import strawberry
 from typing import Optional
 from datetime import datetime
 from app.models.user import AccountProvider, UserAccountType
-from .common import CountryType
+from .common import CountryType, CountryInput
 from .subscription import PurchasedSubscriptionType
 from typing import Type
 import enum
@@ -23,6 +23,7 @@ class Account:
     primary_city: Optional[str] = None
     profession_title: Optional[str] = None
     about_description: Optional[str] = None
+    birthday: Optional[datetime] = None
     primary_address: Optional[str] = None
     phone_number: Optional[str] = None
     zip_code: Optional[str] = None
@@ -31,6 +32,7 @@ class Account:
     last_login_at: Optional[datetime] = None
     verify_status: Optional[bool] = None
     super_admin: Optional[bool] = None
+    education_level: Optional[str] = None
     account_provider: Optional[AccountProviderEnum] = None
     purchased_subscription: Optional[PurchasedSubscriptionType] = None
     country: Optional[CountryType] = None
@@ -57,14 +59,6 @@ class AuthLoginType:
     email: Optional[str] = None
     token: Optional[str] = None
     account: Optional[Account] = None
-
-
-@strawberry.input
-class CountryInput:
-    name: str
-    currency_code: Optional[str] = None
-    country_code: Optional[str] = None
-    calling_code: Optional[str] = None
 
 
 @strawberry.input

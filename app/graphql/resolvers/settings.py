@@ -1,4 +1,3 @@
-# server/app/graphql/resolvers/settings.py
 import strawberry
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,10 +11,15 @@ from app.graphql.types.settings import (
     SettingsResponse,
 )
 from app.models.user import User, AccountProvider
+from app.models.subscription import PurchasedSubscription
 from app.helpers.auth import verify_password, get_password_hash
 from app.helpers.user import create_user_profile
-from app.helpers.email import send_verification_email
-from app.constants.constant import CONSTANTS
+from app.helpers.subscription import (
+    add_earned_points_async,
+)
+from app.helpers.pivot import get_or_create_country_from_object
+
+from app.constants.constant import CONSTANTS, COIN
 
 
 @strawberry.type
@@ -26,11 +30,24 @@ class SettingsQuery:
 
         if not context.current_user:
             return SettingsResponse(
-                success=False, message="Unable to find user!", account=None
+                success=False, message=CONSTANTS.NOT_FOUND, account=None
             )
 
         try:
-            account = await create_user_profile(context.current_user)
+            user_result = await context.db.execute(
+                select(User)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    ),
+                    selectinload(User.country),
+                )
+                .where(User.id == context.current_user.id)
+            )
+            new_user = user_result.scalar_one_or_none()
+
+            account = await create_user_profile(new_user)
+
             return SettingsResponse(
                 success=True,
                 message="Account information retrieved successfully.",
@@ -113,23 +130,20 @@ class SettingsMutation:
         db: AsyncSession = context.db
 
         if not context.current_user:
-            return SettingsResponse(
-                success=False, message="Unable to find account, try again"
-            )
+            return SettingsResponse(success=False, message=CONSTANTS.NOT_FOUND)
 
         try:
             # Find user
             result = await db.execute(
                 select(User)
-                .options(selectinload(User.purchased_subscription))
+                .options(selectinload(User.country))
                 .where(User.id == context.current_user.id)
             )
-            user = result.scalar_one_or_none()
-
+            user: User = result.scalar_one_or_none()
             if not user:
                 return SettingsResponse(
                     success=False,
-                    message="We couldn't find an account associated with this email address.",
+                    message=CONSTANTS.NOT_FOUND_2,
                 )
 
             # Check if email is changing and is already in use
@@ -139,28 +153,113 @@ class SettingsMutation:
                 )
                 if existing_email.scalar_one_or_none():
                     return SettingsResponse(
-                        success=False, message="This account is already registered"
+                        success=False, message=CONSTANTS.ACCOUNT_FOUND
                     )
 
+            # Define fields to check for updates
+            fields_to_check = [
+                "first_name",
+                "last_name",
+                "email",
+                "primary_state",
+                "primary_city",
+                "profession_title",
+                "about_description",
+                "primary_address",
+                "zip_code",
+                "photo_url",
+                "phone_number",
+                "birthday",
+                "education_level",
+            ]
+
             # Update user profile
-            update_data = {
-                key: value for key, value in input.__dict__.items() if value is not None
-            }
+            update_data = {}
+
+            # Check and add fields that have changed
+            for field in fields_to_check:
+                input_value = getattr(input, field)
+                user_value = getattr(user, field)
+
+                # Compare values, handling phone number with space removal
+                if field == "phone_number":
+                    if input_value is not None:
+                        cleaned_input = input_value.replace(" ", "")
+                        if cleaned_input != user_value:
+                            update_data[field] = cleaned_input
+                elif input_value is not None and input_value != user_value:
+                    update_data[field] = input_value
+
+            # Handle country separately
+            if (
+                input.country
+                and not user.country
+                or (
+                    user.country
+                    and not user.country.country_code == input.country.country_code
+                )
+            ):
+
+                # Check if country is different
+                user_country = await get_or_create_country_from_object(
+                    db, country_obj=input.country
+                )
+
+                update_data["country_id"] = user_country.id
+
+            # If no changes, return early
+            if not update_data:
+                return SettingsResponse(
+                    success=True,
+                    message="No changes detected. Profile remains the same.",
+                    # account=await create_user_profile(user),
+                )
 
             # Reset verification status if email changes
-            if input.email and input.email != user.email:
+            if "email" in update_data and update_data["email"] != user.email:
                 update_data["verify_status"] = False
 
             # Update user
             for key, value in update_data.items():
                 setattr(user, key, value)
 
+            # Bonus points logic for Google account
+
+            if user.account_provider == AccountProvider.GOOGLE and (
+                (not user.phone_number and input.phone_number)
+                or (not user.country and input.country)
+            ):
+
+                await add_earned_points_async(
+                    db=db,
+                    user_id=user.id,
+                    points=int(COIN.EARN_VERIFY_EMAIL),
+                    description="Free coins for completing your profile",
+                )
+
             await db.commit()
+            await db.refresh(user, ["country"])
+
+            # Fetch updated user with all related data
+            updated_user_result = await db.execute(
+                select(User)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    ),
+                    selectinload(User.country),
+                )
+                .where(User.id == user.id)
+            )
+            get_update_user = updated_user_result.scalar_one_or_none()
+
+            updated_account = await create_user_profile(get_update_user)
 
             return SettingsResponse(
                 success=True,
-                message="Your profile information has been successfully updated.",
-                logout=input.email != user.email,
+                message="Profile changes saved! Your account information is now up to date.",
+                logout="email" in update_data,
+                account=updated_account,
             )
 
         except Exception as e:

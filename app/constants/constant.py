@@ -16,7 +16,15 @@ class CONSTANTS(str, enum.Enum):
 
     INCORRECT_PASSWORD = "The password you entered is incorrect."
 
+    ACCOUNT_FOUND = "Looks like you already have an account. Try logging in!"
+    EMAIL_FOUND = "This email number is already linked to an existing account. Try logging in or using a different email!"
+
 
 class COIN(str, enum.Enum):
     EARN_VERIFY_EMAIL = 30
     EARN_UPDDATE_CONTACT = 30
+
+
+class RESPONSE_STATUS(str, enum.Enum):
+    ACCOUNT_EXIST = "account_registered"
+    NOT_FOUND = "no_account_found"

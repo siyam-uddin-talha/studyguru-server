@@ -35,7 +35,7 @@ from app.helpers.email import (
     send_reset_email,
     send_welcome_email,
 )
-from app.constants.constant import CONSTANTS, COIN
+from app.constants.constant import CONSTANTS, COIN, RESPONSE_STATUS
 
 
 @strawberry.type
@@ -44,14 +44,29 @@ class AuthQuery:
     async def account(self, info) -> AuthType:
         context = info.context
         if not context.current_user:
-            return AuthType(success=False, message="User not logged in")
+            return AuthType(
+                success=False,
+                message=CONSTANTS.NOT_FOUND,
+                response_status=RESPONSE_STATUS.NOT_FOUND,
+            )
 
+        user_result = await context.db.execute(
+            select(User)
+            .options(
+                selectinload(User.purchased_subscription).selectinload(
+                    PurchasedSubscription.subscription
+                ),
+                selectinload(User.country),
+            )
+            .where(User.id == context.current_user.id)
+        )
+        new_user = user_result.scalar_one_or_none()
         # Update last login
-        context.current_user.last_login_at = func.now()
-        await context.db.commit()
+        # context.current_user.last_login_at = func.now()
+        # await context.db.commit()
 
-        account = await create_user_profile(context.current_user)
-        print(account, "-----------account -------")
+        account = await create_user_profile(new_user)
+
         return AuthType(
             success=True, message="Account retrieved successfully", account=account
         )
@@ -169,7 +184,7 @@ class AuthMutation:
             required_fields.append(input.password)
 
         if not all(required_fields):
-            return AuthType(success=False, message="Please fill out all the fields")
+            return AuthType(success=False, message=CONSTANTS.NOT_FILLED)
 
         # Check if user exists
         result = await db.execute(
@@ -192,21 +207,21 @@ class AuthMutation:
 
                 return AuthType(
                     success=False,
-                    response_status="account_registered",
-                    message="Looks like you already have an account. Try logging in!",
+                    response_status=RESPONSE_STATUS.ACCOUNT_EXIST,
+                    message=CONSTANTS.ACCOUNT_FOUND,
                 )
             if not existing_user:
 
                 return AuthType(
                     success=True,
-                    response_status="no_account_found",
+                    response_status=RESPONSE_STATUS.NOT_FOUND,
                     message="No account found with this email. Let’s create one!",
                 )
 
         if existing_user:
             return AuthType(
                 success=False,
-                message="This email number is already linked to an existing account. Try logging in or using a different email!",
+                message=CONSTANTS.EMAIL_FOUND,
             )
 
         # Create user

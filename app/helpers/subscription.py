@@ -46,7 +46,7 @@ async def add_point_transaction_async(
     transaction_type: str,
     points: int,
     description: Optional[str] = None,
-    doc_material_id: Optional[str] = None,
+    interaction_id: Optional[str] = None,
 ) -> Optional[PointTransaction]:
     """
     Add a point transaction for a user and update their point balances (Async version).
@@ -57,7 +57,7 @@ async def add_point_transaction_async(
         transaction_type: Type of transaction ("earned", "used", "purchased")
         points: Number of points (positive for earned/purchased, positive for used)
         description: Optional description of the transaction
-        doc_material_id: Optional ID of related document material
+        interaction_id: Optional ID of related document material
 
     Returns:
         PointTransaction: Created transaction object or None if failed
@@ -97,7 +97,7 @@ async def add_point_transaction_async(
             transaction_type=transaction_type,
             points=points,
             description=description,
-            doc_material_id=doc_material_id,
+            interaction_id=interaction_id,
             created_at=datetime.utcnow(),
         )
 
@@ -129,7 +129,7 @@ async def add_earned_points_async(
     user_id: str,
     points: int,
     description: Optional[str] = None,
-    doc_material_id: Optional[str] = None,
+    interaction_id: Optional[str] = None,
 ) -> Optional[PointTransaction]:
     """
     Convenience function to add earned points (Async version).
@@ -140,7 +140,7 @@ async def add_earned_points_async(
         transaction_type="earned",
         points=points,
         description=description,
-        doc_material_id=doc_material_id,
+        interaction_id=interaction_id,
     )
 
 
@@ -149,7 +149,7 @@ async def add_used_points_async(
     user_id: str,
     points: int,
     description: Optional[str] = None,
-    doc_material_id: Optional[str] = None,
+    interaction_id: Optional[str] = None,
 ) -> Optional[PointTransaction]:
     """
     Convenience function to deduct used points (Async version).
@@ -160,7 +160,7 @@ async def add_used_points_async(
         transaction_type="used",
         points=points,
         description=description,
-        doc_material_id=doc_material_id,
+        interaction_id=interaction_id,
     )
 
 
@@ -204,7 +204,7 @@ async def add_multiple_transactions_async(
     Args:
         db: Async database session
         transactions_data: List of transaction dictionaries with keys:
-            - user_id, transaction_type, points, description, doc_material_id
+            - user_id, transaction_type, points, description, interaction_id
 
     Returns:
         List of created PointTransaction objects
@@ -239,7 +239,7 @@ async def add_multiple_transactions_async(
                 transaction_type=transaction_type,
                 points=points,
                 description=tx_data.get("description"),
-                doc_material_id=tx_data.get("doc_material_id"),
+                interaction_id=tx_data.get("interaction_id"),
                 created_at=datetime.utcnow(),
             )
 
