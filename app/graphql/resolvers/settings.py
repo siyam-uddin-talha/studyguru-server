@@ -9,6 +9,7 @@ from app.graphql.types.settings import (
     UpdatePasswordInput,
     UpdateProfileInput,
     SettingsResponse,
+    PasswordConfirmationResponse,
 )
 from app.models.user import User, AccountProvider
 from app.models.subscription import PurchasedSubscription
@@ -56,36 +57,48 @@ class SettingsQuery:
         except Exception as e:
             return SettingsResponse(success=False, message=str(e), account=None)
 
+    @strawberry.field
+    async def password_confirmation(self, info) -> PasswordConfirmationResponse:
+        context = info.context
+
+        if not context.current_user:
+            return PasswordConfirmationResponse(
+                success=False, message=CONSTANTS.NOT_FOUND, has_password=True
+            )
+
+        try:
+            if context.current_user.password == None:
+                return PasswordConfirmationResponse(
+                    success=True, message="No password", has_password=False
+                )
+
+            return PasswordConfirmationResponse(
+                success=True, message="Password confirm", has_password=True
+            )
+        except Exception as e:
+            return PasswordConfirmationResponse(
+                success=False, message=str(e), has_password=False
+            )
+
 
 @strawberry.type
 class SettingsMutation:
     @strawberry.mutation
     async def update_password(
-        self, info, current_password: str, new_password: str
+        self,
+        info,
+        new_password: str,
+        current_password: Optional[str] = None,
     ) -> SettingsResponse:
         context = info.context
         db: AsyncSession = context.db
 
         if not context.current_user:
-            return SettingsResponse(
-                success=False, message="Unable to find account, try again"
-            )
+            return SettingsResponse(success=False, message=CONSTANTS.NOT_FOUND)
 
         try:
             # Find user
-            result = await db.execute(
-                select(User)
-                .options(selectinload(User.purchased_subscription))
-                .where(User.id == context.current_user.id)
-            )
-            user = result.scalar_one_or_none()
-
-            if not user:
-                return SettingsResponse(
-                    success=False,
-                    message="We couldn't find an account associated with this email address.",
-                )
-
+            user: User = context.current_user
             # Handle special cases for social login
             if (
                 user.account_provider != AccountProvider.EMAIL
@@ -99,7 +112,7 @@ class SettingsMutation:
 
                 return SettingsResponse(
                     success=True,
-                    message="Your new password has been successfully updated.",
+                    message="Your password has been successfully updated. You can now log in with your new password.",
                 )
 
             # Verify current password
@@ -108,7 +121,7 @@ class SettingsMutation:
             ):
                 return SettingsResponse(
                     success=False,
-                    message="The current password you provided doesn't match our records.",
+                    message="Incorrect current password. Please try again.",
                 )
 
             # Update password
@@ -118,7 +131,8 @@ class SettingsMutation:
             await db.commit()
 
             return SettingsResponse(
-                success=True, message="Your new password has been successfully updated."
+                success=True,
+                message="Password update complete! You can continue using your account with the new password",
             )
 
         except Exception as e:

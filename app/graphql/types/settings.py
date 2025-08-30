@@ -40,3 +40,10 @@ class SettingsResponse:
     message: str
     account: Optional[Account] = None
     logout: Optional[bool] = False
+
+
+@strawberry.type
+class PasswordConfirmationResponse:
+    success: bool
+    message: str
+    has_password: bool

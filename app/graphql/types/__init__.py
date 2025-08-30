@@ -19,4 +19,5 @@ __all__ = [
     "UpdatePasswordInput",
     "UpdateProfileInput",
     "SettingsResponse",
+    "PasswordConfirmationResponse",
 ]
