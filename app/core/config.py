@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     PADDLE_ENVIRONMENT: str = getenv("PADDLE_ENVIRONMENT", "sandbox")  # or "production"
 
     # OpenAI
-    OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "test-key")
+    OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "")
 
     GOOGLE_CLIENT_ID: str = getenv("GOOGLE_CLIENT_ID", "google-id")
 
