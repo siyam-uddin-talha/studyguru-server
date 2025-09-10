@@ -10,6 +10,8 @@ from app.core.config import settings
 from app.graphql.schema import schema, get_context
 from app.api.webhook import webhook_router
 from app.api.app_routes import account_router
+from app.api.websocket_routes import router as websocket_router
+from app.api.sse_routes import router as sse_router
 
 from app.core.database import init_db
 from app.workers.scheduler import start_scheduler
@@ -57,6 +59,12 @@ app.include_router(graphql_app, prefix="/graphql")
 # REST routes
 app.include_router(webhook_router, prefix="/webhook")
 app.include_router(account_router, prefix="/api/app")
+
+# WebSocket routes
+app.include_router(websocket_router, prefix="/ws")
+
+# Server-Sent Events routes
+app.include_router(sse_router, prefix="/api/sse")
 
 
 @app.get("/")

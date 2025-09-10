@@ -18,6 +18,9 @@ import openai
 from openai import OpenAI
 from app.core.config import settings
 from pydantic import BaseModel
+from app.api.websocket_routes import notify_message_received
+from app.api.sse_routes import notify_message_received_sse
+
 
 openai.api_key = settings.OPENAI_API_KEY
 client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -321,6 +324,28 @@ async def process_conversation_message(
         # Associate media files with conversation
         if media_objects:
             user_conv.files.extend(media_objects)
+
+        # Notify frontend that message was received
+        try:
+            # Try WebSocket first
+
+            await notify_message_received(
+                user_id=str(user_id),
+                interaction_id=str(interaction.id),
+                conversation_id=str(user_conv.id),
+            )
+        except Exception:
+            try:
+                # Fallback to SSE
+
+                await notify_message_received_sse(
+                    user_id=str(user_id),
+                    interaction_id=str(interaction.id),
+                    conversation_id=str(user_conv.id),
+                )
+            except Exception:
+                # Don't fail the conversation if notifications fail
+                pass
 
         # Guardrail check using Agent approach
         try:
@@ -701,6 +726,30 @@ async def process_conversation_message(
             pass
 
         await db.commit()
+
+        # Notify frontend that AI response is ready
+        try:
+            # Try WebSocket first
+            from app.api.websocket_routes import notify_ai_response_ready
+
+            await notify_ai_response_ready(
+                user_id=str(user_id),
+                interaction_id=str(interaction.id),
+                ai_response=content_text,
+            )
+        except Exception:
+            try:
+                # Fallback to SSE
+                from app.api.sse_routes import notify_ai_response_ready_sse
+
+                await notify_ai_response_ready_sse(
+                    user_id=str(user_id),
+                    interaction_id=str(interaction.id),
+                    ai_response=content_text,
+                )
+            except Exception:
+                # Don't fail the conversation if notifications fail
+                pass
 
         return {
             "success": True,
