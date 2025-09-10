@@ -10,6 +10,7 @@ from sqlalchemy import select
 from typing import Optional, List, Dict, Any
 from app.models.user import User
 from app.models.interaction import Interaction, Conversation, ConversationRole
+from app.models.media import Media
 from app.models.subscription import PointTransaction
 from app.services.openai_service import OpenAIService
 import json
@@ -269,7 +270,7 @@ async def process_conversation_message(
     user_id: str,
     interaction_id: Optional[str],
     message: Optional[str],
-    image_urls: Optional[List[str]],
+    media_files: Optional[List[str]],  # List of media IDs
     max_tokens: int = 1000,
 ) -> Dict[str, Any]:
     """
@@ -293,24 +294,46 @@ async def process_conversation_message(
             db.add(interaction)
             await db.flush()
 
+        # Get media files if provided
+        media_objects = []
+        if media_files:
+            for media_id in media_files:
+                media_result = await db.execute(
+                    select(Media).where(Media.id == media_id)
+                )
+                media = media_result.scalar_one_or_none()
+                if media:
+                    media_objects.append(media)
+
         # Store user conversation
         user_conv = Conversation(
-            interaction_id=str(user_id),
+            interaction_id=str(interaction.id),
             role=ConversationRole.USER,
             content={
                 "type": "text",
-                "_result": {"content": message or "", "images": image_urls or []},
+                "_result": {"content": message or "", "media_ids": media_files or []},
             },
-            status="completed",
+            status="processing",
         )
         db.add(user_conv)
         await db.flush()
 
+        # Associate media files with conversation
+        if media_objects:
+            user_conv.files.extend(media_objects)
+
         # Guardrail check using Agent approach
         try:
-            if message or image_urls:
+            if message or media_objects:
+                # Convert media objects to URLs for guardrail check
+                media_urls = []
+                for media in media_objects:
+                    media_urls.append(
+                        f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
+                    )
+
                 guardrail_result = await guardrail_agent.check(
-                    message or "", image_urls
+                    message or "", media_urls
                 )
                 if guardrail_result.is_violation:
                     await db.commit()
@@ -318,31 +341,79 @@ async def process_conversation_message(
                         "success": False,
                         "message": f"Request blocked: {guardrail_result.violation_type}",
                         "interaction_id": str(interaction.id),
+                        "ai_response": None,
                     }
         except Exception:
             pass
 
-        # Retrieval
+        # Enhanced Retrieval with RAG pattern
         context_text = ""
         try:
-            vector_query = (message or "") + (
-                "\n" + "\n".join(image_urls or []) if image_urls else ""
-            )
+            # Build comprehensive query for vector search
+            vector_query_parts = []
+
+            # Add current message
+            if message:
+                vector_query_parts.append(message)
+
+            # Add media descriptions if available
+            if media_objects:
+                for media in media_objects:
+                    vector_query_parts.append(f"Document: {media.original_filename}")
+
+            # For existing interactions, include interaction context
+            if interaction.title:
+                vector_query_parts.append(f"Topic: {interaction.title}")
+            if interaction.summary_title:
+                vector_query_parts.append(f"Context: {interaction.summary_title}")
+
+            # Combine all parts for vector search
+            vector_query = " ".join(vector_query_parts).strip()
+
+            # Perform similarity search with higher top_k for better context
             similar = await OpenAIService.similarity_search(
-                query=(vector_query.strip() or "context"),
-                top_k=5,
+                query=(vector_query or "educational context"),
+                top_k=8,  # Increased from 5 to 8 for better context
                 user_id=str(user_id),
             )
-            parts: List[str] = []
+
+            # Process and rank results
+            context_parts: List[str] = []
+            seen_titles = set()
+
             for m in similar or []:
-                t = (m.get("title") or "").strip()
-                c = (m.get("content") or "").strip()
-                if t:
-                    parts.append(f"Title: {t}")
-                if c:
-                    parts.append(c)
-            context_text = "\n\n".join(parts) if parts else ""
-        except Exception:
+                title = (m.get("title") or "").strip()
+                content = (m.get("content") or "").strip()
+                score = m.get("score", 0)
+                metadata = m.get("metadata", {})
+
+                # Skip if we've already included this title (avoid duplicates)
+                if title in seen_titles:
+                    continue
+                seen_titles.add(title)
+
+                # Only include high-quality matches (score threshold)
+                if score > 0.3:  # Adjust threshold as needed
+                    context_entry = []
+                    if title and title not in ["User message", "AI response"]:
+                        context_entry.append(f"**{title}**")
+                    if content:
+                        # Truncate very long content to keep context manageable
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        context_entry.append(content)
+
+                    if context_entry:
+                        context_parts.append("\n".join(context_entry))
+
+            # Limit total context length to prevent token overflow
+            context_text = "\n\n---\n\n".join(
+                context_parts[:5]
+            )  # Limit to top 5 results
+
+        except Exception as e:
+            # Log error but don't fail the conversation
+            print(f"Vector search error: {e}")
             pass
 
         # Moderation fallback
@@ -357,19 +428,38 @@ async def process_conversation_message(
                         "success": False,
                         "message": "Your message violates our safety policy.",
                         "interaction_id": str(interaction.id),
+                        "ai_response": None,
                     }
         except Exception:
             pass
 
-        # Build multi-modal user content
-        # Reuse the analysis prompt from analyze_document for consistent image/document handling
-        analysis_prompt = """
-            Analyze the given image/document and provide a structured response:
+        # Build multi-modal user content with enhanced context handling
+        # Use interaction titles if they exist, otherwise use analysis prompt
+        if interaction.title and interaction.summary_title:
+            system_prompt = f"""
+            You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context.
+            
+            Current conversation topic: {interaction.title}
+            Context summary: {interaction.summary_title}
+            
+            Instructions:
+            1. Use the retrieved context from the user's learning history when relevant to provide better, personalized responses
+            2. If the context is not relevant to the current question, answer based on your knowledge
+            3. Maintain consistency with the user's learning style and previous interactions
+            4. Provide clear, educational explanations that build upon previous knowledge when possible
+            5. If this is a follow-up question, reference relevant previous discussions when helpful
+            
+            Always provide helpful, accurate educational assistance.
+            """
+        else:
+            # Enhanced analysis prompt for fresh interactions with better structure
+            system_prompt = """
+            You are StudyGuru AI analyzing educational content. Analyze the given image/document and provide a structured response:
 
             1. First, detect the language of the content
             2. Identify if this contains MCQ (Multiple Choice Questions) or written questions
-            3. Provide a short title for the page/content
-            4. Provide a summary title for your answer
+            3. Provide a short, descriptive title for the page/content
+            4. Provide a summary title that describes what you will help the user with
             5. Based on the question type:
                - If MCQ: Extract questions and provide them in the specified JSON format
                - If written: Provide organized explanatory content
@@ -378,9 +468,8 @@ async def process_conversation_message(
             {
                 "type": "mcq" or "written" or "other",
                 "language": "detected language",
-                "title": "short title for the content",
-                "summary_title": "summary of your response",
-                "token": number_of_tokens_used,
+                "title": "short descriptive title for the content",
+                "summary_title": "summary of how you will help the user",
                 "_result": {
                     // For MCQ type:
                     "questions": [
@@ -396,15 +485,32 @@ async def process_conversation_message(
                 }
             }
         """
-        system_prompt = analysis_prompt
-        user_header = (
-            f"Context (may be relevant):\n{context_text}\n\n" if context_text else ""
-        ) + ("User: " + (message or "") if (message or "") else "")
+        # Build user header with better context presentation
+        user_header_parts = []
+
+        if context_text:
+            user_header_parts.append("**Relevant Learning Context:**")
+            user_header_parts.append(context_text)
+            user_header_parts.append("")  # Empty line for separation
+
+        if message:
+            user_header_parts.append(f"**Current Question:** {message}")
+        elif media_objects:
+            user_header_parts.append("**Document/Image Analysis Request:**")
+
+        user_header = "\n".join(user_header_parts)
         message_content: List[Dict[str, Any]] = []
         if user_header:
             message_content.append({"type": "text", "text": user_header})
-        for url in image_urls or []:
-            message_content.append({"type": "image_url", "image_url": {"url": url}})
+        for media in media_objects:
+            message_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
+                    },
+                }
+            )
 
         # Chat generation
 
@@ -443,12 +549,65 @@ async def process_conversation_message(
                 temperature=0.2,
             )
             content_text = response.output_text or ""
+            input_tokens = int(
+                getattr(getattr(response, "usage", None), "input_tokens", 0) or 0
+            )
+            output_tokens = int(
+                getattr(getattr(response, "usage", None), "output_tokens", 0) or 0
+            )
             tokens_used = int(
                 getattr(getattr(response, "usage", None), "total_tokens", 0) or 0
             )
+
+            # For fresh interactions, try to extract title and summary_title from AI response
+            if not interaction.title and not interaction.summary_title:
+                try:
+                    # Try to parse the response as JSON to extract structured data
+                    parsed_response = json.loads(content_text)
+                    if isinstance(parsed_response, dict):
+                        extracted_title = parsed_response.get("title")
+                        extracted_summary_title = parsed_response.get("summary_title")
+
+                        if extracted_title:
+                            interaction.title = extracted_title
+                        if extracted_summary_title:
+                            interaction.summary_title = extracted_summary_title
+
+                        # Update the content_text to use the _result field if available
+                        if "_result" in parsed_response:
+                            result_content = parsed_response["_result"]
+                            if isinstance(result_content, dict):
+                                if "content" in result_content:
+                                    content_text = result_content["content"]
+                                elif "questions" in result_content:
+                                    # For MCQ, format the questions nicely
+                                    questions = result_content["questions"]
+                                    formatted_questions = []
+                                    for q in questions:
+                                        question_text = q.get("question", "")
+                                        options = q.get("options", {})
+                                        answer = q.get("answer", "")
+                                        explanation = q.get("explanation", "")
+
+                                        formatted_q = f"**{question_text}**\n"
+                                        for opt_key, opt_value in options.items():
+                                            formatted_q += f"{opt_key}. {opt_value}\n"
+                                        if answer:
+                                            formatted_q += f"**Answer:** {answer}\n"
+                                        if explanation:
+                                            formatted_q += (
+                                                f"**Explanation:** {explanation}\n"
+                                            )
+                                        formatted_questions.append(formatted_q)
+
+                                    content_text = "\n\n".join(formatted_questions)
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # If parsing fails, use the original content_text
+                    pass
+
         except Exception as e:
             ai_failed = Conversation(
-                interaction_id=str(user_id),
+                interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
                 content={"type": "other", "_result": {"error": str(e)}},
                 status="failed",
@@ -456,7 +615,11 @@ async def process_conversation_message(
             )
             db.add(ai_failed)
             await db.commit()
-            return {"success": False, "message": "AI generation failed"}
+            return {
+                "success": False,
+                "message": "AI generation failed",
+                "ai_response": None,
+            }
 
         # Points
         points_cost = OpenAIService.calculate_points_cost(tokens_used)
@@ -473,10 +636,16 @@ async def process_conversation_message(
                 error_message="Insufficient points",
                 tokens_used=tokens_used,
                 points_cost=points_cost,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
             db.add(ai_failed)
             await db.commit()
-            return {"success": False, "message": "Insufficient points"}
+            return {
+                "success": False,
+                "message": "Insufficient points",
+                "ai_response": None,
+            }
 
         user.current_points -= points_cost
         user.total_points_used += points_cost
@@ -488,6 +657,8 @@ async def process_conversation_message(
             status="completed",
             tokens_used=tokens_used,
             points_cost=points_cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
         db.add(ai_conv)
         await db.flush()
@@ -512,7 +683,7 @@ async def process_conversation_message(
                     metadata={
                         "interaction_id": str(interaction.id),
                         "type": "user_message",
-                        "images": image_urls or [],
+                        "media_ids": media_files or [],
                     },
                 )
             if content_text:
@@ -535,4 +706,5 @@ async def process_conversation_message(
             "success": True,
             "message": "Conversation updated",
             "interaction_id": str(interaction.id),
+            "ai_response": content_text,  # Return the AI response content
         }

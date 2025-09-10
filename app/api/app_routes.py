@@ -267,7 +267,6 @@ async def upload_interaction(
 
             conv = Conversation(
                 interaction_id=str(current_user.id),
-                file_id=str(media.id),
                 role=ConversationRole.USER,
                 content={
                     "type": "upload",
@@ -279,6 +278,10 @@ async def upload_interaction(
                 status="completed",
             )
             db.add(conv)
+            await db.flush()
+
+            # Associate the media with the conversation using the junction table
+            conv.files.append(media)
             await db.commit()
 
             return InteractionUploadResponse(

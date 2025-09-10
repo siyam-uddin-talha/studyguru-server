@@ -20,6 +20,8 @@ from app.services.openai_service import OpenAIService
 from app.services.interaction import process_conversation_message
 from app.services.file_service import FileService
 from app.helpers.user import get_current_user_from_context
+from app.constants.constant import CONSTANTS
+from app.graphql.types.common import DefaultResponse
 
 
 @strawberry.type
@@ -60,17 +62,21 @@ class InteractionQuery:
         # Convert to response types
         doc_material_types = []
         for interaction in interactions:
-            # Get associated media
-            media_result = await db.execute(
-                select(Media).where(Media.id == interaction.file_id)
-            )
-            media = media_result.scalar_one_or_none()
+            # Get associated media through conversations
+            # For now, we'll get the first media file from the first conversation
+            # In the future, you might want to return all files or handle multiple files differently
+            media = None
+            if interaction.conversations:
+                for conv in interaction.conversations:
+                    if conv.files:
+                        media = conv.files[0]  # Get first file
+                        break
 
             doc_material_types.append(
                 InteractionType(
                     id=interaction.id,
                     user_id=interaction.user_id,
-                    file_id=interaction.file_id,
+                    file_id=media.id if media else None,
                     analysis_response=interaction.analysis_response,
                     question_type=interaction.question_type,
                     detected_language=interaction.detected_language,
@@ -113,7 +119,7 @@ class InteractionQuery:
         current_user = await get_current_user_from_context(context)
 
         if not current_user:
-            return InteractionResponse(success=False, message="Authentication required")
+            return InteractionResponse(success=False, message=CONSTANTS.NOT_FOUND)
 
         db: AsyncSession = context.db
 
@@ -128,11 +134,13 @@ class InteractionQuery:
         if not interaction:
             return InteractionResponse(success=False, message="Document not found")
 
-        # Get associated media
-        media_result = await db.execute(
-            select(Media).where(Media.id == interaction.file_id)
-        )
-        media = media_result.scalar_one_or_none()
+        # Get associated media through conversations
+        media = None
+        if interaction.conversations:
+            for conv in interaction.conversations:
+                if conv.files:
+                    media = conv.files[0]  # Get first file
+                    break
 
         return InteractionResponse(
             success=True,
@@ -140,7 +148,7 @@ class InteractionQuery:
             result=InteractionType(
                 id=interaction.id,
                 user_id=interaction.user_id,
-                file_id=interaction.file_id,
+                file_id=media.id if media else None,
                 analysis_response=interaction.analysis_response,
                 question_type=interaction.question_type,
                 detected_language=interaction.detected_language,
@@ -172,47 +180,14 @@ class InteractionQuery:
 
 @strawberry.type
 class InteractionMutation:
+
     @strawberry.field
-    async def upload_document(
-        self, info, max_tokens: Optional[int] = 1000
-    ) -> InteractionResponse:
-        """
-        Note: This is a simplified version. In practice, file upload would be handled
-        via REST endpoint and then processed asynchronously.
-        """
+    async def delete_document(self, info, id: str) -> DefaultResponse:
         context = info.context
         current_user = await get_current_user_from_context(context)
 
         if not current_user:
-            return InteractionResponse(success=False, message="Authentication required")
-
-        # Check if user is free and limit tokens
-        if (
-            current_user.purchased_subscription.subscription.subscription_plan.value
-            == "FREE"
-        ):
-            max_tokens = min(max_tokens, 1000)
-
-        # Check if user has enough points
-        estimated_points = max(1, max_tokens // 100)
-        if current_user.current_points < estimated_points:
-            return InteractionResponse(
-                success=False,
-                message="Insufficient points. Please purchase more points or upgrade your plan.",
-            )
-
-        return InteractionResponse(
-            success=True,
-            message="Document upload endpoint should be implemented via REST API",
-        )
-
-    @strawberry.field
-    async def delete_document(self, info, id: str) -> InteractionResponse:
-        context = info.context
-        current_user = await get_current_user_from_context(context)
-
-        if not current_user:
-            return InteractionResponse(success=False, message="Authentication required")
+            return DefaultResponse(success=False, message="Authentication required")
 
         db: AsyncSession = context.db
 
@@ -225,15 +200,13 @@ class InteractionMutation:
         interaction = result.scalar_one_or_none()
 
         if not interaction:
-            return InteractionResponse(success=False, message="Document not found")
+            return DefaultResponse(success=False, message="Document not found")
 
         # Delete the document
         await db.delete(interaction)
         await db.commit()
 
-        return InteractionResponse(
-            success=True, message="Document deleted successfully"
-        )
+        return DefaultResponse(success=True, message="Document deleted successfully")
 
     @strawberry.field
     async def do_conversation(
@@ -245,7 +218,7 @@ class InteractionMutation:
         current_user = await get_current_user_from_context(context)
 
         if not current_user:
-            return InteractionResponse(success=False, message="Authentication required")
+            return InteractionResponse(success=False, message=CONSTANTS.NOT_FOUND)
 
         db: AsyncSession = context.db
 
@@ -261,7 +234,7 @@ class InteractionMutation:
             interaction = result.scalar_one_or_none()
             if not interaction:
                 return InteractionResponse(
-                    success=False, message="Interaction not found"
+                    success=False, message="No chat conversation found!"
                 )
         else:
             interaction = Interaction(
@@ -272,17 +245,44 @@ class InteractionMutation:
             db.add(interaction)
             await db.flush()
 
+        # Check if this is a fresh interaction (no existing conversations)
+        is_fresh_interaction = (
+            not interaction.conversations or len(interaction.conversations) == 0
+        )
+
         # Delegate to service function
         result = await process_conversation_message(
             user_id=str(current_user.id),
-            interaction_id=input.interaction_id,
+            interaction_id=interaction.id,
             message=input.message,
-            image_urls=input.image_urls,
-            max_tokens=int(input.max_tokens or 500),
+            media_files=input.media_files,
+            max_tokens=int(input.max_tokens),
         )
+
+        # Get the updated interaction to return current state
+        await db.refresh(interaction)
 
         return InteractionResponse(
             success=bool(result.get("success")),
             message=result.get("message"),
             interaction_id=result.get("interaction_id"),
+            is_new_interaction=is_fresh_interaction,
+            interaction=InteractionType(
+                id=interaction.id,
+                user_id=interaction.user_id,
+                file_id=None,  # Will be populated if needed
+                analysis_response=None,  # Will be populated if needed
+                question_type=None,  # Will be populated if needed
+                detected_language=None,  # Will be populated if needed
+                title=interaction.title,
+                summary_title=interaction.summary_title,
+                tokens_used=None,  # Will be populated if needed
+                points_cost=None,  # Will be populated if needed
+                status=None,  # Will be populated if needed
+                error_message=None,  # Will be populated if needed
+                created_at=interaction.created_at,
+                updated_at=interaction.updated_at,
+                file=None,  # Will be populated if needed
+            ),
+            ai_response=result.get("ai_response"),  # The actual AI response content
         )

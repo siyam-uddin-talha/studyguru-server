@@ -31,4 +31,6 @@ class Media(Base):
     created_at = Column(DateTime, default=func.now(), nullable=True)
 
     # Relationships
-    conversations = relationship("Conversation", back_populates="file")
+    conversations = relationship(
+        "Conversation", secondary="conversation_files", back_populates="files"
+    )

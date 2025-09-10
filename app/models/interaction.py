@@ -8,6 +8,8 @@ from sqlalchemy import (
     JSON,
     Float,
     Enum,
+    Boolean,
+    Table,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -19,6 +21,18 @@ import enum
 class ConversationRole(enum.Enum):
     USER = "USER"
     AI = "AI"
+
+
+# Junction table for conversation-file relationships
+conversation_files = Table(
+    "conversation_files",
+    Base.metadata,
+    Column(
+        "conversation_id", String(191), ForeignKey("conversation.id"), primary_key=True
+    ),
+    Column("media_id", String(191), ForeignKey("media.id"), primary_key=True),
+    Column("created_at", DateTime, default=func.now(), nullable=True),
+)
 
 
 class Interaction(Base):
@@ -45,7 +59,6 @@ class Conversation(Base):
 
     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
     interaction_id = Column(String(191), ForeignKey("user.id"), nullable=False)
-    file_id = Column(String(191), ForeignKey("media.id"), nullable=True)
     role = Column(Enum(ConversationRole), nullable=False)
     # OpenAI Analysis Results
     content = Column(JSON, nullable=True)  # Store the full OpenAI response
@@ -53,8 +66,14 @@ class Conversation(Base):
     detected_language = Column(String(50), nullable=True)
 
     # Token usage
-    tokens_used = Column(Integer, nullable=False, default=0)
-    points_cost = Column(Integer, nullable=False, default=0)
+    input_tokens = Column(Integer, nullable=True, default=0)
+    output_tokens = Column(Integer, nullable=True, default=0)
+    tokens_used = Column(Integer, nullable=True, default=0)
+
+    points_cost = Column(Integer, nullable=True, default=0)
+
+    # for visua
+    is_hidden = Column(Boolean, nullable=True, default=False)
 
     # Processing status
     status = Column(
@@ -69,7 +88,9 @@ class Conversation(Base):
 
     # Relationships
     interaction = relationship("Interaction", back_populates="conversations")
-    file = relationship("Media", back_populates="conversations")
+    files = relationship(
+        "Media", secondary=conversation_files, back_populates="conversations"
+    )
     point_transaction = relationship(
         "PointTransaction", back_populates="conversation", uselist=False
     )

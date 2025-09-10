@@ -19,34 +19,44 @@ class MediaType:
 class InteractionType:
     id: str
     user_id: str
-    file_id: str
+    title: Optional[str] = None
+    summary_title: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+@strawberry.type
+class ConversationType:
+    id: str
+    user_id: str
     analysis_response: Optional[Dict[str, Any]] = None
     question_type: Optional[str] = None
     detected_language: Optional[str] = None
-    title: Optional[str] = None
-    summary_title: Optional[str] = None
     tokens_used: int
     points_cost: int
     status: str
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    file: Optional[MediaType] = None
+    files: Optional[List[MediaType]] = None
 
 
 @strawberry.type
 class InteractionResponse:
     success: bool
-    message: Optional[str] = None
-    result: Optional[InteractionType] = None
+    message: str
+    result: Optional[ConversationType] = None
     interaction_id: Optional[str] = None
+    is_new_interaction: Optional[bool] = None
+    interaction: Optional[InteractionType] = None
+    ai_response: Optional[str] = None  # The actual AI response content
 
 
 @strawberry.input
 class DoConversationInput:
     interaction_id: Optional[str] = None
     message: Optional[str] = ""
-    image_urls: Optional[List[str]] = None
+    media_files: Optional[List[str]] = None  # List of media IDs
     max_tokens: Optional[int] = 500
 
 
@@ -57,9 +67,3 @@ class InteractionListResponse:
     result: Optional[List[InteractionType]] = None
     total: Optional[int] = None
     has_next_page: Optional[bool] = None
-
-
-@strawberry.input
-class InteractionUploadInput:
-    file: str  # This would be handled differently in actual implementation
-    max_tokens: Optional[int] = 1000
