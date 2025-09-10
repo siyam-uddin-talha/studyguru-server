@@ -1,7 +1,11 @@
 import asyncio
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
+import boto3
+from app.core.config import settings
+from app.models.media import Media
+from app.models.interaction import Conversation
 from app.core.database import AsyncSessionLocal
 from app.models.user import User
 from app.models.subscription import PurchasedSubscription, SubscriptionPlan
@@ -126,6 +130,45 @@ async def schedule_daily_tasks():
         if now.hour == 0 and now.minute == 0:
             await cleanup_inactive_users()
             await cancel_past_due_subscriptions()
+            await delete_orphaned_media()
 
         # Wait 1 minute before checking again
         await asyncio.sleep(60)
+
+
+async def delete_orphaned_media():
+    """Delete media that is not attached to any conversation (runs daily)."""
+    print("Running orphaned media cleanup...")
+
+    async with AsyncSessionLocal() as db:
+        try:
+            # Find media with no conversations
+            result = await db.execute(select(Media).where(~Media.conversations.any()))
+            orphans = result.scalars().all()
+
+            if not orphans:
+                return
+
+            s3_client = boto3.client(
+                "s3",
+                aws_access_key_id=settings.AWS_ACCESS_KEY,
+                aws_secret_access_key=settings.SECRET_ACCESS_KEY,
+                region_name=settings.AWS_ORIGIN,
+            )
+
+            for media in orphans:
+                try:
+                    # delete from s3
+                    s3_client.delete_object(
+                        Bucket=settings.AWS_S3_BUCKET, Key=media.s3_key
+                    )
+                except Exception as e:
+                    print(f"Failed to delete S3 object {media.s3_key}: {e}")
+                # delete db row
+                await db.delete(media)
+
+            await db.commit()
+            print(f"Deleted {len(orphans)} orphaned media files.")
+        except Exception as e:
+            print(f"Error during orphaned media cleanup: {e}")
+            await db.rollback()

@@ -1,22 +1,247 @@
 import openai
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import json
 import base64
 from app.core.config import settings
+from pymilvus import (
+    connections,
+    FieldSchema,
+    CollectionSchema,
+    DataType,
+    Collection,
+    utility,
+)
+import asyncio
 
 openai.api_key = settings.OPENAI_API_KEY
 
 
 class OpenAIService:
+    _milvus_connected: bool = False
+    _collection: Optional[Collection] = None
+
     @staticmethod
-    async def analyze_document(file_content: bytes, file_type: str, max_tokens: int = 1000) -> Dict[str, Any]:
+    def _connect_milvus() -> None:
+        """
+        Establish a connection to Zilliz/Milvus and ensure the target collection exists.
+        Safe to call multiple times.
+        """
+        if OpenAIService._milvus_connected and OpenAIService._collection is not None:
+            return
+
+        if not settings.ZILLIZ_URI or not settings.ZILLIZ_TOKEN:
+            # Skip vector DB if not configured
+            return
+
+        # Connect
+        connections.connect(
+            alias="default",
+            uri=settings.ZILLIZ_URI,
+            token=settings.ZILLIZ_TOKEN,
+            secure=True,
+        )
+
+        # Create collection if missing
+        collection_name = settings.ZILLIZ_COLLECTION
+        dim = int(settings.ZILLIZ_DIMENSION)
+
+        if not utility.has_collection(collection_name):
+            id_field = FieldSchema(
+                name="id",
+                dtype=DataType.VARCHAR,
+                is_primary=True,
+                auto_id=False,
+                max_length=64,
+            )
+            user_field = FieldSchema(
+                name="user_id", dtype=DataType.VARCHAR, max_length=64
+            )
+            title_field = FieldSchema(
+                name="title", dtype=DataType.VARCHAR, max_length=512
+            )
+            content_field = FieldSchema(
+                name="content", dtype=DataType.VARCHAR, max_length=4096
+            )
+            metadata_field = FieldSchema(
+                name="metadata", dtype=DataType.VARCHAR, max_length=4096
+            )
+            vector_field = FieldSchema(
+                name="vector", dtype=DataType.FLOAT_VECTOR, dim=dim
+            )
+
+            schema = CollectionSchema(
+                fields=[
+                    id_field,
+                    user_field,
+                    title_field,
+                    content_field,
+                    metadata_field,
+                    vector_field,
+                ],
+                description="Embeddings for StudyGuru documents",
+                enable_dynamic_field=False,
+            )
+
+            OpenAIService._collection = Collection(
+                name=collection_name,
+                schema=schema,
+                consistency_level=getattr(
+                    settings, "ZILLIZ_CONSISTENCY_LEVEL", "Bounded"
+                ),
+            )
+
+            # Create index on vector
+            OpenAIService._collection.create_index(
+                field_name="vector",
+                index_params={
+                    "index_type": "IVF_FLAT",
+                    "metric_type": settings.ZILLIZ_INDEX_METRIC,
+                    "params": {"nlist": 1024},
+                },
+            )
+        else:
+            OpenAIService._collection = Collection(
+                name=collection_name,
+                consistency_level=getattr(
+                    settings, "ZILLIZ_CONSISTENCY_LEVEL", "Bounded"
+                ),
+            )
+
+        # Load for search
+        OpenAIService._collection.load()
+        OpenAIService._milvus_connected = True
+
+    @staticmethod
+    async def generate_embedding(text: str) -> List[float]:
+        """
+        Generate an embedding vector for the given text.
+        """
+        # Using legacy-style async call to match existing openai usage
+        resp = await openai.Embedding.acreate(
+            model="text-embedding-3-small",
+            input=text,
+        )
+        return resp["data"][0]["embedding"]
+
+    @staticmethod
+    async def upsert_embedding(
+        *,
+        doc_id: str,
+        user_id: str,
+        text: str,
+        title: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Upsert a single text embedding into Zilliz/Milvus.
+        Returns True on success, False if vector DB is not configured.
+        """
+        # Ensure connection and collection
+        OpenAIService._connect_milvus()
+        if OpenAIService._collection is None:
+            return False
+
+        # Create embedding
+        vector = await OpenAIService.generate_embedding(text)
+
+        # Prepare row
+        row = [
+            doc_id,
+            user_id,
+            title or "",
+            text[:4000],
+            json.dumps(metadata or {}),
+            vector,
+        ]
+
+        # Try upsert if available, else delete+insert
+        try:
+            if hasattr(OpenAIService._collection, "upsert"):
+                OpenAIService._collection.upsert([row])
+            else:
+                # delete and insert
+                try:
+                    OpenAIService._collection.delete(expr=f"id == '{doc_id}'")
+                except Exception:
+                    pass
+                OpenAIService._collection.insert([row])
+        finally:
+            # Flush to persist
+            OpenAIService._collection.flush()
+
+        return True
+
+    @staticmethod
+    async def similarity_search(
+        query: str,
+        *,
+        top_k: int = 5,
+        user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search against Zilliz/Milvus.
+        Returns a list of {id, score, title, content, metadata}.
+        """
+        OpenAIService._connect_milvus()
+        if OpenAIService._collection is None:
+            return []
+
+        vector = await OpenAIService.generate_embedding(query)
+
+        search_params = {
+            "metric_type": settings.ZILLIZ_INDEX_METRIC,
+            "params": {"nprobe": 10},
+        }
+        expr = None
+        if user_id:
+            expr = f"user_id == '{user_id}'"
+
+        results = OpenAIService._collection.search(
+            data=[vector],
+            anns_field="vector",
+            param=search_params,
+            limit=top_k,
+            expr=expr,
+            output_fields=["id", "title", "content", "metadata", "user_id"],
+        )
+
+        matches: List[Dict[str, Any]] = []
+        for hits in results:
+            for hit in hits:
+                fields = hit.entity.get("fields", {}) if hasattr(hit, "entity") else {}
+                # Fallback to get via get_row if needed
+                if not fields:
+                    try:
+                        fields = {
+                            k: hit.entity.get(k)
+                            for k in ["id", "title", "content", "metadata", "user_id"]
+                        }
+                    except Exception:
+                        fields = {}
+                matches.append(
+                    {
+                        "id": fields.get(
+                            "id", str(hit.id) if hasattr(hit, "id") else None
+                        ),
+                        "score": float(hit.distance),
+                        "title": fields.get("title"),
+                        "content": fields.get("content"),
+                        "metadata": json.loads(fields.get("metadata") or "{}"),
+                        "user_id": fields.get("user_id"),
+                    }
+                )
+
+        return matches
+
+    @staticmethod
+    async def analyze_document(file_url: str, max_tokens: int = 1000) -> Dict[str, Any]:
         """
         Analyze document content using OpenAI Vision API
         """
         try:
             # Convert file content to base64 for OpenAI API
-            base64_content = base64.b64encode(file_content).decode('utf-8')
-            
+            # base64_content = base64.b64encode(file_content).decode("utf-8")
+
             # Prepare the prompt
             prompt = """
             Analyze the given image/document and provide a structured response:
@@ -51,10 +276,10 @@ class OpenAIService:
                 }
             }
             """
-            
+
             # Make API call to OpenAI
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4-vision-preview",
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "user",
@@ -63,20 +288,21 @@ class OpenAIService:
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": f"data:{file_type};base64,{base64_content}"
-                                }
-                            }
-                        ]
+                                    "url": file_url
+                                    # "url": f"data:{file_type};base64,{base64_content}"
+                                },
+                            },
+                        ],
                     }
                 ],
                 max_tokens=max_tokens,
-                temperature=0.3
+                temperature=0.3,
             )
-            
+
             # Parse the response
             content = response.choices[0].message.content
             tokens_used = response.usage.total_tokens
-            
+
             try:
                 # Try to parse as JSON
                 parsed_response = json.loads(content)
@@ -90,11 +316,9 @@ class OpenAIService:
                     "title": "Document Analysis",
                     "summary_title": "Analysis Result",
                     "token": tokens_used,
-                    "_result": {
-                        "content": content
-                    }
+                    "_result": {"content": content},
                 }
-                
+
         except Exception as e:
             return {
                 "type": "error",
@@ -102,9 +326,7 @@ class OpenAIService:
                 "title": "Analysis Failed",
                 "summary_title": "Error",
                 "token": 0,
-                "_result": {
-                    "error": str(e)
-                }
+                "_result": {"error": str(e)},
             }
 
     @staticmethod

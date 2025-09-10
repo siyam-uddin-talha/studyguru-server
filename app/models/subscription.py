@@ -79,12 +79,12 @@ class PointTransaction(Base):
     )  # "earned", "used", "purchased"
     points = Column(Integer, nullable=False)
     description = Column(Text, nullable=True)
-    interaction_id = Column(String(191), ForeignKey("interaction.id"), nullable=True)
+    conversation_id = Column(String(191), ForeignKey("conversation.id"), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="point_transactions")
-    interaction = relationship("Interaction", back_populates="point_transaction")
+    conversation = relationship("Conversation", back_populates="point_transaction")
 
 
 class BillingLog(Base):

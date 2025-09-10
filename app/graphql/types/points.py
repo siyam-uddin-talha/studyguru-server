@@ -10,7 +10,7 @@ class PointTransactionType:
     transaction_type: str
     points: int
     description: Optional[str] = None
-    doc_material_id: Optional[str] = None
+    interaction_id: Optional[str] = None
     created_at: Optional[datetime] = None
 
 

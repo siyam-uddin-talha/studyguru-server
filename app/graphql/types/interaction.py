@@ -39,6 +39,15 @@ class InteractionResponse:
     success: bool
     message: Optional[str] = None
     result: Optional[InteractionType] = None
+    interaction_id: Optional[str] = None
+
+
+@strawberry.input
+class DoConversationInput:
+    interaction_id: Optional[str] = None
+    message: Optional[str] = ""
+    image_urls: Optional[List[str]] = None
+    max_tokens: Optional[int] = 500
 
 
 @strawberry.type

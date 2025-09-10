@@ -9,11 +9,15 @@ from app.graphql.types.interaction import (
     InteractionListResponse,
     InteractionType,
     MediaType,
+    DoConversationInput,
 )
-from app.models.interaction import Interaction, Media
+from app.models.interaction import Interaction
+from app.models.media import Media
+from app.models.interaction import Conversation, ConversationRole
 from app.models.user import User
 from app.models.subscription import PointTransaction
 from app.services.openai_service import OpenAIService
+from app.services.interaction import process_conversation_message
 from app.services.file_service import FileService
 from app.helpers.user import get_current_user_from_context
 
@@ -229,4 +233,56 @@ class InteractionMutation:
 
         return InteractionResponse(
             success=True, message="Document deleted successfully"
+        )
+
+    @strawberry.field
+    async def do_conversation(
+        self,
+        info,
+        input: DoConversationInput,
+    ) -> InteractionResponse:
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return InteractionResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        interaction = None
+        # If interaction_id provided validate; else create a new one
+        if input.interaction_id:
+            result = await db.execute(
+                select(Interaction).where(
+                    Interaction.id == input.interaction_id,
+                    Interaction.user_id == current_user.id,
+                )
+            )
+            interaction = result.scalar_one_or_none()
+            if not interaction:
+                return InteractionResponse(
+                    success=False, message="Interaction not found"
+                )
+        else:
+            interaction = Interaction(
+                user_id=str(current_user.id),
+                title=None,
+                summary_title=None,
+            )
+            db.add(interaction)
+            await db.flush()
+
+        # Delegate to service function
+        result = await process_conversation_message(
+            user_id=str(current_user.id),
+            interaction_id=input.interaction_id,
+            message=input.message,
+            image_urls=input.image_urls,
+            max_tokens=int(input.max_tokens or 500),
+        )
+
+        return InteractionResponse(
+            success=bool(result.get("success")),
+            message=result.get("message"),
+            interaction_id=result.get("interaction_id"),
         )

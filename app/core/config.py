@@ -54,6 +54,15 @@ class Settings(BaseSettings):
 
     GOOGLE_CLIENT_ID: str = getenv("GOOGLE_CLIENT_ID", "google-id")
 
+    # Zilliz / Milvus Vector DB
+    ZILLIZ_URI: str = getenv("ZILLIZ_URI", "")
+    ZILLIZ_TOKEN: str = getenv("ZILLIZ_TOKEN", "")
+    ZILLIZ_DB_NAME: str = getenv("ZILLIZ_DB_NAME", "studyguru")
+    ZILLIZ_COLLECTION: str = getenv("ZILLIZ_COLLECTION", "document_embeddings")
+    ZILLIZ_DIMENSION: int = int(getenv("ZILLIZ_DIMENSION", 1536))
+    ZILLIZ_INDEX_METRIC: str = getenv("ZILLIZ_INDEX_METRIC", "IP")  # or "L2", "COSINE"
+    ZILLIZ_CONSISTENCY_LEVEL: str = getenv("ZILLIZ_CONSISTENCY_LEVEL", "Bounded")
+
     class Config:
         env_file = ".env"
 

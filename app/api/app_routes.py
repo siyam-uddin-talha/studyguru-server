@@ -27,8 +27,11 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.helpers.auth import verify_token
 from app.models.user import User
-from app.models.interaction import Interaction
+from app.models.interaction import Interaction, Conversation, ConversationRole
+from app.models.media import Media
+from app.models.subscription import PointTransaction
 from app.services.file_service import FileService
+from app.services.openai_service import OpenAIService
 from pydantic import BaseModel, Field
 
 
@@ -53,6 +56,7 @@ account_router = APIRouter()
 
 # Storage folder keys
 STORAGE_KEYS = {"user_profile": "portraits"}
+INTERACTION_FOLDER = "interactions"
 
 
 # Custom dependency to extract and verify user from token
@@ -186,3 +190,115 @@ async def upload_profile(
             success=False,
             message=f"An error occurred: {str(e)}",
         )
+
+
+class InteractionUploadResponse(BaseModel):
+    success: bool
+    message: str
+    interaction_id: Optional[str] = None
+    media_id: Optional[str] = None
+    file_url: Optional[str] = None
+
+
+@interaction_router.post(
+    "/upload-interaction", response_model=InteractionUploadResponse
+)
+async def upload_interaction(
+    file: Annotated[UploadFile, File(...)],
+    interaction_id: Annotated[Optional[str], Form()] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = Depends(get_db),
+    current_user: Annotated[User, Depends(get_user_from_token)] = Depends(
+        get_user_from_token
+    ),
+):
+    """
+    Upload a document to start an interaction. The file is uploaded to S3, a Media row
+    is created, then an Interaction and initial Conversations (USER upload note and AI analysis)
+    are created. The analysis is also embedded into the vector DB if configured.
+    """
+    try:
+        if not file:
+            raise HTTPException(status_code=400, detail="File is required")
+
+        file_bytes = await file.read()
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        unique_id = str(uuid.uuid4())
+
+        # Upload to S3 via FileService (handles compression if applicable)
+        s3_key, original_size, compressed_size = await FileService.compress_and_upload(
+            file_content=file_bytes,
+            original_filename=file.filename or unique_id,
+            file_type=file.content_type or "application/octet-stream",
+            user_id=str(current_user.id),
+            folder_name=INTERACTION_FOLDER,
+        )
+
+        file_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{s3_key}"
+
+        # Create Media row
+        media = Media(
+            original_filename=file.filename or unique_id,
+            s3_key=s3_key,
+            file_type=file.content_type or "application/octet-stream",
+            original_size=float(len(file_bytes)),
+            compressed_size=float(compressed_size) if compressed_size else None,
+            compression_ratio=(
+                float(original_size) / float(compressed_size)
+                if compressed_size and compressed_size > 0
+                else None
+            ),
+        )
+        db.add(media)
+        await db.flush()
+
+        # If interaction_id provided, validate and create a conversation entry tying this media
+        if interaction_id:
+            result = await db.execute(
+                select(Interaction).where(
+                    Interaction.id == interaction_id,
+                    Interaction.user_id == current_user.id,
+                )
+            )
+            interaction = result.scalar_one_or_none()
+            if not interaction:
+                raise HTTPException(status_code=404, detail="Interaction not found")
+
+            conv = Conversation(
+                interaction_id=str(current_user.id),
+                file_id=str(media.id),
+                role=ConversationRole.USER,
+                content={
+                    "type": "upload",
+                    "_result": {
+                        "note": "User attached a document",
+                        "file_url": file_url,
+                    },
+                },
+                status="completed",
+            )
+            db.add(conv)
+            await db.commit()
+
+            return InteractionUploadResponse(
+                success=True,
+                message="Media uploaded and attached to interaction",
+                interaction_id=str(interaction.id),
+                media_id=str(media.id),
+                file_url=file_url,
+            )
+
+        # Otherwise, only return the media details; user will start conversation later
+        await db.commit()
+        return InteractionUploadResponse(
+            success=True,
+            message="Media uploaded",
+            media_id=str(media.id),
+            file_url=file_url,
+        )
+
+    except HTTPException as http_ex:
+        raise http_ex
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
