@@ -14,6 +14,9 @@ from pymilvus import (
 import asyncio
 
 openai.api_key = settings.OPENAI_API_KEY
+from openai import OpenAI
+
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 class OpenAIService:
@@ -278,30 +281,27 @@ class OpenAIService:
             """
 
             # Make API call to OpenAI
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4o",
-                messages=[
+            response = client.responses.create(
+                model="gpt-5",
+                input=[
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": file_url
-                                    # "url": f"data:{file_type};base64,{base64_content}"
-                                },
-                            },
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": file_url},
                         ],
                     }
                 ],
-                max_tokens=max_tokens,
+                max_output_tokens=max_tokens,
                 temperature=0.3,
             )
 
             # Parse the response
-            content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens
+            content = response.output_text or ""
+            # token usage not always exposed in same way; default to 0 if missing
+            tokens_used = (
+                getattr(getattr(response, "usage", None), "total_tokens", 0) or 0
+            )
 
             try:
                 # Try to parse as JSON

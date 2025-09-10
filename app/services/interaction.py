@@ -14,6 +14,124 @@ from app.models.subscription import PointTransaction
 from app.services.openai_service import OpenAIService
 import json
 import openai
+from openai import OpenAI
+from app.core.config import settings
+from pydantic import BaseModel
+
+openai.api_key = settings.OPENAI_API_KEY
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+class GuardrailOutput(BaseModel):
+    is_violation: bool
+    violation_type: Optional[str] = None
+    reasoning: str
+
+
+class GuardrailAgent:
+    def __init__(self):
+        self.name = "Guardrail check"
+        self.instructions = """
+        You are required to review all user inputs—including text and any attached images—and determine whether the request violates any of the following rules:
+
+        1. Do not fulfill requests that ask for direct code generation (e.g., "write a Java function"), except when the user is presenting a question from an educational or research context that requires analysis or explanation.
+        2. Prohibit content related to adult, explicit, or inappropriate material.
+        3. Ensure all requests are strictly for educational, study, or research purposes. Any request outside this scope must be flagged as a violation.
+
+        Provide a structured response indicating whether a violation has occurred. Include a clear boolean flag for violation and, if applicable, a brief explanation of the reason.
+        """
+        self.output_type = GuardrailOutput
+
+    async def check(
+        self, message: str, image_urls: Optional[List[str]] = None
+    ) -> GuardrailOutput:
+        """Run guardrail check using gpt-5-mini"""
+        try:
+            # Build input for guardrail check
+            guardrail_input = []
+
+            # System message
+            guardrail_input.append(
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": self.instructions}],
+                }
+            )
+
+            # User content with text and images
+            user_content = []
+            if message:
+                user_content.append(
+                    {"type": "input_text", "text": f"User message: {message}"}
+                )
+
+            if image_urls:
+                for url in image_urls:
+                    user_content.append({"type": "input_image", "image_url": url})
+
+            if not user_content:
+                user_content.append(
+                    {"type": "input_text", "text": "No content provided"}
+                )
+
+            guardrail_input.append({"role": "user", "content": user_content})
+
+            # Call gpt-5-mini for guardrail check
+            response = client.responses.create(
+                model="gpt-5-mini",
+                input=guardrail_input,
+                max_output_tokens=200,
+                temperature=0.0,
+            )
+
+            # Parse response and create structured output
+            response_text = response.output_text or ""
+
+            # Simple parsing - look for violation indicators
+            is_violation = any(
+                word in response_text.lower()
+                for word in [
+                    "violation",
+                    "violates",
+                    "inappropriate",
+                    "adult",
+                    "not study",
+                    "code writing",
+                ]
+            )
+
+            violation_type = None
+            if is_violation:
+                if (
+                    "code" in response_text.lower()
+                    and "writing" in response_text.lower()
+                ):
+                    violation_type = "direct_code_writing"
+                elif "adult" in response_text.lower():
+                    violation_type = "adult_content"
+                elif (
+                    "study" in response_text.lower() and "not" in response_text.lower()
+                ):
+                    violation_type = "not_study_purpose"
+                else:
+                    violation_type = "general_violation"
+
+            return GuardrailOutput(
+                is_violation=is_violation,
+                violation_type=violation_type,
+                reasoning=response_text,
+            )
+
+        except Exception as e:
+            # If guardrail fails, default to no violation but log the error
+            return GuardrailOutput(
+                is_violation=False,
+                violation_type=None,
+                reasoning=f"Guardrail check failed: {str(e)}",
+            )
+
+
+guardrail_agent = GuardrailAgent()
 
 
 async def process_document_analysis(
@@ -152,7 +270,7 @@ async def process_conversation_message(
     interaction_id: Optional[str],
     message: Optional[str],
     image_urls: Optional[List[str]],
-    max_tokens: int = 500,
+    max_tokens: int = 1000,
 ) -> Dict[str, Any]:
     """
     Process a conversation turn: guardrails, retrieval, chat generation, points, embeddings.
@@ -188,30 +306,17 @@ async def process_conversation_message(
         db.add(user_conv)
         await db.flush()
 
-        # Guardrail (hardcoded)
-        GUARDRAIL_NAME = "Math homework guardrail"
-        GUARDRAIL_INSTRUCTIONS = (
-            "Check if the user is asking you to do their math homework. "
-            "Respond only 'true' or 'false'."
-        )
+        # Guardrail check using Agent approach
         try:
             if message or image_urls:
-                guard_messages = [
-                    {"role": "system", "content": GUARDRAIL_INSTRUCTIONS},
-                    {"role": "user", "content": message or ""},
-                ]
-                guard_resp = await openai.ChatCompletion.acreate(
-                    model="gpt-4o",
-                    messages=guard_messages,
-                    max_tokens=32,
-                    temperature=0.0,
+                guardrail_result = await guardrail_agent.check(
+                    message or "", image_urls
                 )
-                guard_text = (guard_resp.choices[0].message.content or "").lower()
-                if "true" in guard_text or "yes" in guard_text:
+                if guardrail_result.is_violation:
                     await db.commit()
                     return {
                         "success": False,
-                        "message": GUARDRAIL_NAME,
+                        "message": f"Request blocked: {guardrail_result.violation_type}",
                         "interaction_id": str(interaction.id),
                     }
         except Exception:
@@ -302,19 +407,45 @@ async def process_conversation_message(
             message_content.append({"type": "image_url", "image_url": {"url": url}})
 
         # Chat generation
-        openai.api_key = getattr(OpenAIService, "api_key", None) or None
+
         try:
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message_content or ""},
-                ],
-                max_tokens=max_tokens or 500,
-                temperature=0.3,
+            # Convert multi-modal message to Responses API input
+            responses_input: List[Dict[str, Any]] = []
+            sys_chunk = {
+                "role": "system",
+                "content": [{"type": "input_text", "text": system_prompt}],
+            }
+            user_chunks: List[Dict[str, Any]] = []
+            if message_content:
+                for part in message_content:
+                    if part.get("type") == "text":
+                        user_chunks.append(
+                            {"type": "input_text", "text": part.get("text", "")}
+                        )
+                    elif part.get("type") == "image_url":
+                        url = (part.get("image_url") or {}).get("url")
+                        if url:
+                            user_chunks.append(
+                                {"type": "input_image", "image_url": url}
+                            )
+            responses_input.append(sys_chunk)
+            responses_input.append(
+                {
+                    "role": "user",
+                    "content": user_chunks or [{"type": "input_text", "text": ""}],
+                }
             )
-            content_text = response.choices[0].message.content
-            tokens_used = int(response.usage.total_tokens)
+
+            response = client.responses.create(
+                model="gpt-5",
+                input=responses_input,
+                max_output_tokens=max_tokens or 500,
+                temperature=0.2,
+            )
+            content_text = response.output_text or ""
+            tokens_used = int(
+                getattr(getattr(response, "usage", None), "total_tokens", 0) or 0
+            )
         except Exception as e:
             ai_failed = Conversation(
                 interaction_id=str(user_id),
