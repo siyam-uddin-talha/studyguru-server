@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Dict, List
 import json
 import asyncio
-from app.helpers.user import get_current_user_from_context
+from app.helpers.auth import get_current_user_optional
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
@@ -41,8 +43,9 @@ sse_manager = SSEManager()
 
 
 @router.get("/events")
-async def stream_events(current_user=Depends(get_current_user_from_context)):
+async def stream_events(request: Request, db: AsyncSession = Depends(get_db)):
     """Server-Sent Events endpoint for real-time notifications"""
+    current_user = await get_current_user_optional(request, db)
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
 

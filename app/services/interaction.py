@@ -55,7 +55,7 @@ async def process_document_analysis(
             if user.current_points < points_cost:
                 # Store failed AI conversation
                 ai_failed = Conversation(
-                    interaction_id=str(user.id),
+                    interaction_id=str(interaction.id),
                     role=ConversationRole.AI,
                     content=analysis_result,
                     status="failed",
@@ -73,7 +73,7 @@ async def process_document_analysis(
 
             # Persist AI conversation
             ai_conv = Conversation(
-                interaction_id=str(user.id),
+                interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
                 content=analysis_result,
                 status="completed",
@@ -81,7 +81,7 @@ async def process_document_analysis(
                 points_cost=int(points_cost or 0),
             )
             db.add(ai_conv)
-            await db.flush()
+            await db.commit()
 
             # Create point transaction
             point_transaction = PointTransaction(
@@ -156,9 +156,9 @@ async def process_document_analysis(
 async def process_conversation_message(
     *,
     user_id: str,
-    interaction_id: Optional[str],
+    interaction: Optional[Interaction],
     message: Optional[str],
-    media_files: Optional[List[str]],  # List of media IDs
+    media_files: Optional[List[Dict[str, str]]],  # List of {id: str, url?: str}
     max_tokens: int = 1000,
 ) -> Dict[str, Any]:
     """
@@ -168,30 +168,43 @@ async def process_conversation_message(
     from app.core.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
-        # Fetch or create interaction
-        interaction: Optional[Interaction] = None
-        if interaction_id:
-            result = await db.execute(
-                select(Interaction).where(Interaction.id == interaction_id)
-            )
-            interaction = result.scalar_one_or_none()
-            if not interaction or str(interaction.user_id) != str(user_id):
-                return {"success": False, "message": "Interaction not found"}
-        else:
-            interaction = Interaction(user_id=str(user_id))
-            db.add(interaction)
-            await db.flush()
+
+        interaction_id = interaction.id if interaction else None
 
         # Get media files if provided
         media_objects = []
+        media_urls = []
         if media_files:
-            for media_id in media_files:
-                media_result = await db.execute(
-                    select(Media).where(Media.id == media_id)
-                )
-                media = media_result.scalar_one_or_none()
-                if media:
-                    media_objects.append(media)
+            for media_file in media_files:
+                media_id = media_file.get("id")
+                media_url = media_file.get("url")
+
+                if media_url:
+                    # If URL is provided, use it directly and create a mock media object
+                    from app.models.media import Media
+
+                    mock_media = Media(
+                        id=media_id,
+                        s3_key=media_url,  # Store URL in s3_key for compatibility
+                        original_filename=f"media_{media_id}",
+                        file_type="image/jpeg",  # Default type
+                        original_size=0,
+                    )
+                    media_objects.append(mock_media)
+                    media_urls.append(media_url)
+                else:
+                    # If no URL provided, query the database
+                    media_result = await db.execute(
+                        select(Media).where(Media.id == media_id)
+                    )
+                    media = media_result.scalar_one_or_none()
+                    if media:
+                        media_objects.append(media)
+                        # Generate URL from S3 key
+                        from app.core.config import settings
+
+                        media_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
+                        media_urls.append(media_url)
 
         # Store user conversation
         user_conv = Conversation(
@@ -199,16 +212,27 @@ async def process_conversation_message(
             role=ConversationRole.USER,
             content={
                 "type": "text",
-                "_result": {"content": message or "", "media_ids": media_files or []},
+                "result": {"content": message or ""},
             },
             status="processing",
         )
         db.add(user_conv)
-        await db.flush()
+        await db.flush()  # Flush to get the ID but don't commit yet
 
-        # Associate media files with conversation
+        # Associate media files with conversation using junction table
         if media_objects:
-            user_conv.files.extend(media_objects)
+            from app.models.interaction import conversation_files
+
+            for media_obj in media_objects:
+                # Insert directly into junction table
+                await db.execute(
+                    conversation_files.insert().values(
+                        conversation_id=str(user_conv.id), media_id=str(media_obj.id)
+                    )
+                )
+
+        # Commit the user conversation and media associations
+        await db.commit()
 
         # Notify frontend that message was received
         try:
@@ -234,14 +258,7 @@ async def process_conversation_message(
 
         # Guardrail check using LangChain
         try:
-            if message or media_objects:
-                # Convert media objects to URLs for guardrail check
-                media_urls = []
-                for media in media_objects:
-                    media_urls.append(
-                        f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
-                    )
-
+            if message or media_urls:
                 guardrail_result = await langchain_service.check_guardrails(
                     message or "", media_urls
                 )
@@ -337,13 +354,6 @@ async def process_conversation_message(
 
         # Chat generation using LangChain
         try:
-            # Convert media objects to URLs
-            media_urls = []
-            for media in media_objects:
-                media_urls.append(
-                    f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
-                )
-
             # Generate response using LangChain
             content_text, input_tokens, output_tokens, tokens_used = (
                 await langchain_service.generate_conversation_response(
@@ -403,6 +413,7 @@ async def process_conversation_message(
                     pass
 
         except Exception as e:
+
             ai_failed = Conversation(
                 interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
@@ -422,12 +433,59 @@ async def process_conversation_message(
         points_cost = langchain_service.calculate_points_cost(tokens_used)
         user = (await db.execute(select(User).where(User.id == user_id))).scalar_one()
         if user.current_points < points_cost:
+            # Store the AI response content even with insufficient points
+            # Extract the type from the AI response if it's structured
+            ai_content_type = "other"  # default
+            ai_result_content = content_text
+
+            try:
+                # Try to parse the AI response to extract the type
+                if content_text:
+                    # Check if the response is JSON structured
+                    if content_text.strip().startswith("{"):
+                        parsed_response = json.loads(content_text)
+                        if isinstance(parsed_response, dict):
+                            ai_content_type = parsed_response.get("type", "other")
+                            # Extract the actual content from the result field
+                            result_content = parsed_response.get("result", {})
+                            if isinstance(result_content, dict):
+                                if "content" in result_content:
+                                    ai_result_content = result_content["content"]
+                                elif "questions" in result_content:
+                                    # For MCQ, format the questions
+                                    questions = result_content["questions"]
+                                    formatted_questions = []
+                                    for q in questions:
+                                        question_text = q.get("question", "")
+                                        options = q.get("options", {})
+                                        answer = q.get("answer", "")
+                                        explanation = q.get("explanation", "")
+
+                                        formatted_q = f"**{question_text}**\n"
+                                        for opt_key, opt_value in options.items():
+                                            formatted_q += f"{opt_key}. {opt_value}\n"
+                                        if answer:
+                                            formatted_q += f"**Answer:** {answer}\n"
+                                        if explanation:
+                                            formatted_q += (
+                                                f"**Explanation:** {explanation}\n"
+                                            )
+                                        formatted_questions.append(formatted_q)
+
+                                    ai_result_content = "\n\n".join(formatted_questions)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                # If parsing fails, use the original content
+                pass
+
             ai_failed = Conversation(
-                interaction_id=str(user_id),
+                interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
                 content={
-                    "type": "other",
-                    "result": {"error": "Insufficient points for AI response"},
+                    "type": ai_content_type,
+                    "result": {
+                        "content": ai_result_content,
+                        "error": "Insufficient points for AI response",
+                    },
                 },
                 status="failed",
                 error_message="Insufficient points",
@@ -435,22 +493,67 @@ async def process_conversation_message(
                 points_cost=points_cost,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                is_hidden=True,
             )
             db.add(ai_failed)
             await db.commit()
             return {
                 "success": False,
                 "message": "Insufficient points",
-                "ai_response": None,
+                "interaction_id": str(interaction.id),
+                # "ai_response": ai_result_content,  # Return the AI response content
             }
 
         user.current_points -= points_cost
         user.total_points_used += points_cost
 
+        # Extract the type from the AI response if it's structured
+        ai_content_type = "written"  # default
+        ai_result_content = content_text
+
+        try:
+            # Try to parse the AI response to extract the type
+            if content_text:
+                # Check if the response is JSON structured
+                if content_text.strip().startswith("{"):
+                    parsed_response = json.loads(content_text)
+                    if isinstance(parsed_response, dict):
+                        ai_content_type = parsed_response.get("type", "written")
+                        # Extract the actual content from the result field
+                        result_content = parsed_response.get("result", {})
+                        if isinstance(result_content, dict):
+                            if "content" in result_content:
+                                ai_result_content = result_content["content"]
+                            elif "questions" in result_content:
+                                # For MCQ, format the questions
+                                questions = result_content["questions"]
+                                formatted_questions = []
+                                for q in questions:
+                                    question_text = q.get("question", "")
+                                    options = q.get("options", {})
+                                    answer = q.get("answer", "")
+                                    explanation = q.get("explanation", "")
+
+                                    formatted_q = f"**{question_text}**\n"
+                                    for opt_key, opt_value in options.items():
+                                        formatted_q += f"{opt_key}. {opt_value}\n"
+                                    if answer:
+                                        formatted_q += f"**Answer:** {answer}\n"
+                                    if explanation:
+                                        formatted_q += (
+                                            f"**Explanation:** {explanation}\n"
+                                        )
+                                    formatted_questions.append(formatted_q)
+
+                                ai_result_content = "\n\n".join(formatted_questions)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # If parsing fails, use the original content
+            pass
+
         ai_conv = Conversation(
-            interaction_id=str(user_id),
+            interaction_id=str(interaction.id),
             role=ConversationRole.AI,
-            content={"type": "written", "result": {"content": content_text}},
+            content={"type": ai_content_type, "result": {"content": ai_result_content}},
             status="completed",
             tokens_used=tokens_used,
             points_cost=points_cost,
@@ -458,7 +561,7 @@ async def process_conversation_message(
             output_tokens=output_tokens,
         )
         db.add(ai_conv)
-        await db.flush()
+        await db.commit()
 
         pt = PointTransaction(
             user_id=str(user_id),
@@ -480,14 +583,14 @@ async def process_conversation_message(
                     metadata={
                         "interaction_id": str(interaction.id),
                         "type": "user_message",
-                        "media_ids": media_files or [],
+                        "has_media": len(media_objects) > 0,
                     },
                 )
-            if content_text:
+            if ai_result_content:
                 await langchain_service.upsert_embedding(
                     conv_id=str(ai_conv.id),
                     user_id=str(user_id),
-                    text=content_text,
+                    text=ai_result_content,
                     title="AI response",
                     metadata={
                         "interaction_id": str(interaction.id),
@@ -504,21 +607,21 @@ async def process_conversation_message(
             # Try WebSocket first
             from app.api.websocket_routes import notify_ai_response_ready
 
-            await notify_ai_response_ready(
-                user_id=str(user_id),
-                interaction_id=str(interaction.id),
-                ai_response=content_text,
-            )
+            # await notify_ai_response_ready(
+            #     user_id=str(user_id),
+            #     interaction_id=str(interaction.id),
+            #     ai_response=content_text,
+            # )
         except Exception:
             try:
                 # Fallback to SSE
                 from app.api.sse_routes import notify_ai_response_ready_sse
 
-                await notify_ai_response_ready_sse(
-                    user_id=str(user_id),
-                    interaction_id=str(interaction.id),
-                    ai_response=content_text,
-                )
+                # await notify_ai_response_ready_sse(
+                #     user_id=str(user_id),
+                #     interaction_id=str(interaction.id),
+                #     ai_response=content_text,
+                # )
             except Exception:
                 # Don't fail the conversation if notifications fail
                 pass
@@ -527,5 +630,5 @@ async def process_conversation_message(
             "success": True,
             "message": "Conversation updated",
             "interaction_id": str(interaction.id),
-            "ai_response": content_text,  # Return the AI response content
+            "ai_response": ai_result_content,  # Return the processed AI response content
         }

@@ -1,18 +1,9 @@
 import strawberry
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-
-
-@strawberry.type
-class MediaType:
-    id: str
-    original_filename: str
-    s3_key: str
-    file_type: str
-    original_size: float
-    compressed_size: Optional[float] = None
-    compression_ratio: Optional[float] = None
-    created_at: Optional[datetime] = None
+from strawberry.scalars import JSON
+from app.graphql.types.points import PointTransactionType
+from app.graphql.types.media import MediaType
 
 
 @strawberry.type
@@ -29,16 +20,18 @@ class InteractionType:
 class ConversationType:
     id: str
     user_id: str
-    analysis_response: Optional[Dict[str, Any]] = None
+    content: Optional[JSON] = None
     question_type: Optional[str] = None
     detected_language: Optional[str] = None
     tokens_used: int
     points_cost: int
     status: str
+    is_hidden: Optional[bool] = None
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     files: Optional[List[MediaType]] = None
+    point_transaction: Optional[PointTransactionType] = None
 
 
 @strawberry.type
@@ -49,14 +42,20 @@ class InteractionResponse:
     interaction_id: Optional[str] = None
     is_new_interaction: Optional[bool] = None
     interaction: Optional[InteractionType] = None
-    ai_response: Optional[str] = None  # The actual AI response content
+    ai_response: Optional[str] = None
+
+
+@strawberry.input
+class MediaFileInput:
+    id: str
+    url: Optional[str] = None
 
 
 @strawberry.input
 class DoConversationInput:
     interaction_id: Optional[str] = None
     message: Optional[str] = ""
-    media_files: Optional[List[str]] = None  # List of media IDs
+    media_files: Optional[List[MediaFileInput]] = None  # List of {id: str, url?: str}
     max_tokens: Optional[int] = 500
 
 

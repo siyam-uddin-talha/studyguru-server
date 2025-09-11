@@ -7,6 +7,7 @@ from app.graphql.types.subscription import (
     UsageLimitType,
 )
 from app.core.config import settings
+from typing import Optional
 
 
 def parse_photo_url(photo_url: str) -> str:
@@ -82,3 +83,10 @@ async def create_user_profile(user: User) -> Account:
         education_level=user.education_level,
         birthday=user.birthday,
     )
+
+
+async def get_current_user_from_context(context) -> Optional[User]:
+    """Extract current user from GraphQL context"""
+    if hasattr(context, "current_user"):
+        return context.current_user
+    return None

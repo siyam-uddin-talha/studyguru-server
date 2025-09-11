@@ -58,7 +58,7 @@ class Conversation(Base):
     __tablename__ = "conversation"
 
     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
-    interaction_id = Column(String(191), ForeignKey("user.id"), nullable=False)
+    interaction_id = Column(String(191), ForeignKey("interaction.id"), nullable=False)
     role = Column(Enum(ConversationRole), nullable=False)
     # OpenAI Analysis Results
     content = Column(JSON, nullable=True)  # Store the full OpenAI response

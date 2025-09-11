@@ -55,8 +55,7 @@ interaction_router = APIRouter()
 account_router = APIRouter()
 
 # Storage folder keys
-STORAGE_KEYS = {"user_profile": "portraits"}
-INTERACTION_FOLDER = "interactions"
+STORAGE_KEYS = {"user_profile": "portraits", "interaction": "content"}
 
 
 # Custom dependency to extract and verify user from token
@@ -200,16 +199,12 @@ class InteractionUploadResponse(BaseModel):
     file_url: Optional[str] = None
 
 
-@interaction_router.post(
-    "/upload-interaction", response_model=InteractionUploadResponse
-)
+@interaction_router.post("/upload-file", response_model=InteractionUploadResponse)
 async def upload_interaction(
     file: Annotated[UploadFile, File(...)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_user_from_token)],
     interaction_id: Annotated[Optional[str], Form()] = None,
-    db: Annotated[AsyncSession, Depends(get_db)] = Depends(get_db),
-    current_user: Annotated[User, Depends(get_user_from_token)] = Depends(
-        get_user_from_token
-    ),
 ):
     """
     Upload a document to start an interaction. The file is uploaded to S3, a Media row
@@ -232,7 +227,7 @@ async def upload_interaction(
             original_filename=file.filename or unique_id,
             file_type=file.content_type or "application/octet-stream",
             user_id=str(current_user.id),
-            folder_name=INTERACTION_FOLDER,
+            folder_name=STORAGE_KEYS["interaction"],
         )
 
         file_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{s3_key}"
@@ -265,24 +260,24 @@ async def upload_interaction(
             if not interaction:
                 raise HTTPException(status_code=404, detail="Interaction not found")
 
-            conv = Conversation(
-                interaction_id=str(current_user.id),
-                role=ConversationRole.USER,
-                content={
-                    "type": "upload",
-                    "_result": {
-                        "note": "User attached a document",
-                        "file_url": file_url,
-                    },
-                },
-                status="completed",
-            )
-            db.add(conv)
-            await db.flush()
+            # conv = Conversation(
+            #     interaction_id=str(current_user.id),
+            #     role=ConversationRole.USER,
+            #     content={
+            #         "type": "upload",
+            #         "_result": {
+            #             "note": "User attached a document",
+            #             "file_url": file_url,
+            #         },
+            #     },
+            #     status="completed",
+            # )
+            # db.add(conv)
+            # await db.flush()
 
             # Associate the media with the conversation using the junction table
-            conv.files.append(media)
-            await db.commit()
+            # conv.files.append(media)
+            # await db.commit()
 
             return InteractionUploadResponse(
                 success=True,

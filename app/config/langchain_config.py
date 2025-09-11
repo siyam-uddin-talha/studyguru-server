@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_community.vectorstores import Milvus
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStoreRetriever
-from langchain_core.pydantic_v1 import BaseModel, Field
+
 from app.core.config import settings
 
 
