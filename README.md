@@ -98,7 +98,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 5000
 ### REST Endpoints
 
 - **POST** `/webhook/paddle` - Paddle webhooks
-- **POST** `/doc-material/upload` - Upload and analyze documents
+<!-- - **POST** `/doc-material/upload` - Upload and analyze documents -->
 
 ## Subscription Plans
 

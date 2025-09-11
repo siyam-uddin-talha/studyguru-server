@@ -60,6 +60,7 @@ class LangChainService:
         # Use configuration-based models
         self.llm = StudyGuruConfig.MODELS.get_chat_model()
         self.vision_llm = StudyGuruConfig.MODELS.get_vision_model()
+        self.guardrail_llm = StudyGuruConfig.MODELS.get_guardrail_model()
         self.embeddings = StudyGuruConfig.MODELS.get_embeddings_model()
 
         self.vector_store = None
@@ -108,12 +109,6 @@ class LangChainService:
                     FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=64),
                     FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=512),
                     FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=4096),
-                    FieldSchema(
-                        name="content",
-                        dtype=DataType.VARCHAR,
-                        max_length=65535,
-                        nullable=True,
-                    ),
                     FieldSchema(
                         name="metadata",
                         dtype=DataType.VARCHAR,
@@ -248,32 +243,25 @@ class LangChainService:
             # Create callback handler
             callback_handler = StudyGuruCallbackHandler()
 
-            # Guardrail prompt
-            guardrail_prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(
-                        content="""
-                You are required to review all user inputs—including text and any attached images—and determine whether the request violates any of the following rules:
+            # Use the configured guardrail prompt
+            guardrail_prompt = StudyGuruConfig.PROMPTS.GUARDRAIL_CHECK
 
-                1. Do not fulfill requests that ask for direct code generation (e.g., "write a Java function"), except when the user is presenting a question from an educational or research context that requires analysis or explanation.
-                2. Prohibit content related to adult, explicit, or inappropriate material.
-                3. Ensure all requests are strictly for educational, study, or research purposes. Any request outside this scope must be flagged as a violation.
-
-                Provide a structured response indicating whether a violation has occurred. Include a clear boolean flag for violation and, if applicable, a brief explanation of the reason.
-                """
-                    ),
-                    HumanMessage(
-                        content=self._build_multimodal_content(message, image_urls)
-                    ),
-                ]
-            )
-
-            # Create chain
-            chain = guardrail_prompt | self.llm | self.guardrail_parser
+            # Create chain using dedicated guardrail model
+            chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
 
             # Run guardrail check
-            result = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
+            result = await chain.ainvoke(
+                {"content": self._build_multimodal_content(message, image_urls)},
+                config={"callbacks": [callback_handler]},
+            )
 
+            # Convert dict result to GuardrailOutput object
+            if isinstance(result, dict):
+                return GuardrailOutput(
+                    is_violation=result.get("is_violation", False),
+                    violation_type=result.get("violation_type"),
+                    reasoning=result.get("reasoning", "No reasoning provided"),
+                )
             return result
 
         except Exception as e:
@@ -424,7 +412,7 @@ class LangChainService:
 
     async def upsert_embedding(
         self,
-        doc_id: str,
+        conv_id: str,
         user_id: str,
         text: str,
         title: Optional[str] = None,
@@ -441,7 +429,7 @@ class LangChainService:
                 metadata={
                     "user_id": user_id,
                     "title": title or "",
-                    "original_id": doc_id,  # Store original ID in metadata
+                    "original_id": conv_id,  # Store original ID in metadata
                     "metadata": json.dumps(metadata or {}),
                     **(metadata or {}),
                 },

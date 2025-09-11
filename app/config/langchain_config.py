@@ -76,7 +76,12 @@ class StudyGuruPrompts:
         2. Prohibit content related to adult, explicit, or inappropriate material.
         3. Ensure all requests are strictly for educational, study, or research purposes. Any request outside this scope must be flagged as a violation.
 
-        Provide a structured response indicating whether a violation has occurred. Include a clear boolean flag for violation and, if applicable, a brief explanation of the reason.
+        You must respond with valid JSON in this exact format:
+        {{
+            "is_violation": boolean,
+            "violation_type": "string or null",
+            "reasoning": "string"
+        }}
         """,
             ),
             ("human", "{content}"),
@@ -127,7 +132,7 @@ class StudyGuruModels:
     def get_chat_model(temperature: float = 0.2, max_tokens: int = 1000) -> ChatOpenAI:
         """Get configured chat model"""
         return ChatOpenAI(
-            model="gpt-4o",
+            model="gpt-5",
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=max_tokens,
@@ -139,7 +144,19 @@ class StudyGuruModels:
     ) -> ChatOpenAI:
         """Get configured vision model"""
         return ChatOpenAI(
-            model="gpt-4o",
+            model="gpt-5",
+            temperature=temperature,
+            openai_api_key=settings.OPENAI_API_KEY,
+            max_tokens=max_tokens,
+        )
+
+    @staticmethod
+    def get_guardrail_model(
+        temperature: float = 0.1, max_tokens: int = 200
+    ) -> ChatOpenAI:
+        """Get configured guardrail model (cost-optimized)"""
+        return ChatOpenAI(
+            model="gpt-4o-mini",
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=max_tokens,
@@ -192,7 +209,7 @@ class StudyGuruChains:
     @staticmethod
     def get_guardrail_chain():
         """Get guardrail check chain"""
-        model = StudyGuruModels.get_chat_model(temperature=0.0, max_tokens=200)
+        model = StudyGuruModels.get_guardrail_model(temperature=0.1, max_tokens=200)
         parser = JsonOutputParser()
         return StudyGuruPrompts.GUARDRAIL_CHECK | model | parser
 

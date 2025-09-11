@@ -85,7 +85,7 @@ async def test_langchain_implementation():
         test_text = "This is a test document about machine learning and artificial intelligence."
 
         upsert_result = await langchain_service.upsert_embedding(
-            doc_id=test_doc_id,
+            conv_id=test_doc_id,
             user_id=test_user_id,
             text=test_text,
             title="Test Document",

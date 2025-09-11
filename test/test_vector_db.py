@@ -87,7 +87,7 @@ async def test_embedding_operations():
     for doc in test_documents:
         try:
             result = await langchain_service.upsert_embedding(
-                doc_id=doc["id"],
+                conv_id=doc["id"],
                 user_id=doc["user_id"],
                 text=doc["content"],
                 title=doc["title"],

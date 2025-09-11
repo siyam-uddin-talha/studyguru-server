@@ -31,7 +31,7 @@ async def process_document_analysis(
 
     async with AsyncSessionLocal() as db:
         try:
-            # Get doc material
+            # Get Interaction
             result = await db.execute(
                 select(Interaction).where(Interaction.id == interaction_id)
             )
@@ -127,7 +127,7 @@ async def process_document_analysis(
 
                 if content_text:
                     await langchain_service.upsert_embedding(
-                        doc_id=str(ai_conv.id),
+                        conv_id=str(ai_conv.id),
                         user_id=str(user.id),
                         text=content_text,
                         title=interaction.title or interaction.summary_title,
@@ -473,7 +473,7 @@ async def process_conversation_message(
         try:
             if message:
                 await langchain_service.upsert_embedding(
-                    doc_id=str(user_conv.id),
+                    conv_id=str(user_conv.id),
                     user_id=str(user_id),
                     text=message,
                     title="User message",
@@ -485,7 +485,7 @@ async def process_conversation_message(
                 )
             if content_text:
                 await langchain_service.upsert_embedding(
-                    doc_id=str(ai_conv.id),
+                    conv_id=str(ai_conv.id),
                     user_id=str(user_id),
                     text=content_text,
                     title="AI response",

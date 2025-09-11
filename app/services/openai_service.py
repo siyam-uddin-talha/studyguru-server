@@ -17,7 +17,7 @@ class OpenAIService:
     @staticmethod
     async def upsert_embedding(
         *,
-        doc_id: str,
+        conv_id: str,
         user_id: str,
         text: str,
         title: Optional[str] = None,
@@ -25,7 +25,7 @@ class OpenAIService:
     ) -> bool:
         """Upsert embedding using LangChain"""
         return await langchain_service.upsert_embedding(
-            doc_id=doc_id, user_id=user_id, text=text, title=title, metadata=metadata
+            conv_id=conv_id, user_id=user_id, text=text, title=title, metadata=metadata
         )
 
     @staticmethod

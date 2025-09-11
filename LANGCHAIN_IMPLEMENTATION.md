@@ -78,7 +78,7 @@ response, input_tokens, output_tokens, total_tokens = await langchain_service.ge
 )
 
 # Vector operations
-await langchain_service.upsert_embedding(doc_id, user_id, text, title, metadata)
+await langchain_service.upsert_embedding(conv_id, user_id, text, title, metadata)
 results = await langchain_service.similarity_search(query, user_id, top_k=5)
 ```
 
