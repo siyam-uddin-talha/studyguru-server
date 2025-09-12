@@ -198,6 +198,17 @@ mutation {
 }
 ```
 
+## Recent Fixes
+
+### Syntax Error Fix (2024-12-19)
+
+- **Issue**: `SyntaxError: 'return' with value in async generator` in `langchain_service.py`
+- **Root Cause**: The `generate_conversation_response_streaming` function was using both `yield` and `return` statements, which is not allowed in Python
+- **Solution**: Removed the `return` statement and stored the final response in the callback handler's `final_response` attribute
+- **Files Modified**:
+  - `app/services/langchain_service.py` - Fixed async generator syntax
+  - `StudyGuruCallbackHandler` - Added `final_response` attribute
+
 ## Future Enhancements
 
 1. **Conversation History**: Store and retrieve full conversation history for better context

@@ -13,11 +13,21 @@ from app.models.interaction import Interaction, Conversation, ConversationRole
 from app.models.media import Media
 from app.models.subscription import PointTransaction
 from app.services.langchain_service import langchain_service
+from app.services.cache_service import (
+    cache_user_context,
+    get_cached_user_context,
+    cache_interaction_data,
+    get_cached_interaction_data,
+    invalidate_user_cache,
+    invalidate_interaction_cache,
+)
 import json
 from app.core.config import settings
 from pydantic import BaseModel
 from app.api.websocket_routes import notify_message_received
 from app.api.sse_routes import notify_message_received_sse
+from app.core.database import AsyncSessionLocal
+import asyncio
 
 
 # Guardrail agent is now handled by LangChain service
@@ -155,19 +165,20 @@ async def process_document_analysis(
 
 async def process_conversation_message(
     *,
-    user_id: str,
+    user: User,
     interaction: Optional[Interaction],
     message: Optional[str],
-    media_files: Optional[List[Dict[str, str]]],  # List of {id: str, url?: str}
+    media_files: Optional[List[Dict[str, str]]],
     max_tokens: int = 1000,
 ) -> Dict[str, Any]:
     """
     Process a conversation turn: guardrails, retrieval, chat generation, points, embeddings.
     Returns a dict with {success, message, interaction_id}.
     """
-    from app.core.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
+
+        user_id = user.id
 
         interaction_id = interaction.id if interaction else None
 
@@ -231,8 +242,7 @@ async def process_conversation_message(
                     )
                 )
 
-        # Commit the user conversation and media associations
-        await db.commit()
+        # Don't commit here - we'll commit everything at the end to reduce DB round trips
 
         # Notify frontend that message was received
         try:
@@ -263,6 +273,11 @@ async def process_conversation_message(
                     message or "", media_urls
                 )
                 if guardrail_result.is_violation:
+                    # Update user conversation status to failed
+                    user_conv.status = "failed"
+                    user_conv.error_message = (
+                        f"Request blocked: {guardrail_result.violation_type}"
+                    )
                     await db.commit()
                     return {
                         "success": False,
@@ -273,70 +288,112 @@ async def process_conversation_message(
         except Exception:
             pass
 
-        # Enhanced Retrieval with RAG pattern
+        # Enhanced Retrieval with RAG pattern and caching
         context_text = ""
         try:
-            # Build comprehensive query for vector search
-            vector_query_parts = []
+            # Check cache for user context first
+            cached_context = await get_cached_user_context(str(user_id))
+            if cached_context and cached_context.get("last_query") == message:
+                context_text = cached_context.get("context", "")
+            else:
+                # Build comprehensive query for vector search
+                vector_query_parts = []
 
-            # Add current message
-            if message:
-                vector_query_parts.append(message)
+                # Add current message
+                if message:
+                    vector_query_parts.append(message)
 
-            # Add media descriptions if available
-            if media_objects:
-                for media in media_objects:
-                    vector_query_parts.append(f"Document: {media.original_filename}")
+                # Add media descriptions if available
+                if media_objects:
+                    for media in media_objects:
+                        vector_query_parts.append(
+                            f"Document: {media.original_filename}"
+                        )
 
-            # For existing interactions, include interaction context
-            if interaction.title:
-                vector_query_parts.append(f"Topic: {interaction.title}")
-            if interaction.summary_title:
-                vector_query_parts.append(f"Context: {interaction.summary_title}")
+                # For existing interactions, include interaction context
+                if interaction.title:
+                    vector_query_parts.append(f"Topic: {interaction.title}")
+                if interaction.summary_title:
+                    vector_query_parts.append(f"Context: {interaction.summary_title}")
 
-            # Combine all parts for vector search
-            vector_query = " ".join(vector_query_parts).strip()
+                # Combine all parts for vector search
+                vector_query = " ".join(vector_query_parts).strip()
 
-            # Perform similarity search with higher top_k for better context
-            similar = await langchain_service.similarity_search(
-                query=(vector_query or "educational context"),
-                user_id=str(user_id),
-                top_k=8,  # Increased from 5 to 8 for better context
-            )
+                # Perform similarity search with optimized top_k for faster response
+                # First try interaction-specific search for faster results
+                similar = []
+                if interaction.id:
+                    similar = await langchain_service.similarity_search_by_interaction(
+                        query=(vector_query or "educational context"),
+                        user_id=str(user_id),
+                        interaction_id=str(interaction.id),
+                        top_k=2,  # Get 2 results from same interaction first
+                    )
 
-            # Process and rank results
-            context_parts: List[str] = []
-            seen_titles = set()
+                # If not enough results from same interaction, get more from general search
+                if len(similar) < 3:
+                    general_similar = await langchain_service.similarity_search(
+                        query=(vector_query or "educational context"),
+                        user_id=str(user_id),
+                        top_k=4,  # Reduced from 8 to 4 for faster processing
+                    )
+                    # Combine results, prioritizing interaction-specific ones
+                    similar.extend(general_similar)
 
-            for m in similar or []:
-                title = (m.get("title") or "").strip()
-                content = (m.get("content") or "").strip()
-                score = m.get("score", 0)
-                metadata = m.get("metadata", {})
+                # Process and rank results
+                context_parts: List[str] = []
+                seen_titles = set()
 
-                # Skip if we've already included this title (avoid duplicates)
-                if title in seen_titles:
-                    continue
-                seen_titles.add(title)
+                for m in similar or []:
+                    title = (m.get("title") or "").strip()
+                    content = (m.get("content") or "").strip()
+                    score = m.get("score", 0)
+                    interaction_id = m.get(
+                        "interaction_id", ""
+                    )  # Get interaction_id directly
+                    content_type = m.get("type", "")  # Get content type directly
+                    priority = m.get("priority", "normal")  # Get priority level
+                    metadata = m.get("metadata", {})
 
-                # Only include high-quality matches (score threshold)
-                if score > 0.3:  # Adjust threshold as needed
-                    context_entry = []
-                    if title and title not in ["User message", "AI response"]:
-                        context_entry.append(f"**{title}**")
-                    if content:
-                        # Truncate very long content to keep context manageable
-                        if len(content) > 500:
-                            content = content[:500] + "..."
-                        context_entry.append(content)
+                    # Skip if we've already included this title (avoid duplicates)
+                    if title in seen_titles:
+                        continue
+                    seen_titles.add(title)
 
-                    if context_entry:
-                        context_parts.append("\n".join(context_entry))
+                    # Adjust score threshold based on priority for faster processing
+                    score_threshold = 0.3 if priority == "high" else 0.4
 
-            # Limit total context length to prevent token overflow
-            context_text = "\n\n---\n\n".join(
-                context_parts[:5]
-            )  # Limit to top 5 results
+                    # Only include high-quality matches (score threshold)
+                    if score > score_threshold:
+                        context_entry = []
+                        if title and title not in ["User message", "AI response"]:
+                            context_entry.append(f"**{title}**")
+                        if content:
+                            # Truncate content more aggressively for faster processing
+                            if len(content) > 200:  # Reduced from 500
+                                content = content[:200] + "..."
+                            context_entry.append(content)
+
+                        # Add interaction context for better relevance
+                        if interaction_id and interaction_id != str(interaction.id):
+                            context_entry.append(
+                                f"[From interaction: {interaction_id[:8]}...]"
+                            )
+
+                        if context_entry:
+                            context_parts.append("\n".join(context_entry))
+
+                # Limit total context length to prevent token overflow and improve speed
+                context_text = "\n\n---\n\n".join(
+                    context_parts[:3]  # Reduced from 5 to 3 for faster processing
+                )
+
+                # Cache the context for future similar queries
+                await cache_user_context(
+                    str(user_id),
+                    {"last_query": message, "context": context_text},
+                    ttl=300,
+                )  # Cache for 5 minutes
 
         except Exception as e:
             # Log error but don't fail the conversation
@@ -431,7 +488,7 @@ async def process_conversation_message(
 
         # Points
         points_cost = langchain_service.calculate_points_cost(tokens_used)
-        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one()
+
         if user.current_points < points_cost:
             # Store the AI response content even with insufficient points
             # Extract the type from the AI response if it's structured
@@ -572,35 +629,43 @@ async def process_conversation_message(
         )
         db.add(pt)
 
-        # Embeddings using LangChain
-        try:
-            if message:
-                await langchain_service.upsert_embedding(
-                    conv_id=str(user_conv.id),
-                    user_id=str(user_id),
-                    text=message,
-                    title="User message",
-                    metadata={
-                        "interaction_id": str(interaction.id),
-                        "type": "user_message",
-                        "has_media": len(media_objects) > 0,
-                    },
-                )
-            if ai_result_content:
-                await langchain_service.upsert_embedding(
-                    conv_id=str(ai_conv.id),
-                    user_id=str(user_id),
-                    text=ai_result_content,
-                    title="AI response",
-                    metadata={
-                        "interaction_id": str(interaction.id),
-                        "type": "ai_response",
-                    },
-                )
-        except Exception:
-            pass
+        # Embeddings using LangChain - run in background to not block response
+        async def background_embeddings():
+            try:
+                if message:
+                    await langchain_service.upsert_embedding(
+                        conv_id=str(user_conv.id),
+                        user_id=str(user_id),
+                        text=message,
+                        title="User message",
+                        metadata={
+                            "interaction_id": str(interaction.id),
+                            "type": "user_message",
+                            "has_media": len(media_objects) > 0,
+                        },
+                    )
+                if ai_result_content:
+                    await langchain_service.upsert_embedding(
+                        conv_id=str(ai_conv.id),
+                        user_id=str(user_id),
+                        text=ai_result_content,
+                        title="AI response",
+                        metadata={
+                            "interaction_id": str(interaction.id),
+                            "type": "ai_response",
+                        },
+                    )
+            except Exception:
+                pass
+
+        # Start background task for embeddings
+
+        asyncio.create_task(background_embeddings())
 
         await db.commit()
+
+        # Invalidate cache for this user to ensure fresh data
+        await invalidate_user_cache(str(user_id))
 
         # Notify frontend that AI response is ready
         try:

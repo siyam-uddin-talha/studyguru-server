@@ -16,8 +16,7 @@ from app.models.interaction import Interaction
 from app.models.media import Media
 from app.models.interaction import Conversation, ConversationRole
 from app.models.user import User
-from app.models.subscription import PointTransaction
-from app.services.openai_service import OpenAIService
+
 from app.services.interaction import process_conversation_message
 from app.services.file_service import FileService
 from app.helpers.user import get_current_user_from_context
@@ -231,6 +230,7 @@ class InteractionMutation:
         is_fresh_interaction = False
 
         # If interaction_id provided validate; else create a new one
+
         if input.interaction_id:
             result = await db.execute(
                 select(Interaction).where(
@@ -272,7 +272,7 @@ class InteractionMutation:
 
         # Delegate to service function
         result = await process_conversation_message(
-            user_id=str(current_user.id),
+            user=current_user,
             interaction=interaction,
             message=input.message,
             media_files=media_files_dict,

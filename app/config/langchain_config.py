@@ -129,37 +129,38 @@ class StudyGuruModels:
     """Model configurations for StudyGuru"""
 
     @staticmethod
-    def get_chat_model(temperature: float = 0.2, max_tokens: int = 1000) -> ChatOpenAI:
-        """Get configured chat model"""
+    def get_chat_model(temperature: float = 0.2, max_tokens: int = 800) -> ChatOpenAI:
+        """Get configured chat model - optimized for speed"""
         return ChatOpenAI(
-            model="gpt-5",
+            model="gpt-4o",  # Faster and cheaper model
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=max_tokens,
+            request_timeout=30,  # Add timeout for faster failure
         )
 
     @staticmethod
-    def get_vision_model(
-        temperature: float = 0.3, max_tokens: int = 1000
-    ) -> ChatOpenAI:
-        """Get configured vision model"""
+    def get_vision_model(temperature: float = 0.3, max_tokens: int = 800) -> ChatOpenAI:
+        """Get configured vision model - optimized for speed"""
         return ChatOpenAI(
-            model="gpt-5",
+            model="gpt-4o",  # Use GPT-4o for vision (faster than GPT-5)
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=max_tokens,
+            request_timeout=45,  # Vision processing takes longer
         )
 
     @staticmethod
     def get_guardrail_model(
-        temperature: float = 0.1, max_tokens: int = 200
+        temperature: float = 0.1, max_tokens: int = 150
     ) -> ChatOpenAI:
-        """Get configured guardrail model (cost-optimized)"""
+        """Get configured guardrail model (cost-optimized and fast)"""
         return ChatOpenAI(
             model="gpt-4o-mini",
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=max_tokens,
+            request_timeout=15,  # Fast timeout for guardrails
         )
 
     @staticmethod

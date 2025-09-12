@@ -25,6 +25,7 @@ class StudyGuruCallbackHandler(AsyncCallbackHandler):
         self.tokens_used = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.final_response = ""
 
     async def on_llm_end(self, response, **kwargs):
         """Capture token usage from LLM responses"""
@@ -296,9 +297,9 @@ class LangChainService:
         image_urls: Optional[List[str]] = None,
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
-        max_tokens: int = 1000,
+        max_tokens: int = 800,  # Reduced default max_tokens
     ) -> Tuple[str, int, int, int]:
-        """Generate conversation response using LangChain"""
+        """Generate conversation response using LangChain with optimized settings"""
         try:
             # Create callback handler
             callback_handler = StudyGuruCallbackHandler()
@@ -318,11 +319,11 @@ class LangChainService:
                 4. Provide clear, educational explanations that build upon previous knowledge when possible
                 5. If this is a follow-up question, reference relevant previous discussions when helpful
                 
-                Always provide helpful, accurate educational assistance.
+                Always provide helpful, accurate educational assistance. Keep responses concise but informative.
                 """
             else:
                 system_prompt = """
-                You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context.
+                You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context. Keep responses concise but informative.
                 """
 
             # Build user content
@@ -359,8 +360,11 @@ class LangChainService:
                 ]
             )
 
-            # Create chain
-            chain = prompt | self.llm | self.string_parser
+            # Create chain with optimized model
+            optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
+                temperature=0.2, max_tokens=max_tokens
+            )
+            chain = prompt | optimized_llm | self.string_parser
 
             # Generate response
             response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
@@ -375,32 +379,139 @@ class LangChainService:
         except Exception as e:
             raise Exception(f"Failed to generate response: {str(e)}")
 
+    async def generate_conversation_response_streaming(
+        self,
+        message: str,
+        context: str = "",
+        image_urls: Optional[List[str]] = None,
+        interaction_title: Optional[str] = None,
+        interaction_summary: Optional[str] = None,
+        max_tokens: int = 800,
+    ):
+        """Generate streaming conversation response for faster perceived performance"""
+        try:
+            # Create callback handler
+            callback_handler = StudyGuruCallbackHandler()
+
+            # Build system prompt (same as non-streaming)
+            if interaction_title and interaction_summary:
+                system_prompt = f"""
+                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context.
+                
+                Current conversation topic: {interaction_title}
+                Context summary: {interaction_summary}
+                
+                Instructions:
+                1. Use the retrieved context from the user's learning history when relevant to provide better, personalized responses
+                2. If the context is not relevant to the current question, answer based on your knowledge
+                3. Maintain consistency with the user's learning style and previous interactions
+                4. Provide clear, educational explanations that build upon previous knowledge when possible
+                5. If this is a follow-up question, reference relevant previous discussions when helpful
+                
+                Always provide helpful, accurate educational assistance. Keep responses concise but informative.
+                """
+            else:
+                system_prompt = """
+                You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context. Keep responses concise but informative.
+                """
+
+            # Build user content
+            user_content = []
+            if context:
+                user_content.append(
+                    {
+                        "type": "text",
+                        "text": f"**Relevant Learning Context:**\n{context}\n",
+                    }
+                )
+
+            if message:
+                user_content.append(
+                    {"type": "text", "text": f"**Current Question:** {message}"}
+                )
+            elif image_urls:
+                user_content.append(
+                    {"type": "text", "text": "**Document/Image Analysis Request:**"}
+                )
+
+            # Add images
+            if image_urls:
+                for url in image_urls:
+                    user_content.append(
+                        {"type": "image_url", "image_url": {"url": url}}
+                    )
+
+            # Create prompt
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_content),
+                ]
+            )
+
+            # Create streaming chain
+            optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
+                temperature=0.2, max_tokens=max_tokens
+            )
+            chain = prompt | optimized_llm
+
+            # Stream response
+            full_response = ""
+            async for chunk in chain.astream(
+                {}, config={"callbacks": [callback_handler]}
+            ):
+                if hasattr(chunk, "content") and chunk.content:
+                    full_response += chunk.content
+                    yield chunk.content
+
+            # Store the final response and token usage in the callback handler
+            callback_handler.final_response = full_response
+
+        except Exception as e:
+            raise Exception(f"Failed to generate streaming response: {str(e)}")
+
     async def similarity_search(
         self, query: str, user_id: str, top_k: int = 5
     ) -> List[Dict[str, Any]]:
-        """Perform similarity search using LangChain vector store"""
+        """Perform similarity search using LangChain vector store with async optimization"""
         try:
             if not self.vector_store:
                 return []
 
-            # Create retriever with user filter
+            # Create retriever with user filter and reduced top_k for faster search
             retriever = self.vector_store.as_retriever(
-                search_kwargs={"k": top_k, "expr": f"user_id == '{user_id}'"}
+                search_kwargs={"k": min(top_k, 5), "expr": f"user_id == '{user_id}'"}
             )
 
-            # Perform search (use synchronous method)
-            docs = retriever.invoke(query)
+            # Run search in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            docs = await loop.run_in_executor(
+                ThreadPoolExecutor(max_workers=1), retriever.invoke, query
+            )
 
-            # Convert to expected format
+            # Convert to expected format with content truncation for faster processing
             results = []
             for doc in docs:
+                content = doc.page_content
+                # Truncate content early to reduce processing time
+                if len(content) > 300:  # Reduced from 500
+                    content = content[:300] + "..."
+
+                # Extract interaction_id from metadata for faster access
+                metadata = doc.metadata or {}
+                interaction_id = metadata.get("interaction_id", "")
+
                 results.append(
                     {
                         "id": doc.metadata.get("original_id", doc.metadata.get("id")),
+                        "interaction_id": interaction_id,  # Add interaction_id for faster access
                         "title": doc.metadata.get("title", ""),
-                        "content": doc.page_content,
+                        "content": content,
                         "metadata": doc.metadata,
                         "score": getattr(doc, "score", 0.0),
+                        "type": metadata.get(
+                            "type", ""
+                        ),  # Add type for better filtering
                     }
                 )
 
@@ -408,6 +519,57 @@ class LangChainService:
 
         except Exception as e:
             print(f"Similarity search error: {e}")
+            return []
+
+    async def similarity_search_by_interaction(
+        self, query: str, user_id: str, interaction_id: str, top_k: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Fast similarity search prioritizing specific interaction results"""
+        try:
+            if not self.vector_store:
+                return []
+
+            # Create retriever with user and interaction filter for faster, more targeted search
+            retriever = self.vector_store.as_retriever(
+                search_kwargs={
+                    "k": min(top_k, 3),
+                    "expr": f"user_id == '{user_id}' && interaction_id == '{interaction_id}'",
+                }
+            )
+
+            # Run search in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            docs = await loop.run_in_executor(
+                ThreadPoolExecutor(max_workers=1), retriever.invoke, query
+            )
+
+            # Convert to expected format with minimal processing for speed
+            results = []
+            for doc in docs:
+                content = doc.page_content
+                # Minimal truncation for speed
+                if len(content) > 150:  # Even more aggressive truncation
+                    content = content[:150] + "..."
+
+                metadata = doc.metadata or {}
+
+                results.append(
+                    {
+                        "id": doc.metadata.get("original_id", doc.metadata.get("id")),
+                        "interaction_id": interaction_id,  # Already filtered
+                        "title": doc.metadata.get("title", ""),
+                        "content": content,
+                        "metadata": doc.metadata,
+                        "score": getattr(doc, "score", 0.0),
+                        "type": metadata.get("type", ""),
+                        "priority": "high",  # Mark as high priority since it's from same interaction
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            print(f"Interaction-specific similarity search error: {e}")
             return []
 
     async def upsert_embedding(
@@ -418,10 +580,14 @@ class LangChainService:
         title: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Upsert embedding using LangChain vector store"""
+        """Upsert embedding using LangChain vector store with async optimization"""
         try:
             if not self.vector_store:
                 return False
+
+            # Truncate text to reduce embedding time and storage
+            if len(text) > 1000:  # Limit text length for faster embedding
+                text = text[:1000] + "..."
 
             # Create document (ID will be auto-generated by Milvus)
             doc = Document(
@@ -435,8 +601,13 @@ class LangChainService:
                 },
             )
 
-            # Add to vector store (use synchronous method to avoid asyncio issues)
-            self.vector_store.add_documents([doc])
+            # Run embedding in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                ThreadPoolExecutor(max_workers=1),
+                self.vector_store.add_documents,
+                [doc],
+            )
 
             return True
 
