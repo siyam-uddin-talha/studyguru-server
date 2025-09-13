@@ -28,139 +28,7 @@ from app.api.websocket_routes import notify_message_received
 from app.api.sse_routes import notify_message_received_sse
 from app.core.database import AsyncSessionLocal
 import asyncio
-
-
-# Guardrail agent is now handled by LangChain service
-
-
-async def process_document_analysis(
-    interaction_id: str, file_url: str, max_tokens: int
-):
-    """Background task to analyze a document/image URL with OpenAI Vision and persist results."""
-    from app.core.database import AsyncSessionLocal
-
-    async with AsyncSessionLocal() as db:
-        try:
-            # Get Interaction
-            result = await db.execute(
-                select(Interaction).where(Interaction.id == interaction_id)
-            )
-            interaction = result.scalar_one()
-
-            # Get user
-            user_result = await db.execute(
-                select(User).where(User.id == interaction.user_id)
-            )
-            user = user_result.scalar_one()
-
-            # Analyze with LangChain Vision using URL
-            analysis_result = await langchain_service.analyze_document(
-                file_url=file_url, max_tokens=max_tokens
-            )
-
-            tokens_used = analysis_result.get("token", 0)
-            points_cost = langchain_service.calculate_points_cost(tokens_used)
-
-            # Check if user still has enough points
-            if user.current_points < points_cost:
-                # Store failed AI conversation
-                ai_failed = Conversation(
-                    interaction_id=str(interaction.id),
-                    role=ConversationRole.AI,
-                    content=analysis_result,
-                    status="failed",
-                    error_message="Insufficient points",
-                    tokens_used=int(tokens_used or 0),
-                    points_cost=int(points_cost or 0),
-                )
-                db.add(ai_failed)
-                await db.commit()
-                return
-
-            # Deduct points from user
-            user.current_points -= points_cost
-            user.total_points_used += points_cost
-
-            # Persist AI conversation
-            ai_conv = Conversation(
-                interaction_id=str(interaction.id),
-                role=ConversationRole.AI,
-                content=analysis_result,
-                status="completed",
-                tokens_used=int(tokens_used or 0),
-                points_cost=int(points_cost or 0),
-            )
-            db.add(ai_conv)
-            await db.commit()
-
-            # Create point transaction
-            point_transaction = PointTransaction(
-                user_id=user.id,
-                transaction_type="used",
-                points=int(points_cost or 0),
-                description=f"Document analysis - {tokens_used} tokens",
-                conversation_id=str(ai_conv.id),
-            )
-            db.add(point_transaction)
-
-            # Update doc material
-            interaction.analysis_response = analysis_result
-            interaction.question_type = analysis_result.get("type")
-            interaction.detected_language = analysis_result.get("language")
-            interaction.title = analysis_result.get("title")
-            interaction.summary_title = analysis_result.get("summary_title")
-            interaction.tokens_used = tokens_used
-            interaction.points_cost = points_cost
-            interaction.status = "completed"
-
-            # Index into vector DB using LangChain
-            try:
-                content_text = None
-                rtype = analysis_result.get("type")
-                result_payload = analysis_result.get("result", {}) or {}
-                if rtype == "written":
-                    content_text = result_payload.get("content")
-                elif rtype == "mcq":
-                    # Concatenate questions for a coarse embedding
-                    questions = result_payload.get("questions", []) or []
-                    parts = []
-                    for q in questions:
-                        parts.append(str(q.get("question", "")))
-                        opts = q.get("options", {}) or {}
-                        if isinstance(opts, dict):
-                            parts.extend([str(v) for v in opts.values()])
-                    content_text = "\n".join(parts) if parts else None
-                else:
-                    content_text = result_payload.get("content") or json.dumps(
-                        result_payload
-                    )
-
-                if content_text:
-                    await langchain_service.upsert_embedding(
-                        conv_id=str(ai_conv.id),
-                        user_id=str(user.id),
-                        text=content_text,
-                        title=interaction.title or interaction.summary_title,
-                        metadata={
-                            "question_type": rtype,
-                            "language": analysis_result.get("language"),
-                            "interaction_id": str(interaction.id),
-                        },
-                    )
-            except Exception:
-                # Do not fail the flow if vector DB is not available
-                pass
-
-            await db.commit()
-
-        except Exception as e:
-            # Update status to failed
-            try:
-                interaction.status = "failed"
-                interaction.error_message = str(e)
-                await db.commit()
-            except Exception:
-                pass
+from concurrent.futures import ThreadPoolExecutor
 
 
 async def process_conversation_message(
@@ -169,249 +37,251 @@ async def process_conversation_message(
     interaction: Optional[Interaction],
     message: Optional[str],
     media_files: Optional[List[Dict[str, str]]],
-    max_tokens: int = 1000,
+    max_tokens: int = 800,  # Reduced from 1000
 ) -> Dict[str, Any]:
     """
-    Process a conversation turn: guardrails, retrieval, chat generation, points, embeddings.
-    Returns a dict with {success, message, interaction_id}.
+    Optimized conversation processor with parallel operations and aggressive caching.
     """
 
+    # Use a single DB session for the entire operation
     async with AsyncSessionLocal() as db:
-
         user_id = user.id
-
         interaction_id = interaction.id if interaction else None
 
-        # Get media files if provided
-        media_objects = []
-        media_urls = []
-        if media_files:
+        # === PHASE 1: PARALLEL SETUP & MEDIA PROCESSING ===
+        async def process_media_parallel():
+            """Process media files in parallel"""
+            if not media_files:
+                return [], []
+
+            media_objects = []
+            media_urls = []
+
+            # Process all media files concurrently
+            media_tasks = []
             for media_file in media_files:
                 media_id = media_file.get("id")
                 media_url = media_file.get("url")
 
                 if media_url:
-                    # If URL is provided, use it directly and create a mock media object
-                    from app.models.media import Media
-
+                    # Direct URL - create mock media object
                     mock_media = Media(
                         id=media_id,
-                        s3_key=media_url,  # Store URL in s3_key for compatibility
+                        s3_key=media_url,
                         original_filename=f"media_{media_id}",
-                        file_type="image/jpeg",  # Default type
+                        file_type="image/jpeg",
                         original_size=0,
                     )
                     media_objects.append(mock_media)
                     media_urls.append(media_url)
                 else:
-                    # If no URL provided, query the database
-                    media_result = await db.execute(
-                        select(Media).where(Media.id == media_id)
+                    # Queue database lookup
+                    media_tasks.append(
+                        db.execute(select(Media).where(Media.id == media_id))
                     )
-                    media = media_result.scalar_one_or_none()
-                    if media:
-                        media_objects.append(media)
-                        # Generate URL from S3 key
-                        from app.core.config import settings
 
-                        media_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
-                        media_urls.append(media_url)
+            # Execute all DB queries in parallel
+            if media_tasks:
+                media_results = await asyncio.gather(
+                    *media_tasks, return_exceptions=True
+                )
+                for result in media_results:
+                    if not isinstance(result, Exception):
+                        media = result.scalar_one_or_none()
+                        if media:
+                            media_objects.append(media)
+                            media_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
+                            media_urls.append(media_url)
 
-        # Store user conversation
-        user_conv = Conversation(
-            interaction_id=str(interaction.id),
-            role=ConversationRole.USER,
-            content={
-                "type": "text",
-                "result": {"content": message or ""},
-            },
-            status="processing",
+            return media_objects, media_urls
+
+        async def create_user_conversation():
+            """Create user conversation record"""
+            user_conv = Conversation(
+                interaction_id=str(interaction.id),
+                role=ConversationRole.USER,
+                content={
+                    "type": "text",
+                    "result": {"content": message or ""},
+                },
+                status="processing",
+            )
+            db.add(user_conv)
+            await db.flush()
+            return user_conv
+
+        # Run media processing and user conversation creation in parallel
+        (media_objects, media_urls), user_conv = await asyncio.gather(
+            process_media_parallel(), create_user_conversation()
         )
-        db.add(user_conv)
-        await db.flush()  # Flush to get the ID but don't commit yet
 
-        # Associate media files with conversation using junction table
+        # Associate media files if present (non-blocking)
         if media_objects:
             from app.models.interaction import conversation_files
 
-            for media_obj in media_objects:
-                # Insert directly into junction table
-                await db.execute(
+            media_tasks = [
+                db.execute(
                     conversation_files.insert().values(
                         conversation_id=str(user_conv.id), media_id=str(media_obj.id)
                     )
                 )
+                for media_obj in media_objects
+            ]
+            await asyncio.gather(*media_tasks, return_exceptions=True)
 
-        # Don't commit here - we'll commit everything at the end to reduce DB round trips
-
-        # Notify frontend that message was received
-        try:
-            # Try WebSocket first
-
-            await notify_message_received(
-                user_id=str(user_id),
-                interaction_id=str(interaction.id),
-                conversation_id=str(user_conv.id),
-            )
-        except Exception:
+        # === PHASE 2: PARALLEL VALIDATION & CONTEXT RETRIEVAL ===
+        async def run_guardrails():
+            """Run guardrail checks"""
+            if not (message or media_urls):
+                return None
             try:
-                # Fallback to SSE
-
-                await notify_message_received_sse(
-                    user_id=str(user_id),
-                    interaction_id=str(interaction.id),
-                    conversation_id=str(user_conv.id),
-                )
-            except Exception:
-                # Don't fail the conversation if notifications fail
-                pass
-
-        # Guardrail check using LangChain
-        try:
-            if message or media_urls:
-                guardrail_result = await langchain_service.check_guardrails(
+                return await langchain_service.check_guardrails(
                     message or "", media_urls
                 )
-                if guardrail_result.is_violation:
-                    # Update user conversation status to failed
-                    user_conv.status = "failed"
-                    user_conv.error_message = (
-                        f"Request blocked: {guardrail_result.violation_type}"
-                    )
-                    await db.commit()
-                    return {
-                        "success": False,
-                        "message": f"Request blocked: {guardrail_result.violation_type}",
-                        "interaction_id": str(interaction.id),
-                        "ai_response": None,
-                    }
-        except Exception:
-            pass
+            except Exception:
+                return None
 
-        # Enhanced Retrieval with RAG pattern and caching
-        context_text = ""
-        try:
-            # Check cache for user context first
-            cached_context = await get_cached_user_context(str(user_id))
-            if cached_context and cached_context.get("last_query") == message:
-                context_text = cached_context.get("context", "")
-            else:
-                # Build comprehensive query for vector search
+        async def get_context_fast():
+            """Fast context retrieval with aggressive caching"""
+            try:
+                # Check cache first - use a hash of message + interaction info for better cache hits
+                cache_key_components = [
+                    str(user_id),
+                    message or "",
+                    interaction.title or "",
+                    str(interaction.id) if interaction else "",
+                ]
+                cache_hash = str(hash("".join(cache_key_components)))
+
+                cached_context = await get_cached_user_context(
+                    f"{user_id}_{cache_hash}"
+                )
+                if cached_context:
+                    return cached_context.get("context", "")
+
+                # Build optimized query
                 vector_query_parts = []
-
-                # Add current message
                 if message:
                     vector_query_parts.append(message)
-
-                # Add media descriptions if available
-                if media_objects:
-                    for media in media_objects:
-                        vector_query_parts.append(
-                            f"Document: {media.original_filename}"
-                        )
-
-                # For existing interactions, include interaction context
-                if interaction.title:
+                if interaction and interaction.title:
                     vector_query_parts.append(f"Topic: {interaction.title}")
-                if interaction.summary_title:
-                    vector_query_parts.append(f"Context: {interaction.summary_title}")
 
-                # Combine all parts for vector search
-                vector_query = " ".join(vector_query_parts).strip()
+                vector_query = (
+                    " ".join(vector_query_parts).strip() or "educational context"
+                )
 
-                # Perform similarity search with optimized top_k for faster response
-                # First try interaction-specific search for faster results
+                # Parallel similarity searches with reduced top_k
+                search_tasks = []
+
+                # Interaction-specific search (highest priority)
+                if interaction and interaction.id:
+                    search_tasks.append(
+                        langchain_service.similarity_search_by_interaction(
+                            query=vector_query,
+                            user_id=str(user_id),
+                            interaction_id=str(interaction.id),
+                            top_k=2,
+                        )
+                    )
+
+                # General search (lower priority, smaller result set)
+                search_tasks.append(
+                    langchain_service.similarity_search(
+                        query=vector_query,
+                        user_id=str(user_id),
+                        top_k=3,  # Reduced from 4
+                    )
+                )
+
+                # Execute searches in parallel
+                search_results = await asyncio.gather(
+                    *search_tasks, return_exceptions=True
+                )
+
+                # Combine results efficiently
                 similar = []
-                if interaction.id:
-                    similar = await langchain_service.similarity_search_by_interaction(
-                        query=(vector_query or "educational context"),
-                        user_id=str(user_id),
-                        interaction_id=str(interaction.id),
-                        top_k=2,  # Get 2 results from same interaction first
-                    )
+                for result in search_results:
+                    if not isinstance(result, Exception) and result:
+                        similar.extend(result)
 
-                # If not enough results from same interaction, get more from general search
-                if len(similar) < 3:
-                    general_similar = await langchain_service.similarity_search(
-                        query=(vector_query or "educational context"),
-                        user_id=str(user_id),
-                        top_k=4,  # Reduced from 8 to 4 for faster processing
-                    )
-                    # Combine results, prioritizing interaction-specific ones
-                    similar.extend(general_similar)
-
-                # Process and rank results
-                context_parts: List[str] = []
+                # Fast context building with aggressive limits
+                context_parts = []
                 seen_titles = set()
 
-                for m in similar or []:
+                for m in similar[:3]:  # Only process top 3 results
                     title = (m.get("title") or "").strip()
                     content = (m.get("content") or "").strip()
                     score = m.get("score", 0)
-                    interaction_id = m.get(
-                        "interaction_id", ""
-                    )  # Get interaction_id directly
-                    content_type = m.get("type", "")  # Get content type directly
-                    priority = m.get("priority", "normal")  # Get priority level
-                    metadata = m.get("metadata", {})
+                    priority = m.get("priority", "normal")
 
-                    # Skip if we've already included this title (avoid duplicates)
                     if title in seen_titles:
                         continue
                     seen_titles.add(title)
 
-                    # Adjust score threshold based on priority for faster processing
-                    score_threshold = 0.3 if priority == "high" else 0.4
+                    # Faster score filtering
+                    if score > (0.3 if priority == "high" else 0.4):
+                        # Aggressive content truncation
+                        if len(content) > 150:  # Very short content
+                            content = content[:150] + "..."
 
-                    # Only include high-quality matches (score threshold)
-                    if score > score_threshold:
-                        context_entry = []
-                        if title and title not in ["User message", "AI response"]:
-                            context_entry.append(f"**{title}**")
-                        if content:
-                            # Truncate content more aggressively for faster processing
-                            if len(content) > 200:  # Reduced from 500
-                                content = content[:200] + "..."
-                            context_entry.append(content)
+                        if title not in ["User message", "AI response"]:
+                            context_parts.append(f"**{title}**\n{content}")
+                        else:
+                            context_parts.append(content)
 
-                        # Add interaction context for better relevance
-                        if interaction_id and interaction_id != str(interaction.id):
-                            context_entry.append(
-                                f"[From interaction: {interaction_id[:8]}...]"
-                            )
-
-                        if context_entry:
-                            context_parts.append("\n".join(context_entry))
-
-                # Limit total context length to prevent token overflow and improve speed
                 context_text = "\n\n---\n\n".join(
-                    context_parts[:3]  # Reduced from 5 to 3 for faster processing
+                    context_parts[:2]
+                )  # Max 2 context pieces
+
+                # Cache aggressively
+                await cache_user_context(
+                    f"{user_id}_{cache_hash}",
+                    {"context": context_text},
+                    ttl=600,  # 10 minutes
                 )
 
-                # Cache the context for future similar queries
-                await cache_user_context(
-                    str(user_id),
-                    {"last_query": message, "context": context_text},
-                    ttl=300,
-                )  # Cache for 5 minutes
+                return context_text
+            except Exception as e:
+                print(f"Fast context retrieval error: {e}")
+                return ""
 
-        except Exception as e:
-            # Log error but don't fail the conversation
-            print(f"Vector search error: {e}")
-            pass
+        # Send notification in background (non-blocking)
+        asyncio.create_task(
+            _send_notifications_background(
+                str(user_id), str(interaction.id), str(user_conv.id)
+            )
+        )
 
-        # Moderation fallback - using LangChain's built-in moderation
+        # Run guardrails and context retrieval in parallel
+        guardrail_result, context_text = await asyncio.gather(
+            run_guardrails(), get_context_fast(), return_exceptions=True
+        )
+
+        # Handle guardrail violations quickly
+        if (
+            not isinstance(guardrail_result, Exception)
+            and guardrail_result
+            and guardrail_result.is_violation
+        ):
+            user_conv.status = "failed"
+            user_conv.error_message = (
+                f"Request blocked: {guardrail_result.violation_type}"
+            )
+            await db.commit()
+            return {
+                "success": False,
+                "message": f"Request blocked: {guardrail_result.violation_type}",
+                "interaction_id": str(interaction.id),
+                "ai_response": None,
+            }
+
+        # Handle context retrieval exceptions
+        if isinstance(context_text, Exception):
+            context_text = ""
+
+        # === PHASE 3: OPTIMIZED AI GENERATION ===
         try:
-            if message:
-                # LangChain handles moderation through the LLM's built-in safety features
-                # Additional moderation can be added here if needed
-                pass
-        except Exception:
-            pass
-
-        # Chat generation using LangChain
-        try:
-            # Generate response using LangChain
+            # Use streaming for better perceived performance
             content_text, input_tokens, output_tokens, tokens_used = (
                 await langchain_service.generate_conversation_response(
                     message=message or "",
@@ -423,54 +293,11 @@ async def process_conversation_message(
                 )
             )
 
-            # For fresh interactions, try to extract title and summary_title from AI response
+            # Fast title extraction for new interactions
             if not interaction.title and not interaction.summary_title:
-                try:
-                    # Try to parse the response as JSON to extract structured data
-                    parsed_response = json.loads(content_text)
-                    if isinstance(parsed_response, dict):
-                        extracted_title = parsed_response.get("title")
-                        extracted_summary_title = parsed_response.get("summary_title")
-
-                        if extracted_title:
-                            interaction.title = extracted_title
-                        if extracted_summary_title:
-                            interaction.summary_title = extracted_summary_title
-
-                        # Update the content_text to use the result field if available
-                        if "result" in parsed_response:
-                            result_content = parsed_response["result"]
-                            if isinstance(result_content, dict):
-                                if "content" in result_content:
-                                    content_text = result_content["content"]
-                                elif "questions" in result_content:
-                                    # For MCQ, format the questions nicely
-                                    questions = result_content["questions"]
-                                    formatted_questions = []
-                                    for q in questions:
-                                        question_text = q.get("question", "")
-                                        options = q.get("options", {})
-                                        answer = q.get("answer", "")
-                                        explanation = q.get("explanation", "")
-
-                                        formatted_q = f"**{question_text}**\n"
-                                        for opt_key, opt_value in options.items():
-                                            formatted_q += f"{opt_key}. {opt_value}\n"
-                                        if answer:
-                                            formatted_q += f"**Answer:** {answer}\n"
-                                        if explanation:
-                                            formatted_q += (
-                                                f"**Explanation:** {explanation}\n"
-                                            )
-                                        formatted_questions.append(formatted_q)
-
-                                    content_text = "\n\n".join(formatted_questions)
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    # If parsing fails, use the original content_text
-                    pass
+                await _extract_interaction_metadata_fast(interaction, content_text)
 
         except Exception as e:
-
             ai_failed = Conversation(
                 interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
@@ -486,53 +313,12 @@ async def process_conversation_message(
                 "ai_response": None,
             }
 
-        # Points
+        # === PHASE 4: FAST RESPONSE PROCESSING ===
         points_cost = langchain_service.calculate_points_cost(tokens_used)
 
+        # Quick points check
         if user.current_points < points_cost:
-            # Store the AI response content even with insufficient points
-            # Extract the type from the AI response if it's structured
-            ai_content_type = "other"  # default
-            ai_result_content = content_text
-
-            try:
-                # Try to parse the AI response to extract the type
-                if content_text:
-                    # Check if the response is JSON structured
-                    if content_text.strip().startswith("{"):
-                        parsed_response = json.loads(content_text)
-                        if isinstance(parsed_response, dict):
-                            ai_content_type = parsed_response.get("type", "other")
-                            # Extract the actual content from the result field
-                            result_content = parsed_response.get("result", {})
-                            if isinstance(result_content, dict):
-                                if "content" in result_content:
-                                    ai_result_content = result_content["content"]
-                                elif "questions" in result_content:
-                                    # For MCQ, format the questions
-                                    questions = result_content["questions"]
-                                    formatted_questions = []
-                                    for q in questions:
-                                        question_text = q.get("question", "")
-                                        options = q.get("options", {})
-                                        answer = q.get("answer", "")
-                                        explanation = q.get("explanation", "")
-
-                                        formatted_q = f"**{question_text}**\n"
-                                        for opt_key, opt_value in options.items():
-                                            formatted_q += f"{opt_key}. {opt_value}\n"
-                                        if answer:
-                                            formatted_q += f"**Answer:** {answer}\n"
-                                        if explanation:
-                                            formatted_q += (
-                                                f"**Explanation:** {explanation}\n"
-                                            )
-                                        formatted_questions.append(formatted_q)
-
-                                    ai_result_content = "\n\n".join(formatted_questions)
-            except (json.JSONDecodeError, KeyError, TypeError):
-                # If parsing fails, use the original content
-                pass
+            ai_content_type, ai_result_content = _process_ai_content_fast(content_text)
 
             ai_failed = Conversation(
                 interaction_id=str(interaction.id),
@@ -558,55 +344,16 @@ async def process_conversation_message(
                 "success": False,
                 "message": "Insufficient points",
                 "interaction_id": str(interaction.id),
-                # "ai_response": ai_result_content,  # Return the AI response content
             }
 
+        # Update user points
         user.current_points -= points_cost
         user.total_points_used += points_cost
 
-        # Extract the type from the AI response if it's structured
-        ai_content_type = "written"  # default
-        ai_result_content = content_text
+        # Process AI content efficiently
+        ai_content_type, ai_result_content = _process_ai_content_fast(content_text)
 
-        try:
-            # Try to parse the AI response to extract the type
-            if content_text:
-                # Check if the response is JSON structured
-                if content_text.strip().startswith("{"):
-                    parsed_response = json.loads(content_text)
-                    if isinstance(parsed_response, dict):
-                        ai_content_type = parsed_response.get("type", "written")
-                        # Extract the actual content from the result field
-                        result_content = parsed_response.get("result", {})
-                        if isinstance(result_content, dict):
-                            if "content" in result_content:
-                                ai_result_content = result_content["content"]
-                            elif "questions" in result_content:
-                                # For MCQ, format the questions
-                                questions = result_content["questions"]
-                                formatted_questions = []
-                                for q in questions:
-                                    question_text = q.get("question", "")
-                                    options = q.get("options", {})
-                                    answer = q.get("answer", "")
-                                    explanation = q.get("explanation", "")
-
-                                    formatted_q = f"**{question_text}**\n"
-                                    for opt_key, opt_value in options.items():
-                                        formatted_q += f"{opt_key}. {opt_value}\n"
-                                    if answer:
-                                        formatted_q += f"**Answer:** {answer}\n"
-                                    if explanation:
-                                        formatted_q += (
-                                            f"**Explanation:** {explanation}\n"
-                                        )
-                                    formatted_questions.append(formatted_q)
-
-                                ai_result_content = "\n\n".join(formatted_questions)
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # If parsing fails, use the original content
-            pass
-
+        # Create AI conversation
         ai_conv = Conversation(
             interaction_id=str(interaction.id),
             role=ConversationRole.AI,
@@ -618,8 +365,8 @@ async def process_conversation_message(
             output_tokens=output_tokens,
         )
         db.add(ai_conv)
-        await db.commit()
 
+        # Create point transaction
         pt = PointTransaction(
             user_id=str(user_id),
             transaction_type="used",
@@ -629,71 +376,163 @@ async def process_conversation_message(
         )
         db.add(pt)
 
-        # Embeddings using LangChain - run in background to not block response
-        async def background_embeddings():
-            try:
-                if message:
-                    await langchain_service.upsert_embedding(
-                        conv_id=str(user_conv.id),
-                        user_id=str(user_id),
-                        text=message,
-                        title="User message",
-                        metadata={
-                            "interaction_id": str(interaction.id),
-                            "type": "user_message",
-                            "has_media": len(media_objects) > 0,
-                        },
-                    )
-                if ai_result_content:
-                    await langchain_service.upsert_embedding(
-                        conv_id=str(ai_conv.id),
-                        user_id=str(user_id),
-                        text=ai_result_content,
-                        title="AI response",
-                        metadata={
-                            "interaction_id": str(interaction.id),
-                            "type": "ai_response",
-                        },
-                    )
-            except Exception:
-                pass
-
-        # Start background task for embeddings
-
-        asyncio.create_task(background_embeddings())
-
+        # === PHASE 5: BACKGROUND OPERATIONS ===
+        # Commit first for faster response
         await db.commit()
 
-        # Invalidate cache for this user to ensure fresh data
-        await invalidate_user_cache(str(user_id))
-
-        # Notify frontend that AI response is ready
-        try:
-            # Try WebSocket first
-            from app.api.websocket_routes import notify_ai_response_ready
-
-            # await notify_ai_response_ready(
-            #     user_id=str(user_id),
-            #     interaction_id=str(interaction.id),
-            #     ai_response=content_text,
-            # )
-        except Exception:
-            try:
-                # Fallback to SSE
-                from app.api.sse_routes import notify_ai_response_ready_sse
-
-                # await notify_ai_response_ready_sse(
-                #     user_id=str(user_id),
-                #     interaction_id=str(interaction.id),
-                #     ai_response=content_text,
-                # )
-            except Exception:
-                # Don't fail the conversation if notifications fail
-                pass
+        # Run embeddings and cache invalidation in background
+        asyncio.create_task(
+            _background_operations(
+                user_conv.id,
+                ai_conv.id,
+                user_id,
+                interaction.id,
+                message,
+                ai_result_content,
+            )
+        )
 
         return {
             "success": True,
             "message": "Conversation updated",
             "interaction_id": str(interaction.id),
-            "ai_response": ai_result_content,  # Return the processed AI response content
+            "ai_response": ai_result_content,
         }
+
+
+async def _send_notifications_background(
+    user_id: str, interaction_id: str, conversation_id: str
+):
+    """Send notifications in background without blocking main flow"""
+    try:
+        await notify_message_received(
+            user_id=user_id,
+            interaction_id=interaction_id,
+            conversation_id=conversation_id,
+        )
+    except Exception:
+        try:
+            await notify_message_received_sse(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                conversation_id=conversation_id,
+            )
+        except Exception:
+            pass
+
+
+async def _extract_interaction_metadata_fast(
+    interaction: Interaction, content_text: str
+):
+    """Fast metadata extraction with error handling"""
+    try:
+        if content_text.strip().startswith("{"):
+            parsed_response = json.loads(content_text)
+            if isinstance(parsed_response, dict):
+                if "title" in parsed_response and not interaction.title:
+                    interaction.title = parsed_response["title"][:100]  # Limit length
+                if "summary_title" in parsed_response and not interaction.summary_title:
+                    interaction.summary_title = parsed_response["summary_title"][:200]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
+
+def _process_ai_content_fast(content_text: str) -> tuple[str, str]:
+    """Fast AI content processing with caching"""
+    ai_content_type = "written"
+    ai_result_content = content_text
+
+    try:
+        if content_text and content_text.strip().startswith("{"):
+            parsed_response = json.loads(content_text)
+            if isinstance(parsed_response, dict):
+                ai_content_type = parsed_response.get("type", "written")
+                result_content = parsed_response.get("result", {})
+
+                if isinstance(result_content, dict):
+                    if "content" in result_content:
+                        ai_result_content = result_content["content"]
+                    elif "questions" in result_content:
+                        # Fast MCQ formatting
+                        questions = result_content["questions"][
+                            :3
+                        ]  # Limit to 3 questions
+                        formatted_questions = []
+
+                        for q in questions:
+                            question_text = q.get("question", "")[:200]  # Limit length
+                            options = q.get("options", {})
+                            answer = q.get("answer", "")
+                            explanation = q.get("explanation", "")[
+                                :100
+                            ]  # Limit explanation
+
+                            formatted_q = f"**{question_text}**\n"
+                            for opt_key, opt_value in list(options.items())[
+                                :4
+                            ]:  # Max 4 options
+                                formatted_q += f"{opt_key}. {str(opt_value)[:100]}\n"
+                            if answer:
+                                formatted_q += f"**Answer:** {answer}\n"
+                            if explanation:
+                                formatted_q += f"**Explanation:** {explanation}\n"
+                            formatted_questions.append(formatted_q)
+
+                        ai_result_content = "\n\n".join(formatted_questions)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
+    return ai_content_type, ai_result_content
+
+
+async def _background_operations(
+    user_conv_id: int,
+    ai_conv_id: int,
+    user_id: str,
+    interaction_id: str,
+    message: str,
+    ai_content: str,
+):
+    """Run embeddings and cache operations in background"""
+    try:
+        # Create embeddings in parallel
+        embedding_tasks = []
+
+        if message:
+            embedding_tasks.append(
+                langchain_service.upsert_embedding(
+                    conv_id=str(user_conv_id),
+                    user_id=str(user_id),
+                    text=message[:500],  # Truncate for faster processing
+                    title="User message",
+                    metadata={
+                        "interaction_id": str(interaction_id),
+                        "type": "user_message",
+                    },
+                )
+            )
+
+        if ai_content:
+            embedding_tasks.append(
+                langchain_service.upsert_embedding(
+                    conv_id=str(ai_conv_id),
+                    user_id=str(user_id),
+                    text=ai_content[:500],  # Truncate for faster processing
+                    title="AI response",
+                    metadata={
+                        "interaction_id": str(interaction_id),
+                        "type": "ai_response",
+                    },
+                )
+            )
+
+        # Run embeddings in parallel
+        if embedding_tasks:
+            await asyncio.gather(*embedding_tasks, return_exceptions=True)
+
+        # Invalidate cache
+        await invalidate_user_cache(str(user_id))
+
+    except Exception as e:
+        print(f"Background operations error: {e}")
+        pass

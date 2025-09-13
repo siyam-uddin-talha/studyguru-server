@@ -8,6 +8,7 @@ from app.graphql.resolvers.auth import AuthQuery, AuthMutation
 from app.graphql.resolvers.public import PublicQuery
 from app.graphql.resolvers.settings import SettingsQuery, SettingsMutation
 from app.graphql.resolvers.interaction import InteractionQuery, InteractionMutation
+from app.graphql.resolvers.reward import RewardMutation
 
 from app.helpers.auth import get_current_user_optional
 from app.models.user import User
@@ -27,7 +28,7 @@ class Query(AuthQuery, PublicQuery, SettingsQuery, InteractionQuery):
 
 
 @strawberry.type
-class Mutation(AuthMutation, SettingsMutation, InteractionMutation):
+class Mutation(AuthMutation, SettingsMutation, InteractionMutation, RewardMutation):
     pass
 
 

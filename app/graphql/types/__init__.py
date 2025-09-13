@@ -4,6 +4,7 @@ from .subscription import *
 from .media import *
 from .settings import *
 from .interaction import *
+from .reward import *
 
 __all__ = [
     "DefaultResponse",
@@ -27,6 +28,8 @@ __all__ = [
     "MediaFileInput",
     "InteractionListResponse",
     "DoConversationInput",
+    "AddRewardPointsInput",
+    "RewardPointsResponse",
     # "InteractionMutation",
     # "InteractionQuery",
 ]
