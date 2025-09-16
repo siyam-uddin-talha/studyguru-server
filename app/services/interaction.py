@@ -24,8 +24,8 @@ from app.services.cache_service import (
 import json
 from app.core.config import settings
 from pydantic import BaseModel
-from app.api.websocket_routes import notify_message_received
-from app.api.sse_routes import notify_message_received_sse
+from app.api.websocket_routes import notify_message_received, notify_ai_response_ready
+from app.api.sse_routes import notify_message_received_sse, notify_ai_response_ready_sse
 from app.core.database import AsyncSessionLocal
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -366,6 +366,9 @@ async def process_conversation_message(
         )
         db.add(ai_conv)
 
+        # Flush to get the conversation ID
+        await db.flush()
+
         # Create point transaction
         pt = PointTransaction(
             user_id=str(user_id),
@@ -379,6 +382,13 @@ async def process_conversation_message(
         # === PHASE 5: BACKGROUND OPERATIONS ===
         # Commit first for faster response
         await db.commit()
+
+        # Send AI response notification in background
+        asyncio.create_task(
+            _send_ai_response_notification(
+                str(user_id), str(interaction.id), ai_result_content
+            )
+        )
 
         # Run embeddings and cache invalidation in background
         asyncio.create_task(
@@ -416,6 +426,27 @@ async def _send_notifications_background(
                 user_id=user_id,
                 interaction_id=interaction_id,
                 conversation_id=conversation_id,
+            )
+        except Exception:
+            pass
+
+
+async def _send_ai_response_notification(
+    user_id: str, interaction_id: str, ai_response: str
+):
+    """Send AI response notification in background without blocking main flow"""
+    try:
+        await notify_ai_response_ready(
+            user_id=user_id,
+            interaction_id=interaction_id,
+            ai_response=ai_response,
+        )
+    except Exception:
+        try:
+            await notify_ai_response_ready_sse(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                ai_response=ai_response,
             )
         except Exception:
             pass

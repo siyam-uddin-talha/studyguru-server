@@ -66,6 +66,7 @@ class AuthQuery:
         # await context.db.commit()
 
         account = await create_user_profile(new_user)
+        # print(account, "-------account -----")
 
         return AuthType(
             success=True, message="Account retrieved successfully", account=account

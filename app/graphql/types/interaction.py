@@ -14,6 +14,7 @@ class InteractionType:
     summary_title: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    file: Optional[MediaType] = None
 
 
 @strawberry.type
@@ -57,6 +58,11 @@ class DoConversationInput:
     message: Optional[str] = ""
     media_files: Optional[List[MediaFileInput]] = None  # List of {id: str, url?: str}
     max_tokens: Optional[int] = 500
+
+
+@strawberry.input
+class DeleteMediaFileInput:
+    media_id: str
 
 
 @strawberry.type

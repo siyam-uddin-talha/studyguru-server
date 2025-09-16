@@ -156,3 +156,16 @@ class FileService:
         """
         response = s3_client.get_object(Bucket=settings.AWS_S3_BUCKET, Key=s3_key)
         return response["Body"].read()
+
+    @staticmethod
+    async def delete_file_from_s3(s3_key: str) -> bool:
+        """
+        Delete file from S3
+        Returns True if successful, False otherwise
+        """
+        try:
+            s3_client.delete_object(Bucket=settings.AWS_S3_BUCKET, Key=s3_key)
+            return True
+        except Exception as e:
+            print(f"Error deleting file from S3: {e}")
+            return False

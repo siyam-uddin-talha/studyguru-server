@@ -1,3 +1,4 @@
+from app.core.config import settings
 import strawberry
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +36,7 @@ class RewardMutation:
         REWARD_AMOUNTS = {
             "ad_reward": 20,  # Fixed amount for ad rewards
             "referral": 50,  # Fixed amount for referrals
-            "daily_bonus": 10,  # Fixed amount for daily bonuses
+            # "daily_bonus": 10,  # Fixed amount for daily bonuses
         }
 
         # Validate reward type
@@ -46,17 +47,17 @@ class RewardMutation:
         points_to_add = REWARD_AMOUNTS[input.reward_type]
 
         # Additional security: Rate limiting for ad rewards
-        if input.reward_type == "ad_reward":
-            # Check if user has already claimed ad reward in the last 5 minutes
-            recent_reward_check = await db.execute(
-                select(User).where(
-                    User.id == current_user.id,
-                    User.updated_at >= datetime.utcnow() - timedelta(minutes=5),
-                )
-            )
+        # if input.reward_type == "ad_reward":
+        #     # Check if user has already claimed ad reward in the last 5 minutes
+        #     recent_reward_check = await db.execute(
+        #         select(User).where(
+        #             User.id == current_user.id,
+        #             User.updated_at >= datetime.utcnow() - timedelta(minutes=5),
+        #         )
+        #     )
 
-            # You could add more sophisticated rate limiting here
-            # For now, we'll allow it but log it for monitoring
+        # You could add more sophisticated rate limiting here
+        # For now, we'll allow it but log it for monitoring
 
         try:
             # Add points using the secure helper function
@@ -66,7 +67,7 @@ class RewardMutation:
                 transaction_type="earned",
                 points=points_to_add,
                 description=f"Reward earned from {input.reward_type} via {input.source}",
-                interaction_id=None,
+                conversation_id=input.interaction_id,
             )
 
             if transaction:
@@ -75,6 +76,8 @@ class RewardMutation:
                     select(User).where(User.id == current_user.id)
                 )
                 updated_user = result.scalar_one_or_none()
+
+                print(points_to_add, "-------points_to_add -----")
 
                 return RewardPointsResponse(
                     success=True,
@@ -111,7 +114,7 @@ class RewardMutation:
 
         # Security validations
         VALID_AD_UNIT_IDS = [
-            "ca-app-pub-3940256099942544/5224354917",  # Test ad unit
+            settings.ADD_UNIT_ID_1,  # Test ad unit
             # Add your production ad unit IDs here
         ]
 

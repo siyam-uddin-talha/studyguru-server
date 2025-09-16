@@ -11,6 +11,7 @@ from app.graphql.types.interaction import (
     InteractionType,
     MediaType,
     DoConversationInput,
+    DeleteMediaFileInput,
 )
 from app.models.interaction import Interaction
 from app.models.media import Media
@@ -79,16 +80,8 @@ class InteractionQuery:
                 InteractionType(
                     id=interaction.id,
                     user_id=interaction.user_id,
-                    file_id=media.id if media else None,
-                    analysis_response=interaction.analysis_response,
-                    question_type=interaction.question_type,
-                    detected_language=interaction.detected_language,
                     title=interaction.title,
                     summary_title=interaction.summary_title,
-                    tokens_used=interaction.tokens_used,
-                    points_cost=interaction.points_cost,
-                    status=interaction.status,
-                    error_message=interaction.error_message,
                     created_at=interaction.created_at,
                     updated_at=interaction.updated_at,
                     file=(
@@ -97,6 +90,7 @@ class InteractionQuery:
                             original_filename=media.original_filename,
                             s3_key=media.s3_key,
                             file_type=media.file_type,
+                            meme_type=media.meme_type,
                             original_size=media.original_size,
                             compressed_size=media.compressed_size,
                             compression_ratio=media.compression_ratio,
@@ -153,16 +147,8 @@ class InteractionQuery:
             result=InteractionType(
                 id=interaction.id,
                 user_id=interaction.user_id,
-                file_id=media.id if media else None,
-                analysis_response=interaction.analysis_response,
-                question_type=interaction.question_type,
-                detected_language=interaction.detected_language,
                 title=interaction.title,
                 summary_title=interaction.summary_title,
-                tokens_used=interaction.tokens_used,
-                points_cost=interaction.points_cost,
-                status=interaction.status,
-                error_message=interaction.error_message,
                 created_at=interaction.created_at,
                 updated_at=interaction.updated_at,
                 file=(
@@ -171,6 +157,7 @@ class InteractionQuery:
                         original_filename=media.original_filename,
                         s3_key=media.s3_key,
                         file_type=media.file_type,
+                        meme_type=media.meme_type,
                         original_size=media.original_size,
                         compressed_size=media.compressed_size,
                         compression_ratio=media.compression_ratio,
@@ -301,3 +288,72 @@ class InteractionMutation:
             ),
             ai_response=result.get("ai_response"),  # The actual AI response content
         )
+
+    @strawberry.mutation
+    async def delete_media_file(
+        self,
+        info,
+        input: DeleteMediaFileInput,
+    ) -> DefaultResponse:
+        """
+        Delete a media file from S3 and database
+        This is called when user removes a file from the chat interface
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        # Get the media file
+        result = await db.execute(select(Media).where(Media.id == input.media_id))
+        media = result.scalar_one_or_none()
+
+        if not media:
+            return DefaultResponse(success=False, message="Media file not found")
+
+        # Check if the media file belongs to the current user
+        # We need to check through conversations to ensure user ownership
+        # conv_result = await db.execute(
+        #     select(Conversation)
+        #     .join(Conversation.files)
+        #     .where(Media.id == input.media_id)
+        #     .join(Interaction)
+        #     .where(Interaction.user_id == current_user.id)
+        # )
+        # conversation = conv_result.scalar_one_or_none()
+
+        # if not conversation:
+        #     return DefaultResponse(
+        #         success=False, message="You don't have permission to delete this file"
+        #     )
+
+        try:
+            # Delete from S3
+            from app.services.file_service import FileService
+
+            s3_deleted = await FileService.delete_file_from_s3(media.s3_key)
+
+            if not s3_deleted:
+                return DefaultResponse(
+                    success=False, message="Failed to delete file from storage"
+                )
+
+            # Remove the file from the conversation
+            # conversation.files.remove(media)
+
+            # Delete the media record from database
+            await db.delete(media)
+            await db.commit()
+
+            return DefaultResponse(
+                success=True, message="Media file deleted successfully"
+            )
+
+        except Exception as e:
+            await db.rollback()
+            return DefaultResponse(
+                success=False, message=f"Failed to delete media file: {str(e)}"
+            )

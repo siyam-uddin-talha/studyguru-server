@@ -552,7 +552,7 @@ class LangChainService:
                 retriever = self.vector_store.as_retriever(
                     search_kwargs={
                         "k": min(
-                            top_k * 2, 6
+                            top_k * 3, 10
                         ),  # Get more results to filter client-side
                         "expr": f"user_id == '{user_id}'",
                     }

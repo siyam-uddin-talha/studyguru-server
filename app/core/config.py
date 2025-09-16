@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     ZILLIZ_DIMENSION: int = int(getenv("ZILLIZ_DIMENSION", 1536))
     ZILLIZ_INDEX_METRIC: str = getenv("ZILLIZ_INDEX_METRIC", "IP")  # or "L2", "COSINE"
     ZILLIZ_CONSISTENCY_LEVEL: str = getenv("ZILLIZ_CONSISTENCY_LEVEL", "Bounded")
+    ADD_UNIT_ID_1: str = getenv(
+        "ADD_UNIT_ID_1", "ca-app-pub-2962676217775659/5723259375"
+    )
 
     class Config:
         env_file = ".env"
