@@ -9,9 +9,11 @@ from app.graphql.types.interaction import (
     InteractionResponse,
     InteractionListResponse,
     InteractionType,
+    ConversationType,
     MediaType,
     DoConversationInput,
     DeleteMediaFileInput,
+    UpdateInteractionTitleInput,
 )
 from app.models.interaction import Interaction
 from app.models.media import Media
@@ -111,6 +113,80 @@ class InteractionQuery:
         )
 
     @strawberry.field
+    async def messages(
+        self, info, id: str, limit: Optional[int] = 12, offset: Optional[int] = 0
+    ) -> List[ConversationType]:
+        """
+        Get messages (conversations) for a specific interaction with pagination
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return []
+
+        db: AsyncSession = context.db
+
+        # Get conversations for the interaction with pagination
+        result = await db.execute(
+            select(Conversation)
+            .options(selectinload(Conversation.files))
+            .join(Interaction)
+            .where(
+                Interaction.id == id,
+                Interaction.user_id == current_user.id,
+                Conversation.interaction_id == id,
+            )
+            .order_by(desc(Conversation.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
+        conversations = result.scalars().all()
+
+        # Convert to ConversationType
+        conversation_types = []
+        for conv in conversations:
+            # Convert files to MediaType
+            media_files = []
+            if conv.files:
+                for file in conv.files:
+                    media_files.append(
+                        MediaType(
+                            id=file.id,
+                            original_filename=file.original_filename,
+                            s3_key=file.s3_key,
+                            file_type=file.file_type,
+                            meme_type=file.meme_type,
+                            original_size=file.original_size,
+                            compressed_size=file.compressed_size,
+                            compression_ratio=file.compression_ratio,
+                            created_at=file.created_at,
+                        )
+                    )
+
+            conversation_types.append(
+                ConversationType(
+                    id=conv.id,
+                    interaction_id=conv.interaction_id,
+                    role=conv.role.value if conv.role else "USER",
+                    content=conv.content,
+                    question_type=conv.question_type,
+                    detected_language=conv.detected_language,
+                    tokens_used=conv.tokens_used or 0,
+                    points_cost=conv.points_cost or 0,
+                    status=conv.status,
+                    is_hidden=conv.is_hidden,
+                    error_message=conv.error_message,
+                    created_at=conv.created_at,
+                    updated_at=conv.updated_at,
+                    files=media_files if media_files else None,
+                    point_transaction=None,  # TODO: Add point transaction if needed
+                )
+            )
+
+        return conversation_types
+
+    @strawberry.field
     async def interaction(self, info, id: str) -> InteractionResponse:
         context = info.context
         current_user = await get_current_user_from_context(context)
@@ -135,11 +211,49 @@ class InteractionQuery:
 
         # Get associated media through conversations
         media = None
+        conversation_types = []
         if interaction.conversations:
             for conv in interaction.conversations:
-                if conv.files:
+                if conv.files and not media:
                     media = conv.files[0]  # Get first file
-                    break
+
+                # Convert files to MediaType
+                media_files = []
+                if conv.files:
+                    for file in conv.files:
+                        media_files.append(
+                            MediaType(
+                                id=file.id,
+                                original_filename=file.original_filename,
+                                s3_key=file.s3_key,
+                                file_type=file.file_type,
+                                meme_type=file.meme_type,
+                                original_size=file.original_size,
+                                compressed_size=file.compressed_size,
+                                compression_ratio=file.compression_ratio,
+                                created_at=file.created_at,
+                            )
+                        )
+
+                conversation_types.append(
+                    ConversationType(
+                        id=conv.id,
+                        interaction_id=conv.interaction_id,
+                        role=conv.role.value if conv.role else "USER",
+                        content=conv.content,
+                        question_type=conv.question_type,
+                        detected_language=conv.detected_language,
+                        tokens_used=conv.tokens_used or 0,
+                        points_cost=conv.points_cost or 0,
+                        status=conv.status,
+                        is_hidden=conv.is_hidden,
+                        error_message=conv.error_message,
+                        created_at=conv.created_at,
+                        updated_at=conv.updated_at,
+                        files=media_files if media_files else None,
+                        point_transaction=None,  # TODO: Add point transaction if needed
+                    )
+                )
 
         return InteractionResponse(
             success=True,
@@ -166,6 +280,7 @@ class InteractionQuery:
                     if media
                     else None
                 ),
+                conversations=conversation_types if conversation_types else None,
             ),
         )
 
@@ -356,4 +471,48 @@ class InteractionMutation:
             await db.rollback()
             return DefaultResponse(
                 success=False, message=f"Failed to delete media file: {str(e)}"
+            )
+
+    @strawberry.mutation
+    async def update_interaction_title(
+        self,
+        info,
+        input: UpdateInteractionTitleInput,
+    ) -> DefaultResponse:
+        """
+        Update the title of an interaction
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        # Get the interaction
+        result = await db.execute(
+            select(Interaction).where(
+                Interaction.id == input.interaction_id,
+                Interaction.user_id == current_user.id,
+            )
+        )
+        interaction = result.scalar_one_or_none()
+
+        if not interaction:
+            return DefaultResponse(success=False, message="Interaction not found")
+
+        try:
+            # Update the title
+            interaction.title = input.title
+            await db.commit()
+
+            return DefaultResponse(
+                success=True, message="Interaction title updated successfully"
+            )
+
+        except Exception as e:
+            await db.rollback()
+            return DefaultResponse(
+                success=False, message=f"Failed to update title: {str(e)}"
             )

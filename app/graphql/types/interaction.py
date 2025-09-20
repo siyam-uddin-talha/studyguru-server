@@ -7,20 +7,10 @@ from app.graphql.types.media import MediaType
 
 
 @strawberry.type
-class InteractionType:
-    id: str
-    user_id: str
-    title: Optional[str] = None
-    summary_title: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    file: Optional[MediaType] = None
-
-
-@strawberry.type
 class ConversationType:
     id: str
-    user_id: str
+    interaction_id: str
+    role: str
     content: Optional[JSON] = None
     question_type: Optional[str] = None
     detected_language: Optional[str] = None
@@ -36,10 +26,22 @@ class ConversationType:
 
 
 @strawberry.type
+class InteractionType:
+    id: str
+    user_id: str
+    title: Optional[str] = None
+    summary_title: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    file: Optional[MediaType] = None
+    conversations: Optional[List[ConversationType]] = None
+
+
+@strawberry.type
 class InteractionResponse:
     success: bool
     message: str
-    result: Optional[ConversationType] = None
+    result: Optional[InteractionType] = None
     interaction_id: Optional[str] = None
     is_new_interaction: Optional[bool] = None
     interaction: Optional[InteractionType] = None
@@ -63,6 +65,12 @@ class DoConversationInput:
 @strawberry.input
 class DeleteMediaFileInput:
     media_id: str
+
+
+@strawberry.input
+class UpdateInteractionTitleInput:
+    interaction_id: str
+    title: str
 
 
 @strawberry.type
