@@ -280,22 +280,179 @@ async def process_conversation_message(
             context_text = ""
 
         # === PHASE 3: OPTIMIZED AI GENERATION ===
-        try:
-            # Use streaming for better perceived performance
-            content_text, input_tokens, output_tokens, tokens_used = (
-                await langchain_service.generate_conversation_response(
-                    message=message or "",
-                    context=context_text,
-                    image_urls=media_urls if media_urls else None,
-                    interaction_title=interaction.title,
-                    interaction_summary=interaction.summary_title,
-                    max_tokens=max_tokens,
-                )
+        print(f"🎛️ DYNAMIC TOKEN SYSTEM")
+        print(f"📊 Max Tokens: {max_tokens}")
+        print(f"📎 Attachments: {len(media_urls) if media_urls else 0}")
+        if media_urls:
+            tokens_per_attachment = (
+                (max_tokens - 2000) // len(media_urls) if len(media_urls) > 0 else 0
             )
+            print(f"💡 Calculated tokens per attachment: {tokens_per_attachment}")
+        print("-" * 40)
 
-            # Fast title extraction for new interactions
-            if not interaction.title and not interaction.summary_title:
-                await _extract_interaction_metadata_fast(interaction, content_text)
+        try:
+            # Check if we have images that need document analysis
+            if media_urls and len(media_urls) > 0:
+                print("📋 DOCUMENT ANALYSIS MODE - Processing uploaded images")
+                # Use document analysis for images
+                analysis_results = []
+                total_tokens = 0
+
+                # Calculate tokens per attachment more accurately
+                base_tokens = 2000
+                attachment_tokens = (
+                    max(500, (max_tokens - base_tokens) // len(media_urls))
+                    if len(media_urls) > 0
+                    else 1000
+                )
+
+                for media_url in media_urls:
+                    print(f"🔍 Analyzing image: {media_url}")
+                    print(f"📊 Using {attachment_tokens} tokens for this image")
+                    analysis_result = await langchain_service.analyze_document(
+                        file_url=media_url, max_tokens=attachment_tokens
+                    )
+                    analysis_results.append(analysis_result)
+                    total_tokens += analysis_result.get("token", 0)
+                    print(f"📊 Analysis result type: {analysis_result.get('type')}")
+                    print(f"📊 Analysis tokens: {analysis_result.get('token', 0)}")
+
+                # Extract title and summary from analysis results if available
+                analysis_title = None
+                analysis_summary = None
+
+                # For single image, use the analysis title/summary directly
+                if len(analysis_results) == 1:
+                    analysis = analysis_results[0]
+                    if analysis.get("title") and not interaction.title:
+                        analysis_title = analysis["title"][:50]
+                    if analysis.get("summary_title") and not interaction.summary_title:
+                        analysis_summary = analysis["summary_title"][:100]
+                else:
+                    # For multiple images, use the first analysis that has title/summary
+                    for analysis in analysis_results:
+                        if analysis.get("title") and not analysis_title:
+                            analysis_title = analysis["title"][:50]
+                        if analysis.get("summary_title") and not analysis_summary:
+                            analysis_summary = analysis["summary_title"][:100]
+                        if analysis_title and analysis_summary:
+                            break
+
+                # Set the extracted title and summary
+                if analysis_title:
+                    interaction.title = analysis_title
+                    print(f"📝 Using analysis title: {analysis_title}")
+                if analysis_summary:
+                    interaction.summary_title = analysis_summary
+                    print(f"📝 Using analysis summary: {analysis_summary}")
+
+                # Combine analysis results
+                if len(analysis_results) == 1:
+                    # Single image - use the analysis directly
+                    analysis = analysis_results[0]
+                    if analysis.get("type") == "mcq" and analysis.get(
+                        "_result", {}
+                    ).get("questions"):
+                        # Format MCQ content
+                        questions = analysis["_result"]["questions"]
+                        content_parts = []
+                        for i, q in enumerate(questions, 1):
+                            question_text = f"{i}. {q.get('question', '')}\n\n"
+                            if q.get("options"):
+                                for opt_key, opt_value in q["options"].items():
+                                    question_text += f"{opt_key.upper()}. {opt_value}\n"
+                            question_text += "\n"
+                            if q.get("answer"):
+                                question_text += f"Answer: {q['answer']}\n\n"
+                            if q.get("explanation"):
+                                question_text += f"Explanation: {q['explanation']}\n"
+                            content_parts.append(question_text)
+                        content_text = "\n".join(content_parts)
+                    else:
+                        # Use content from analysis
+                        content_text = analysis.get("_result", {}).get(
+                            "content", str(analysis)
+                        )
+                else:
+                    # Multiple images - combine summaries
+                    content_parts = []
+                    for i, analysis in enumerate(analysis_results, 1):
+                        content_parts.append(
+                            f"Document {i}: {analysis.get('_result', {}).get('content', str(analysis))}"
+                        )
+                    content_text = "\n\n".join(content_parts)
+
+                # Set token counts from analysis
+                input_tokens = total_tokens // 2  # Estimate
+                output_tokens = total_tokens // 2  # Estimate
+                tokens_used = total_tokens
+
+                print(f"📄 Final content type: Document Analysis")
+                print(f"📄 Final content length: {len(content_text)}")
+
+            else:
+                print("💬 CONVERSATION MODE - No images, using text generation")
+                # Use streaming for better perceived performance
+                content_text, input_tokens, output_tokens, tokens_used = (
+                    await langchain_service.generate_conversation_response(
+                        message=message or "",
+                        context=context_text,
+                        image_urls=None,  # No images in conversation mode
+                        interaction_title=interaction.title,
+                        interaction_summary=interaction.summary_title,
+                        max_tokens=max_tokens,
+                    )
+                )
+
+            # Log raw AI generation response
+            print("🚀 RAW AI GENERATION RESPONSE")
+            print("-" * 50)
+            print(
+                f"📊 Tokens Used: {tokens_used} (Input: {input_tokens}, Output: {output_tokens})"
+            )
+            print(f"📝 Content Type: {type(content_text)}")
+            print(f"📝 Content Length: {len(str(content_text)) if content_text else 0}")
+            print("📄 Raw Content:")
+
+            print(content_text)
+
+            print("-" * 50)
+
+            # Fast title extraction for new interactions (with error handling)
+            try:
+
+                if not interaction.title or not interaction.summary_title:
+
+                    await _extract_interaction_metadata_fast(
+                        interaction, content_text, message or ""
+                    )
+                    # Handle session attachment issue - merge the interaction into current session
+                    try:
+                        # If interaction is from another session, merge it into current session
+                        interaction = await db.merge(interaction)
+                        await db.flush()  # Force the session to register the changes
+                        await db.refresh(
+                            interaction
+                        )  # Refresh to ensure changes are reflected
+                    except Exception as session_error:
+
+                        # Alternative: Query the interaction fresh from current session
+
+                        fresh_result = await db.execute(
+                            select(Interaction).where(Interaction.id == interaction.id)
+                        )
+                        fresh_interaction = fresh_result.scalar_one_or_none()
+                        if fresh_interaction:
+                            fresh_interaction.title = interaction.title
+                            fresh_interaction.summary_title = interaction.summary_title
+                            await db.flush()
+                            await db.refresh(fresh_interaction)
+                            # Update the reference
+                            interaction = fresh_interaction
+
+            except Exception as title_error:
+                pass
+                # Don't let title generation failure break the main AI response
 
         except Exception as e:
             ai_failed = Conversation(
@@ -353,6 +510,23 @@ async def process_conversation_message(
         # Process AI content efficiently
         ai_content_type, ai_result_content = _process_ai_content_fast(content_text)
 
+        # Log processed AI content
+        print("⚙️ PROCESSED AI CONTENT")
+        print("-" * 40)
+        print(f"📊 Content Type: {ai_content_type}")
+        print(
+            f"📝 Processed Length: {len(str(ai_result_content)) if ai_result_content else 0}"
+        )
+        print("📄 Processed Content:")
+        if ai_result_content:
+            if len(str(ai_result_content)) > 300:
+                print(f"{str(ai_result_content)[:300]}...")
+            else:
+                print(ai_result_content)
+        else:
+            print("No processed content")
+        print("-" * 40)
+
         # Create AI conversation
         ai_conv = Conversation(
             interaction_id=str(interaction.id),
@@ -380,8 +554,11 @@ async def process_conversation_message(
         db.add(pt)
 
         # === PHASE 5: BACKGROUND OPERATIONS ===
+
         # Commit first for faster response
         await db.commit()
+
+        # Test: Query the interaction directly from DB to verify persistence
 
         # Send AI response notification in background
         asyncio.create_task(
@@ -453,25 +630,102 @@ async def _send_ai_response_notification(
 
 
 async def _extract_interaction_metadata_fast(
-    interaction: Interaction, content_text: str
+    interaction: Interaction, content_text: str, original_message: str = ""
 ):
-    """Fast metadata extraction with error handling"""
+    """Fast metadata extraction with dedicated title generation"""
     try:
+        # First try to extract from JSON response (existing logic)
         if content_text.strip().startswith("{"):
             parsed_response = json.loads(content_text)
             if isinstance(parsed_response, dict):
                 if "title" in parsed_response and not interaction.title:
-                    interaction.title = parsed_response["title"][:100]  # Limit length
+                    interaction.title = parsed_response["title"][:50]
                 if "summary_title" in parsed_response and not interaction.summary_title:
-                    interaction.summary_title = parsed_response["summary_title"][:200]
-    except (json.JSONDecodeError, KeyError, TypeError):
-        pass
+                    interaction.summary_title = parsed_response["summary_title"][:100]
+                return  # If we got titles from JSON, we're done
+
+        # If no title from JSON or plain text response, generate one using AI
+        if not interaction.title or not interaction.summary_title:
+
+            # First, try AI generation
+            try:
+                title, summary_title = (
+                    await langchain_service.generate_interaction_title(
+                        message=original_message,
+                        response_preview=content_text[
+                            :300
+                        ],  # First 300 chars of response
+                    )
+                )
+
+            except Exception as ai_title_error:
+
+                # Fallback to simple title generation
+                if original_message:
+                    title = original_message[:40].strip()
+                    summary_title = f"Help with {title.lower()}"
+                else:
+                    title = "Study Session"
+                    summary_title = "Educational assistance"
+
+            if title and not interaction.title:
+                interaction.title = title
+
+            if summary_title and not interaction.summary_title:
+                interaction.summary_title = summary_title
+
+    except (json.JSONDecodeError, KeyError, TypeError, Exception) as e:
+        print(f"Metadata extraction error: {e}")
+        # Final fallback: create basic title from message
+        if original_message and not interaction.title:
+            interaction.title = original_message[:40].strip()
 
 
 def _process_ai_content_fast(content_text: str) -> tuple[str, str]:
-    """Fast AI content processing with caching"""
+    """Fast AI content processing with enhanced formatting and escaped character handling"""
     ai_content_type = "written"
     ai_result_content = content_text
+
+    # Clean up escaped characters and LaTeX formatting
+    if content_text:
+        # Remove escaped characters that show as backslashes
+        ai_result_content = content_text.replace("\\(", "(").replace("\\)", ")")
+        ai_result_content = ai_result_content.replace("\\[", "[").replace("\\]", "]")
+        ai_result_content = ai_result_content.replace("\\\\", "")
+        ai_result_content = ai_result_content.replace("\\ ", " ")
+
+        # Clean up common LaTeX patterns
+        ai_result_content = ai_result_content.replace("\\geq", "≥")
+        ai_result_content = ai_result_content.replace("\\leq", "≤")
+        ai_result_content = ai_result_content.replace("\\times", "×")
+        ai_result_content = ai_result_content.replace("\\div", "÷")
+
+    # Detect MCQ patterns in plain text content
+    if content_text and not content_text.strip().startswith("{"):
+        # Check for MCQ patterns: numbered questions with Answer: sections
+        import re
+
+        # Pattern 1: Numbered questions with "Answer:" pattern
+        answer_pattern = r"\d+\.\s+.+?Answer:\s*[A-Za-z]"
+        if re.search(answer_pattern, content_text, re.MULTILINE | re.DOTALL):
+            ai_content_type = "mcq"
+            print(f"🎯 MCQ DETECTED: Answer pattern found")
+        else:
+            # Pattern 2: Multiple numbered questions with options A, B, C, D
+            option_pattern = (
+                r"\d+\.\s+.+?[A-D]\.\s+.+?[A-D]\.\s+.+?[A-D]\.\s+.+?[A-D]\."
+            )
+            if re.search(option_pattern, content_text, re.MULTILINE | re.DOTALL):
+                ai_content_type = "mcq"
+                print(f"🎯 MCQ DETECTED: Multiple choice options found")
+            else:
+                # Pattern 3: Explanation sections (common in MCQ)
+                explanation_pattern = r"Explanation:\s+.+"
+                if re.search(explanation_pattern, content_text, re.MULTILINE):
+                    ai_content_type = "mcq"
+                    print(f"🎯 MCQ DETECTED: Explanation sections found")
+
+        print(f"🔍 MCQ Detection result: {ai_content_type}")
 
     try:
         if content_text and content_text.strip().startswith("{"):
@@ -484,32 +738,50 @@ def _process_ai_content_fast(content_text: str) -> tuple[str, str]:
                     if "content" in result_content:
                         ai_result_content = result_content["content"]
                     elif "questions" in result_content:
-                        # Fast MCQ formatting
+                        # Enhanced MCQ formatting
                         questions = result_content["questions"][
                             :3
                         ]  # Limit to 3 questions
                         formatted_questions = []
 
-                        for q in questions:
-                            question_text = q.get("question", "")[:200]  # Limit length
+                        for i, q in enumerate(questions, 1):
+                            question_text = q.get("question", "")
                             options = q.get("options", {})
                             answer = q.get("answer", "")
-                            explanation = q.get("explanation", "")[
-                                :100
-                            ]  # Limit explanation
+                            explanation = q.get("explanation", "")
 
-                            formatted_q = f"**{question_text}**\n"
-                            for opt_key, opt_value in list(options.items())[
-                                :4
-                            ]:  # Max 4 options
-                                formatted_q += f"{opt_key}. {str(opt_value)[:100]}\n"
+                            # Format question with better structure
+                            formatted_q = f"{i}. {question_text}\n\n"
+
+                            # Format options
+                            for opt_key, opt_value in list(options.items())[:4]:
+                                formatted_q += f"{opt_key.upper()}. {str(opt_value)}\n"
+
+                            formatted_q += "\n"
+
+                            # Add answer with clear formatting
                             if answer:
-                                formatted_q += f"**Answer:** {answer}\n"
+                                formatted_q += f"Answer: {answer.upper()}\n\n"
+
+                            # Add explanation with clear formatting
                             if explanation:
-                                formatted_q += f"**Explanation:** {explanation}\n"
+                                formatted_q += f"Explanation: {explanation}\n"
+
                             formatted_questions.append(formatted_q)
 
-                        ai_result_content = "\n\n".join(formatted_questions)
+                        ai_result_content = "\n".join(formatted_questions)
+
+        # Apply character cleaning to any processed content
+        if ai_result_content:
+            ai_result_content = ai_result_content.replace("\\(", "(").replace(
+                "\\)", ")"
+            )
+            ai_result_content = ai_result_content.replace("\\[", "[").replace(
+                "\\]", "]"
+            )
+            ai_result_content = ai_result_content.replace("\\\\", "")
+            ai_result_content = ai_result_content.replace("\\ ", " ")
+
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
 

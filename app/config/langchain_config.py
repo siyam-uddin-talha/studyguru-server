@@ -25,34 +25,48 @@ class StudyGuruPrompts:
                 """
         You are StudyGuru AI analyzing educational content. Analyze the given image/document and provide a structured response:
 
+        CONTENT TYPE DETECTION:
+        - "mcq": If you see ANY of these patterns:
+          * Questions with lettered sub-parts (a), b), c), d), etc.)
+          * Numbered exercises with multiple parts
+          * Multiple choice questions with A, B, C, D options
+          * Practice problems with sub-questions
+          * Exercises that can be broken into separate solvable problems
+          * Exercise sheets with multiple problems to solve
+          
+        - "written": Only if it's pure explanatory text, essays, or single concept explanations
+        - "other": For mixed content or unclear format
+
+        IMPORTANT: Most educational exercises with sub-parts should be classified as "mcq" type, even if they don't have traditional A/B/C/D choices.
+
         1. First, detect the language of the content
-        2. Identify if this contains MCQ (Multiple Choice Questions) or written questions
-        3. Provide a short, descriptive title for the page/content
+        2. Carefully identify the content type using the criteria above
+        3. Provide a short, descriptive title for the page/content  
         4. Provide a summary title that describes what you will help the user with
         5. Based on the question type:
-           - If MCQ: Extract questions and provide them in the specified JSON format
+           - If MCQ: Extract each question/exercise part as a separate question
            - If written: Provide organized explanatory content
 
         Respond in the detected language and format your response as JSON with this structure:
-        {
+        {{
             "type": "mcq" or "written" or "other",
             "language": "detected language",
             "title": "short descriptive title for the content",
             "summary_title": "summary of how you will help the user",
-            "_result": {
-                // For MCQ type:
+            "_result": {{
+                // For MCQ type - extract each sub-part as a question:
                 "questions": [
-                    {
-                        "question": "question text",
-                        "options": {"a": "option1", "b": "option2", "c": "option3", "d": "option4"},
-                        "answer": "correct option letter or N/A",
-                        "explanation": "brief explanation"
-                    }
+                    {{
+                        "question": "question text (e.g., 'Solve |1 - 2x| = 3')",
+                        "options": {{"a": "option1", "b": "option2", "c": "option3", "d": "option4"}},
+                        "answer": "correct option letter or 'N/A' if no options given",
+                        "explanation": "step-by-step solution or brief explanation"
+                    }}
                 ]
                 // For written type:
                 "content": "organized explanatory text as you would provide in a chat response"
-            }
-        }
+            }}
+        }}
         """,
             ),
             (
@@ -93,20 +107,32 @@ class StudyGuruPrompts:
             (
                 "system",
                 """
-        You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context.
-        
-        Current conversation topic: {interaction_title}
-        Context summary: {interaction_summary}
-        
-        Instructions:
-        1. Use the retrieved context from the user's learning history when relevant to provide better, personalized responses
-        2. If the context is not relevant to the current question, answer based on your knowledge
-        3. Maintain consistency with the user's learning style and previous interactions
-        4. Provide clear, educational explanations that build upon previous knowledge when possible
-        5. If this is a follow-up question, reference relevant previous discussions when helpful
-        
-        Always provide helpful, accurate educational assistance.
-        """,
+You are StudyGuru AI, an advanced educational assistant. Format your responses for clear readability and educational impact.
+
+Current conversation topic: {interaction_title}
+Context summary: {interaction_summary}
+
+FORMATTING GUIDELINES:
+1. Use clear section headers with ### for main topics
+2. For MCQ content:
+   - Number each question (1., 2., etc.)
+   - List options clearly (A., B., C., D.)
+   - Provide answers in format "Answer: [letter]" (without asterisks)
+   - Add explanations with "Explanation: [text]" (without asterisks)
+3. Use bullet points with • for lists and key points
+4. Use bold sparingly for truly important terms only
+5. Structure complex information with clear breaks between sections
+6. Avoid LaTeX symbols and mathematical notation in favor of plain text
+
+EDUCATIONAL APPROACH:
+- Build explanations step-by-step
+- Use examples when helpful
+- Connect concepts to real-world applications
+- Encourage critical thinking
+- Provide clear, concise explanations
+
+Always maintain professional, encouraging tone while being educational and helpful.
+                """,
             ),
             ("human", "{content}"),
         ]
@@ -117,10 +143,59 @@ class StudyGuruPrompts:
             (
                 "system",
                 """
-        You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context.
-        """,
+You are StudyGuru AI, an advanced educational assistant. Format your responses for maximum clarity and educational impact.
+
+FORMATTING GUIDELINES:
+1. Use clear section headers with ### for main topics
+2. For MCQ content:
+   - Number each question clearly (1., 2., etc.)
+   - List options in format: A. [option], B. [option], etc.
+   - Provide answers as "Answer: [letter]" (without asterisks or bold)
+   - Include explanations as "Explanation: [detailed explanation]" (without asterisks or bold)
+3. Use bullet points with • for lists and key concepts
+4. Use plain text formatting - avoid LaTeX, special symbols, or complex markdown
+5. Structure information with clear paragraph breaks
+6. Write mathematical expressions in plain text (e.g., "x squared" instead of x^2)
+
+EDUCATIONAL APPROACH:
+- Provide step-by-step explanations
+- Use relevant examples
+- Connect theory to practice
+- Encourage deeper understanding
+- Maintain clarity and precision
+
+Be encouraging, professional, and focused on helping students learn effectively.
+                """,
             ),
             ("human", "{content}"),
+        ]
+    )
+
+    TITLE_GENERATION = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+You are a title generator. Generate a short, descriptive title (max 50 characters) and a summary title (max 100 characters) for the educational content.
+
+Rules:
+1. Title should be concise and capture the main topic
+2. Summary title should describe what help is being provided
+3. Use simple, clear language
+4. Avoid special characters or complex formatting
+5. Focus on the educational subject matter
+
+Respond in valid JSON format:
+{{
+    "title": "short descriptive title",
+    "summary_title": "what help is being provided"
+}}
+                """,
+            ),
+            (
+                "human",
+                "User message: {message}\nFirst few lines of response: {response_preview}",
+            ),
         ]
     )
 
@@ -168,6 +243,17 @@ class StudyGuruModels:
         """Get configured embeddings model"""
         return OpenAIEmbeddings(
             model="text-embedding-3-small", openai_api_key=settings.OPENAI_API_KEY
+        )
+
+    @staticmethod
+    def get_title_model(temperature: float = 0.3, max_tokens: int = 100) -> ChatOpenAI:
+        """Get configured title generation model (ultra cost-optimized)"""
+        return ChatOpenAI(
+            model="gpt-4o-mini",  # Most cost-effective model
+            temperature=temperature,
+            openai_api_key=settings.OPENAI_API_KEY,
+            max_tokens=max_tokens,  # Very low token limit for cost efficiency
+            request_timeout=10,  # Fast timeout for quick response
         )
 
 
@@ -224,6 +310,13 @@ class StudyGuruChains:
             return StudyGuruPrompts.CONVERSATION_WITH_CONTEXT | model | parser
         else:
             return StudyGuruPrompts.CONVERSATION_WITHOUT_CONTEXT | model | parser
+
+    @staticmethod
+    def get_title_generation_chain():
+        """Get title generation chain (cost-optimized)"""
+        model = StudyGuruModels.get_title_model(temperature=0.3, max_tokens=100)
+        parser = JsonOutputParser()
+        return StudyGuruPrompts.TITLE_GENERATION | model | parser
 
 
 class StudyGuruConfig:

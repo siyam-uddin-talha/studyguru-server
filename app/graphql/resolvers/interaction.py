@@ -384,6 +384,32 @@ class InteractionMutation:
         # Get the updated interaction to return current state
         await db.refresh(interaction)
 
+        # Log the complete AI response from resolver
+        print("=" * 80)
+        print("🤖 AI RESPONSE FROM RESOLVER")
+        print("=" * 80)
+        print(f"📊 Result Success: {result.get('success')}")
+        print(f"📝 Result Message: {result.get('message')}")
+        print(f"🆔 Interaction ID: {result.get('interaction_id')}")
+        print(f"📄 AI Response Type: {type(result.get('ai_response'))}")
+        print(
+            f"📄 AI Response Length: {len(str(result.get('ai_response'))) if result.get('ai_response') else 0}"
+        )
+        print("-" * 40)
+        print("🔤 AI RESPONSE CONTENT:")
+        print("-" * 40)
+        ai_response = result.get("ai_response")
+        if ai_response:
+            # Truncate long responses for readability
+            if len(str(ai_response)) > 500:
+                print(f"{str(ai_response)[:500]}...")
+                print(f"[TRUNCATED - Full length: {len(str(ai_response))} characters]")
+            else:
+                print(ai_response)
+        else:
+            print("No AI response content")
+        print("=" * 80)
+
         return InteractionResponse(
             success=bool(result.get("success")),
             message=result.get("message"),

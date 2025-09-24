@@ -172,56 +172,32 @@ class LangChainService:
             # Create callback handler to track tokens
             callback_handler = StudyGuruCallbackHandler()
 
-            # Document analysis prompt
+            # Create document analysis prompt with file URL
+            # Get the system message content from the existing template
+            system_message_content = StudyGuruConfig.PROMPTS.DOCUMENT_ANALYSIS.messages[
+                0
+            ].prompt.template
+
             analysis_prompt = ChatPromptTemplate.from_messages(
                 [
-                    SystemMessage(
-                        content="""
-                You are StudyGuru AI analyzing educational content. Analyze the given image/document and provide a structured response:
-
-                1. First, detect the language of the content
-                2. Identify if this contains MCQ (Multiple Choice Questions) or written questions
-                3. Provide a short, descriptive title for the page/content
-                4. Provide a summary title that describes what you will help the user with
-                5. Based on the question type:
-                   - If MCQ: Extract questions and provide them in the specified JSON format
-                   - If written: Provide organized explanatory content
-
-                Respond in the detected language and format your response as JSON with this structure:
-                {
-                    "type": "mcq" or "written" or "other",
-                    "language": "detected language",
-                    "title": "short descriptive title for the content",
-                    "summary_title": "summary of how you will help the user",
-                    "_result": {
-                        // For MCQ type:
-                        "questions": [
-                            {
-                                "question": "question text",
-                                "options": {"a": "option1", "b": "option2", "c": "option3", "d": "option4"},
-                                "answer": "correct option letter or N/A",
-                                "explanation": "brief explanation"
-                            }
-                        ]
-                        // For written type:
-                        "content": "organized explanatory text as you would provide in a chat response"
-                    }
-                }
-                """
+                    (
+                        "system",
+                        system_message_content,
                     ),
-                    HumanMessage(
-                        content=[
+                    (
+                        "human",
+                        [
                             {
                                 "type": "text",
                                 "text": "Please analyze this document/image:",
                             },
                             {"type": "image_url", "image_url": {"url": file_url}},
-                        ]
+                        ],
                     ),
                 ]
             )
 
-            # Create chain
+            # Create chain with vision model and parser
             chain = analysis_prompt | self.vision_llm | self.document_parser
 
             # Run analysis
@@ -650,6 +626,72 @@ class LangChainService:
     def calculate_points_cost(self, tokens_used: int) -> int:
         """Calculate points cost based on tokens used"""
         return max(1, tokens_used // 100)
+
+    async def generate_interaction_title(
+        self, message: str, response_preview: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Generate interaction title and summary using cost-efficient model"""
+        try:
+            # Limit input sizes for cost efficiency
+            limited_message = message[:200] if message else ""
+            limited_response = response_preview[:300] if response_preview else ""
+
+            # Create callback handler for minimal token tracking
+            callback_handler = StudyGuruCallbackHandler()
+
+            # Use the title generation chain
+            from app.config.langchain_config import (
+                StudyGuruModels,
+                StudyGuruPrompts,
+            )
+            from langchain_core.output_parsers import JsonOutputParser
+
+            # Create chain directly to avoid any import issues
+            model = StudyGuruModels.get_title_model(temperature=0.3, max_tokens=100)
+            parser = JsonOutputParser()
+            title_chain = StudyGuruPrompts.TITLE_GENERATION | model | parser
+
+            # Generate title
+            result = await title_chain.ainvoke(
+                {
+                    "message": limited_message,
+                    "response_preview": limited_response,
+                },
+                config={"callbacks": [callback_handler]},
+            )
+
+            # Extract title and summary
+            title = result.get("title", "")[:50] if result.get("title") else None
+            summary_title = (
+                result.get("summary_title", "")[:100]
+                if result.get("summary_title")
+                else None
+            )
+
+            return title, summary_title
+
+        except Exception as e:
+            print(f"Title generation error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            # Fallback: create simple title from message
+            if message:
+                simple_title = message[:40].strip()
+                fallback_result = (simple_title, f"Help with {simple_title.lower()}")
+
+                return fallback_result
+            elif response_preview:
+                # Try to create title from response if no message
+                simple_title = response_preview[:40].strip()
+                fallback_result = (simple_title, "Educational assistance")
+
+                return fallback_result
+            else:
+                # Last resort fallback
+                fallback_result = ("Study Session", "Educational assistance")
+
+                return fallback_result
 
 
 # Global instance
