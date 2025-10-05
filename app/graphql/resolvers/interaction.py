@@ -14,13 +14,14 @@ from app.graphql.types.interaction import (
     DoConversationInput,
     DeleteMediaFileInput,
     UpdateInteractionTitleInput,
+    CancelGenerationInput,
 )
 from app.models.interaction import Interaction
 from app.models.media import Media
 from app.models.interaction import Conversation, ConversationRole
 from app.models.user import User
 
-from app.services.interaction import process_conversation_message
+from app.services.interaction import process_conversation_message, cancel_ai_generation
 from app.services.file_service import FileService
 from app.helpers.user import get_current_user_from_context
 from app.constants.constant import CONSTANTS
@@ -541,4 +542,34 @@ class InteractionMutation:
             await db.rollback()
             return DefaultResponse(
                 success=False, message=f"Failed to update title: {str(e)}"
+            )
+
+    @strawberry.mutation
+    async def cancel_generation(
+        self,
+        info,
+        input: CancelGenerationInput,
+    ) -> DefaultResponse:
+        """
+        Cancel ongoing AI response generation
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        try:
+            result = await cancel_ai_generation(
+                user_id=str(current_user.id), interaction_id=input.interaction_id, db=db
+            )
+
+            return DefaultResponse(success=result["success"], message=result["message"])
+
+        except Exception as e:
+            print(f"Error cancelling generation: {e}")
+            return DefaultResponse(
+                success=False, message=f"Failed to cancel generation: {str(e)}"
             )

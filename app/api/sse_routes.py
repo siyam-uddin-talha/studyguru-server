@@ -56,35 +56,67 @@ async def stream_events(request: Request, db: AsyncSession = Depends(get_db)):
 
         # Add connection to manager
         sse_manager.add_connection(user_id, queue)
+        total_connections = sum(
+            len(queues) for queues in sse_manager.active_connections.values()
+        )
+        print(f"\n{'='*60}")
+        print(f"🔗 NEW SSE CONNECTION")
+        print(f"{'='*60}")
+        print(f"👤 User ID: {user_id}")
+        print(
+            f"📊 User's Connections: {len(sse_manager.active_connections.get(user_id, []))}"
+        )
+        print(f"🌐 Total Server Connections: {total_connections}")
+        print(f"{'='*60}\n")
 
         try:
             # Send initial connection message
-            yield f"data: {json.dumps({'type': 'connected', 'data': {'user_id': user_id}})}\n\n"
+            initial_message = {"type": "connected", "data": {"user_id": user_id}}
+            print(f"Sending SSE initial message: {initial_message}")
+            yield f"data: {json.dumps(initial_message)}\n\n"
 
             while True:
                 try:
                     # Wait for messages with timeout
                     message = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    print(
+                        f"Sending SSE message to {user_id}: {message.get('type', 'unknown')}"
+                    )
                     yield f"data: {json.dumps(message)}\n\n"
                 except asyncio.TimeoutError:
                     # Send keepalive
+                    print(f"Sending SSE keepalive to {user_id}")
                     yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
                 except Exception as e:
-                    print(f"SSE error: {e}")
+                    print(f"SSE error for user {user_id}: {e}")
                     break
 
         finally:
             # Clean up connection
             sse_manager.remove_connection(user_id, queue)
+            total_connections = sum(
+                len(queues) for queues in sse_manager.active_connections.values()
+            )
+            print(f"\n{'='*60}")
+            print(f"❌ SSE CONNECTION CLOSED")
+            print(f"{'='*60}")
+            print(f"👤 User ID: {user_id}")
+            print(
+                f"📊 User's Remaining Connections: {len(sse_manager.active_connections.get(user_id, []))}"
+            )
+            print(f"🌐 Total Server Connections: {total_connections}")
+            print(f"{'='*60}\n")
 
     return StreamingResponse(
         event_generator(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
+            "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable buffering for nginx
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control",
+            "Access-Control-Allow-Headers": "Cache-Control, Authorization",
         },
     )
 
@@ -102,7 +134,9 @@ async def notify_message_received_sse(
             "status": "processing",
         },
     }
+    print(f"Queueing 'message_received' SSE notification for user {user_id}")
     await sse_manager.send_message(user_id, message)
+    print(f"'message_received' notification queued successfully")
 
 
 # Function to send AI response ready notification
@@ -114,4 +148,7 @@ async def notify_ai_response_ready_sse(
         "type": "ai_response_ready",
         "data": {"interaction_id": interaction_id, "ai_response": ai_response},
     }
+    print(f"Queueing 'ai_response_ready' SSE notification for user {user_id}")
+    print(f"Response preview: {ai_response[:100]}...")
     await sse_manager.send_message(user_id, message)
+    print(f"'ai_response_ready' notification queued successfully")

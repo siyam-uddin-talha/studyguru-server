@@ -27,14 +27,27 @@ class ConnectionManager:
                 del self.active_connections[user_id]
 
     async def send_personal_message(self, message: dict, user_id: str):
-        if user_id in self.active_connections:
-            # Send to all connections for this user
-            for connection in self.active_connections[user_id].copy():
-                try:
-                    await connection.send_text(json.dumps(message))
-                except:
-                    # Remove dead connections
-                    self.active_connections[user_id].remove(connection)
+        if (
+            user_id not in self.active_connections
+            or not self.active_connections[user_id]
+        ):
+            raise Exception(f"No active WebSocket connections for user {user_id}")
+
+        # Send to all connections for this user
+        sent_successfully = False
+        for connection in self.active_connections[user_id].copy():
+            try:
+                await connection.send_text(json.dumps(message))
+                sent_successfully = True
+            except Exception as e:
+                print(f"Failed to send WebSocket message: {e}")
+                # Remove dead connections
+                self.active_connections[user_id].remove(connection)
+
+        if not sent_successfully:
+            raise Exception(
+                f"Failed to send message to any WebSocket connection for user {user_id}"
+            )
 
 
 manager = ConnectionManager()

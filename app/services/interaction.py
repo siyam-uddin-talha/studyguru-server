@@ -30,6 +30,78 @@ from app.core.database import AsyncSessionLocal
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+# Track active AI generation tasks for cancellation
+active_generation_tasks: Dict[str, asyncio.Task] = {}
+
+
+async def cancel_ai_generation(
+    user_id: str, interaction_id: str, db: AsyncSession
+) -> Dict[str, Any]:
+    """Cancel ongoing AI generation for a user's interaction"""
+    print(f"\n{'='*60}")
+    print(f"🛑 CANCELLATION REQUESTED")
+    print(f"{'='*60}")
+    print(f"👤 User ID: {user_id}")
+    print(f"💬 Interaction ID: {interaction_id}")
+    print(f"{'='*60}\n")
+
+    # Check if there's an active task for this interaction
+    task_key = f"{user_id}_{interaction_id}"
+    if task_key in active_generation_tasks:
+        task = active_generation_tasks[task_key]
+        if not task.done():
+            task.cancel()
+            print(f"✅ Cancelled active AI generation task for {task_key}")
+        del active_generation_tasks[task_key]
+
+    # Find the most recent processing conversation for this interaction
+    result = await db.execute(
+        select(Conversation)
+        .where(
+            Conversation.interaction_id == interaction_id,
+            Conversation.role == ConversationRole.AI,
+            Conversation.status == "processing",
+        )
+        .order_by(Conversation.created_at.desc())
+        .limit(1)
+    )
+    processing_conv = result.scalar_one_or_none()
+
+    if processing_conv:
+        # Mark as cancelled
+        processing_conv.status = "cancelled"
+        processing_conv.error_message = "Generation stopped by user"
+        processing_conv.content = {
+            "type": "text",
+            "result": {"content": "Response generation was stopped by user."},
+        }
+        await db.commit()
+        print(f"✅ Marked conversation {processing_conv.id} as cancelled")
+
+        # Send notification that generation was cancelled
+        try:
+            await notify_ai_response_ready_sse(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                ai_response="Response generation was stopped by user.",
+            )
+            print(f"✅ Sent cancellation notification via SSE")
+        except Exception as e:
+            print(f"⚠️  Failed to send cancellation notification: {e}")
+
+        return {
+            "success": True,
+            "message": "Generation cancelled successfully",
+            "interaction_id": interaction_id,
+        }
+    else:
+        print(f"⚠️  No processing conversation found to cancel")
+        return {
+            "success": False,
+            "message": "No active generation found",
+            "interaction_id": interaction_id,
+        }
+
 
 async def process_conversation_message(
     *,
@@ -128,6 +200,30 @@ async def process_conversation_message(
                 for media_obj in media_objects
             ]
             await asyncio.gather(*media_tasks, return_exceptions=True)
+
+        # Commit user message immediately for instant notification
+        await db.commit()
+
+        print(f"\n🚀 USER MESSAGE STORED - Sending immediate notification")
+        print(f"   User ID: {user_id}")
+        print(f"   Interaction ID: {interaction.id}")
+        print(f"   Conversation ID: {user_conv.id}\n")
+
+        # Send notification IMMEDIATELY after user message is stored
+        # This gives instant feedback to the user with typing indicator
+        notification_task = asyncio.create_task(
+            _send_notifications_background(
+                str(user_id), str(interaction.id), str(user_conv.id)
+            )
+        )
+        # Don't await - let it run in background, but keep reference
+        notification_task.add_done_callback(
+            lambda t: (
+                print(f"✅ Message notification task completed")
+                if not t.exception()
+                else print(f"❌ Message notification task failed: {t.exception()}")
+            )
+        )
 
         # === PHASE 2: PARALLEL VALIDATION & CONTEXT RETRIEVAL ===
         async def run_guardrails():
@@ -245,13 +341,6 @@ async def process_conversation_message(
                 print(f"Fast context retrieval error: {e}")
                 return ""
 
-        # Send notification in background (non-blocking)
-        asyncio.create_task(
-            _send_notifications_background(
-                str(user_id), str(interaction.id), str(user_conv.id)
-            )
-        )
-
         # Run guardrails and context retrieval in parallel
         guardrail_result, context_text = await asyncio.gather(
             run_guardrails(), get_context_fast(), return_exceptions=True
@@ -263,16 +352,41 @@ async def process_conversation_message(
             and guardrail_result
             and guardrail_result.is_violation
         ):
+            # Update user conversation status (already committed above)
             user_conv.status = "failed"
             user_conv.error_message = (
                 f"Request blocked: {guardrail_result.violation_type}"
             )
+
+            # Create AI response for blocked content
+            ai_blocked = Conversation(
+                interaction_id=str(interaction.id),
+                role=ConversationRole.AI,
+                content={
+                    "type": "text",
+                    "result": {
+                        "content": f"I cannot process this request: {guardrail_result.violation_type}"
+                    },
+                },
+                status="completed",
+            )
+            db.add(ai_blocked)
             await db.commit()
+
+            # Send AI response notification for blocked content
+            asyncio.create_task(
+                _send_ai_response_notification(
+                    str(user_id),
+                    str(interaction.id),
+                    f"I cannot process this request: {guardrail_result.violation_type}",
+                )
+            )
+
             return {
                 "success": False,
                 "message": f"Request blocked: {guardrail_result.violation_type}",
                 "interaction_id": str(interaction.id),
-                "ai_response": None,
+                "ai_response": f"I cannot process this request: {guardrail_result.violation_type}",
             }
 
         # Handle context retrieval exceptions
@@ -561,9 +675,18 @@ async def process_conversation_message(
         # Test: Query the interaction directly from DB to verify persistence
 
         # Send AI response notification in background
-        asyncio.create_task(
+        # Create task and store reference to prevent garbage collection
+        ai_notification_task = asyncio.create_task(
             _send_ai_response_notification(
                 str(user_id), str(interaction.id), ai_result_content
+            )
+        )
+        # Don't await - let it run in background, but keep reference
+        ai_notification_task.add_done_callback(
+            lambda t: (
+                print(f"✅ AI response notification task completed")
+                if not t.exception()
+                else print(f"❌ AI response notification task failed: {t.exception()}")
             )
         )
 
@@ -591,42 +714,81 @@ async def _send_notifications_background(
     user_id: str, interaction_id: str, conversation_id: str
 ):
     """Send notifications in background without blocking main flow"""
+    print(f"\n{'='*60}")
+    print(f"📤 SENDING MESSAGE_RECEIVED NOTIFICATION")
+    print(f"{'='*60}")
+    print(f"👤 User ID: {user_id}")
+    print(f"💬 Interaction ID: {interaction_id}")
+    print(f"🆔 Conversation ID: {conversation_id}")
+    print(f"{'='*60}\n")
+
+    # Try WebSocket first
     try:
         await notify_message_received(
             user_id=user_id,
             interaction_id=interaction_id,
             conversation_id=conversation_id,
         )
-    except Exception:
+        print(f"✅ WebSocket notification sent successfully for user {user_id}")
+    except Exception as ws_error:
+        print(f"⚠️  WebSocket notification failed: {ws_error}")
+        # Fallback to SSE
         try:
             await notify_message_received_sse(
                 user_id=user_id,
                 interaction_id=interaction_id,
                 conversation_id=conversation_id,
             )
-        except Exception:
-            pass
+            print(f"✅ SSE notification sent successfully for user {user_id}")
+        except Exception as sse_error:
+            print(f"❌ SSE notification failed: {sse_error}")
+            import traceback
+
+            traceback.print_exc()
+            print(f"❌ All notification methods failed for user {user_id}")
 
 
 async def _send_ai_response_notification(
     user_id: str, interaction_id: str, ai_response: str
 ):
     """Send AI response notification in background without blocking main flow"""
+    print(f"\n{'='*60}")
+    print(f"📤 SENDING AI_RESPONSE_READY NOTIFICATION")
+    print(f"{'='*60}")
+    print(f"👤 User ID: {user_id}")
+    print(f"💬 Interaction ID: {interaction_id}")
+    print(f"📝 Response Length: {len(ai_response)} characters")
+    print(f"📄 Response Preview: {ai_response[:100]}...")
+    print(f"{'='*60}\n")
+
+    # Try WebSocket first
     try:
         await notify_ai_response_ready(
             user_id=user_id,
             interaction_id=interaction_id,
             ai_response=ai_response,
         )
-    except Exception:
+        print(
+            f"✅ WebSocket AI response notification sent successfully for user {user_id}"
+        )
+    except Exception as ws_error:
+        print(f"⚠️  WebSocket AI response notification failed: {ws_error}")
+        # Fallback to SSE
         try:
             await notify_ai_response_ready_sse(
                 user_id=user_id,
                 interaction_id=interaction_id,
                 ai_response=ai_response,
             )
-        except Exception:
-            pass
+            print(
+                f"✅ SSE AI response notification sent successfully for user {user_id}"
+            )
+        except Exception as sse_error:
+            print(f"❌ SSE AI response notification failed: {sse_error}")
+            import traceback
+
+            traceback.print_exc()
+            print(f"❌ All AI response notification methods failed for user {user_id}")
 
 
 async def _extract_interaction_metadata_fast(

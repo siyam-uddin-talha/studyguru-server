@@ -73,6 +73,12 @@ class UpdateInteractionTitleInput:
     title: str
 
 
+@strawberry.input
+class CancelGenerationInput:
+    interaction_id: str
+    conversation_id: Optional[str] = None
+
+
 @strawberry.type
 class InteractionListResponse:
     success: bool
