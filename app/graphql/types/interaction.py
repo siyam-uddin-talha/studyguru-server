@@ -74,6 +74,11 @@ class UpdateInteractionTitleInput:
 
 
 @strawberry.input
+class DeleteInteractionInput:
+    interaction_id: str
+
+
+@strawberry.input
 class CancelGenerationInput:
     interaction_id: str
     conversation_id: Optional[str] = None

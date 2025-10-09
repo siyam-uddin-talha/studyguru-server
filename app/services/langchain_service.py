@@ -172,27 +172,23 @@ class LangChainService:
             # Create callback handler to track tokens
             callback_handler = StudyGuruCallbackHandler()
 
-            # Create document analysis prompt with file URL
             # Get the system message content from the existing template
             system_message_content = StudyGuruConfig.PROMPTS.DOCUMENT_ANALYSIS.messages[
                 0
             ].prompt.template
 
+            # Create document analysis prompt with file URL directly (no template variables)
             analysis_prompt = ChatPromptTemplate.from_messages(
                 [
-                    (
-                        "system",
-                        system_message_content,
-                    ),
-                    (
-                        "human",
-                        [
+                    SystemMessage(content=system_message_content),
+                    HumanMessage(
+                        content=[
                             {
                                 "type": "text",
                                 "text": "Please analyze this document/image:",
                             },
                             {"type": "image_url", "image_url": {"url": file_url}},
-                        ],
+                        ]
                     ),
                 ]
             )
@@ -200,7 +196,7 @@ class LangChainService:
             # Create chain with vision model and parser
             chain = analysis_prompt | self.vision_llm | self.document_parser
 
-            # Run analysis
+            # Run analysis (no variables needed since we constructed the prompt directly)
             result = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
 
             # Add token usage
@@ -209,13 +205,17 @@ class LangChainService:
             return result
 
         except Exception as e:
+            print(f"Document analysis error: {str(e)}")
             return {
                 "type": "error",
                 "language": "unknown",
                 "title": "Analysis Failed",
-                "summary_title": "Error",
+                "summary_title": "Sorry, we couldn't analyze this content",
                 "token": 0,
-                "_result": {"error": str(e)},
+                "_result": {
+                    "error": "Unable to analyze the uploaded content. Please make sure it's a clear educational document or image.",
+                    "details": str(e),
+                },
             }
 
     async def check_guardrails(
@@ -621,6 +621,39 @@ class LangChainService:
 
         except Exception as e:
             print(f"Failed to upsert embedding: {e}")
+            return False
+
+    async def delete_embeddings_by_interaction(self, interaction_id: str) -> bool:
+        """Delete all embeddings for a specific interaction"""
+        try:
+            if not self.vector_store:
+                print("Vector store not initialized, skipping embedding deletion")
+                return False
+
+            # Get the collection from the vector store
+            collection_name = settings.ZILLIZ_COLLECTION
+            collection = Collection(collection_name)
+
+            # Load collection to memory for operations
+            collection.load()
+
+            # Delete embeddings where interaction_id matches
+            # Using expr to filter by interaction_id in metadata
+            expr = f'interaction_id == "{interaction_id}"'
+
+            # Execute deletion
+            result = collection.delete(expr=expr)
+
+            # Flush to ensure deletion is persisted
+            collection.flush()
+
+            print(f"✅ Deleted vector embeddings for interaction {interaction_id}")
+            return True
+
+        except Exception as e:
+            print(
+                f"⚠️ Failed to delete vector embeddings for interaction {interaction_id}: {e}"
+            )
             return False
 
     def calculate_points_cost(self, tokens_used: int) -> int:

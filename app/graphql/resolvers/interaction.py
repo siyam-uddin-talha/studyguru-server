@@ -15,6 +15,7 @@ from app.graphql.types.interaction import (
     DeleteMediaFileInput,
     UpdateInteractionTitleInput,
     CancelGenerationInput,
+    DeleteInteractionInput,
 )
 from app.models.interaction import Interaction
 from app.models.media import Media
@@ -572,4 +573,98 @@ class InteractionMutation:
             print(f"Error cancelling generation: {e}")
             return DefaultResponse(
                 success=False, message=f"Failed to cancel generation: {str(e)}"
+            )
+
+    @strawberry.mutation
+    async def delete_interaction(
+        self,
+        info,
+        input: DeleteInteractionInput,
+    ) -> DefaultResponse:
+        """
+        Delete an interaction and all associated data (conversations, media files, embeddings)
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+        print(input, " --- input ---")
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        try:
+            # Get the interaction with all related data
+            result = await db.execute(
+                select(Interaction)
+                .options(
+                    selectinload(Interaction.conversations).selectinload(
+                        Conversation.files
+                    )
+                )
+                .where(
+                    Interaction.id == input.interaction_id,
+                    Interaction.user_id == current_user.id,
+                )
+            )
+            interaction = result.scalar_one_or_none()
+
+            if not interaction:
+                return DefaultResponse(success=False, message="Interaction not found")
+
+            # Collect all media files to delete from S3
+            media_files_to_delete = set()
+
+            # Get media files from all conversations
+            for conversation in interaction.conversations:
+                if conversation.files:
+                    for media_file in conversation.files:
+                        media_files_to_delete.add(media_file.s3_key)
+
+            # Delete media files from S3
+            for s3_key in media_files_to_delete:
+                try:
+                    await FileService.delete_from_s3(s3_key)
+                    print(f"✅ Deleted S3 file: {s3_key}")
+                except Exception as e:
+                    print(f"⚠️  Failed to delete S3 file {s3_key}: {e}")
+                    # Continue even if S3 deletion fails
+
+            # Delete from vector database if configured
+            try:
+                from app.services.langchain_service import langchain_service
+
+                if langchain_service.vector_store:
+                    print(
+                        f"🗑️  Deleting vector embeddings for interaction {input.interaction_id}"
+                    )
+                    # Delete all embeddings for this interaction
+                    await langchain_service.delete_embeddings_by_interaction(
+                        input.interaction_id
+                    )
+            except Exception as e:
+                print(f"⚠️  Failed to delete vector embeddings: {e}")
+                # Continue even if vector deletion fails
+
+            # Delete conversations first to avoid foreign key constraint issues
+            for conversation in interaction.conversations:
+                await db.delete(conversation)
+
+            # Delete the interaction
+            await db.delete(interaction)
+            await db.commit()
+
+            return DefaultResponse(
+                success=True,
+                message=f"Conversation '{interaction.title or 'Untitled'}' has been permanently deleted",
+            )
+
+        except Exception as e:
+            await db.rollback()
+            print(f"❌ Error deleting interaction: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return DefaultResponse(
+                success=False, message=f"Failed to delete conversation: {str(e)}"
             )

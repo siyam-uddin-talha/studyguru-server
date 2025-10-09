@@ -1,9 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from strawberry.fastapi import GraphQLRouter
+from starlette.requests import ClientDisconnect
 
 from contextlib import asynccontextmanager
+import logging
 
 from app.core.config import settings
 
@@ -15,6 +18,9 @@ from app.api.sse_routes import router as sse_router
 
 from app.core.database import init_db
 from app.workers.scheduler import start_scheduler
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -33,6 +39,18 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+# Exception handler for client disconnects
+@app.exception_handler(ClientDisconnect)
+async def client_disconnect_handler(request: Request, exc: ClientDisconnect):
+    """Handle client disconnects gracefully (e.g., when app is closed)"""
+    logger.debug(
+        f"Client disconnected during request: {request.method} {request.url.path}"
+    )
+    # Return empty response - client already disconnected anyway
+    return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
 
 # CORS middleware
 if settings.ENVIRONMENT == "development":

@@ -358,15 +358,51 @@ async def process_conversation_message(
                 f"Request blocked: {guardrail_result.violation_type}"
             )
 
-            # Create AI response for blocked content
+            # Generate title for this interaction if not present
+            if not interaction.title or not interaction.summary_title:
+                try:
+                    await _extract_interaction_metadata_fast(
+                        interaction,
+                        f"Content blocked: {guardrail_result.violation_type}",
+                        message or "Content review",
+                    )
+                    # Merge and flush the interaction
+                    try:
+                        interaction = await db.merge(interaction)
+                        await db.flush()
+                        await db.refresh(interaction)
+                    except Exception:
+                        fresh_result = await db.execute(
+                            select(Interaction).where(Interaction.id == interaction.id)
+                        )
+                        fresh_interaction = fresh_result.scalar_one_or_none()
+                        if fresh_interaction:
+                            fresh_interaction.title = interaction.title
+                            fresh_interaction.summary_title = interaction.summary_title
+                            await db.flush()
+                            await db.refresh(fresh_interaction)
+                            interaction = fresh_interaction
+                except Exception as title_error:
+                    print(f"Title generation error for blocked content: {title_error}")
+                    pass
+
+            # Create AI response for blocked content with user-friendly message
+            violation_messages = {
+                "non_educational_content": "I can only help with educational content like textbooks, notes, worksheets, and study materials. Please upload educational documents without personal photos or portraits.",
+                "inappropriate_content": "This content violates our guidelines. Please ensure your uploads are appropriate and educational.",
+                "code_generation": "I cannot generate code directly. However, I can help explain code concepts or analyze educational programming problems.",
+            }
+            user_friendly_message = violation_messages.get(
+                guardrail_result.violation_type,
+                "I cannot process this request. Please ensure your content is educational and appropriate.",
+            )
+
             ai_blocked = Conversation(
                 interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
                 content={
                     "type": "text",
-                    "result": {
-                        "content": f"I cannot process this request: {guardrail_result.violation_type}"
-                    },
+                    "result": {"content": user_friendly_message},
                 },
                 status="completed",
             )
@@ -378,7 +414,7 @@ async def process_conversation_message(
                 _send_ai_response_notification(
                     str(user_id),
                     str(interaction.id),
-                    f"I cannot process this request: {guardrail_result.violation_type}",
+                    user_friendly_message,
                 )
             )
 
@@ -386,7 +422,7 @@ async def process_conversation_message(
                 "success": False,
                 "message": f"Request blocked: {guardrail_result.violation_type}",
                 "interaction_id": str(interaction.id),
-                "ai_response": f"I cannot process this request: {guardrail_result.violation_type}",
+                "ai_response": user_friendly_message,
             }
 
         # Handle context retrieval exceptions
@@ -426,6 +462,82 @@ async def process_conversation_message(
                     analysis_result = await langchain_service.analyze_document(
                         file_url=media_url, max_tokens=attachment_tokens
                     )
+
+                    # Check if analysis failed
+                    if analysis_result.get("type") == "error":
+                        error_msg = analysis_result.get("_result", {}).get(
+                            "error", "Failed to analyze the uploaded content"
+                        )
+                        print(f"❌ Analysis failed: {error_msg}")
+
+                        # Generate title for this interaction if not present
+                        if not interaction.title or not interaction.summary_title:
+                            try:
+                                await _extract_interaction_metadata_fast(
+                                    interaction,
+                                    f"Analysis failed: {error_msg}",
+                                    message or "Document upload",
+                                )
+                                # Merge and flush the interaction
+                                try:
+                                    interaction = await db.merge(interaction)
+                                    await db.flush()
+                                    await db.refresh(interaction)
+                                except Exception:
+                                    fresh_result = await db.execute(
+                                        select(Interaction).where(
+                                            Interaction.id == interaction.id
+                                        )
+                                    )
+                                    fresh_interaction = (
+                                        fresh_result.scalar_one_or_none()
+                                    )
+                                    if fresh_interaction:
+                                        fresh_interaction.title = interaction.title
+                                        fresh_interaction.summary_title = (
+                                            interaction.summary_title
+                                        )
+                                        await db.flush()
+                                        await db.refresh(fresh_interaction)
+                                        interaction = fresh_interaction
+                            except Exception as title_error:
+                                print(
+                                    f"Title generation error for failed analysis: {title_error}"
+                                )
+                                pass
+
+                        # Create AI response for analysis failure
+                        ai_error_response = Conversation(
+                            interaction_id=str(interaction.id),
+                            role=ConversationRole.AI,
+                            content={
+                                "type": "text",
+                                "result": {
+                                    "content": f"Sorry, I couldn't analyze the uploaded content. {error_msg}"
+                                },
+                            },
+                            status="failed",
+                            error_message=error_msg,
+                        )
+                        db.add(ai_error_response)
+                        await db.commit()
+
+                        # Send error notification
+                        asyncio.create_task(
+                            _send_ai_response_notification(
+                                str(user_id),
+                                str(interaction.id),
+                                f"Sorry, I couldn't analyze the uploaded content. {error_msg}",
+                            )
+                        )
+
+                        return {
+                            "success": False,
+                            "message": error_msg,
+                            "interaction_id": str(interaction.id),
+                            "ai_response": f"Sorry, I couldn't analyze the uploaded content. {error_msg}",
+                        }
+
                     analysis_results.append(analysis_result)
                     total_tokens += analysis_result.get("token", 0)
                     print(f"📊 Analysis result type: {analysis_result.get('type')}")
