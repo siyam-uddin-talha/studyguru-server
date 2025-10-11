@@ -232,22 +232,31 @@ class LangChainService:
             # Create chain using dedicated guardrail model
             chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
 
+            # Build multimodal content
+            multimodal_content = self._build_multimodal_content(message, image_urls)
+            print(f"🛡️ GUARDRAIL CHECK - Content: {multimodal_content}")
+
             # Run guardrail check
             result = await chain.ainvoke(
-                {"content": self._build_multimodal_content(message, image_urls)},
+                {"content": multimodal_content},
                 config={"callbacks": [callback_handler]},
             )
 
+            print(f"🛡️ GUARDRAIL RESULT: {result}")
+
             # Convert dict result to GuardrailOutput object
             if isinstance(result, dict):
-                return GuardrailOutput(
+                guardrail_output = GuardrailOutput(
                     is_violation=result.get("is_violation", False),
                     violation_type=result.get("violation_type"),
                     reasoning=result.get("reasoning", "No reasoning provided"),
                 )
+                print(f"🛡️ GUARDRAIL OUTPUT: {guardrail_output}")
+                return guardrail_output
             return result
 
         except Exception as e:
+            print(f"🛡️ GUARDRAIL ERROR: {str(e)}")
             return GuardrailOutput(
                 is_violation=False,
                 violation_type=None,

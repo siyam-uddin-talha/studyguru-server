@@ -10,6 +10,7 @@ from sqlalchemy import (
     Enum,
     Boolean,
     Table,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -43,6 +44,7 @@ class Interaction(Base):
 
     title = Column(String(500), nullable=True)
     summary_title = Column(String(500), nullable=True)
+    is_pinned = Column(Boolean, nullable=False, default=False)
 
     created_at = Column(DateTime, default=func.now(), nullable=True)
     updated_at = Column(
@@ -93,4 +95,64 @@ class Conversation(Base):
     )
     point_transaction = relationship(
         "PointTransaction", back_populates="conversation", uselist=False
+    )
+
+
+# Share table for temporary clone access
+class InteractionShare(Base):
+    __tablename__ = "interaction_share"
+
+    id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
+    original_interaction_id = Column(
+        String(191), ForeignKey("interaction.id"), nullable=False
+    )
+    share_id = Column(String(191), unique=True, nullable=False)  # Public ID for sharing
+    is_public = Column(
+        Boolean, nullable=False, default=True
+    )  # Whether it can be accessed publicly
+    visit_count = Column(Integer, nullable=False, default=0)  # Track number of visits
+    last_visited_at = Column(DateTime, nullable=True)  # Last visit timestamp
+    created_at = Column(DateTime, default=func.now(), nullable=True)
+
+    # Relationships
+    original_interaction = relationship(
+        "Interaction", foreign_keys=[original_interaction_id]
+    )
+
+
+# Track unique visitors to shared interactions
+class InteractionShareVisitor(Base):
+    __tablename__ = "interaction_share_visitor"
+
+    id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
+    interaction_share_id = Column(
+        String(191), ForeignKey("interaction_share.id"), nullable=False
+    )
+    visitor_user_id = Column(
+        String(191), ForeignKey("user.id"), nullable=True
+    )  # Null for anonymous visitors
+    visitor_ip = Column(String(45), nullable=True)  # Store IP for anonymous tracking
+    visitor_fingerprint = Column(
+        String(191), nullable=True
+    )  # Device/browser fingerprint
+    reward_given = Column(
+        Boolean, nullable=False, default=False
+    )  # Track if reward was given
+    visited_at = Column(DateTime, default=func.now(), nullable=True)
+
+    # Relationships
+    interaction_share = relationship("InteractionShare")
+    visitor_user = relationship("User", foreign_keys=[visitor_user_id])
+
+    # Unique constraint to prevent duplicate rewards
+    __table_args__ = (
+        UniqueConstraint(
+            "interaction_share_id", "visitor_user_id", name="unique_user_visit"
+        ),
+        UniqueConstraint("interaction_share_id", "visitor_ip", name="unique_ip_visit"),
+        UniqueConstraint(
+            "interaction_share_id",
+            "visitor_fingerprint",
+            name="unique_fingerprint_visit",
+        ),
     )

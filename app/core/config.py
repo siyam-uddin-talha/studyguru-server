@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     PADDLE_WEBHOOK_SECRET: str = getenv("PADDLE_WEBHOOK_SECRET", "test-secret")
     PADDLE_ENVIRONMENT: str = getenv("PADDLE_ENVIRONMENT", "sandbox")  # or "production"
 
+    # Guardrail Configuration
+    DISABLE_GUARDRAIL: bool = getenv("DISABLE_GUARDRAIL", "false").lower() == "true"
+
     # OpenAI
     OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "")
 

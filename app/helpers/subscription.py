@@ -11,6 +11,11 @@ from app.models.subscription import (
     PointTransaction,
 )
 from app.models.user import User
+from app.models.interaction import (
+    Interaction,
+    InteractionShare,
+    InteractionShareVisitor,
+)
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -265,3 +270,119 @@ async def add_multiple_transactions_async(
     except Exception as e:
         await db.rollback()
         raise Exception(f"Batch transaction failed: {str(e)}")
+
+
+async def award_share_visit_reward(
+    db: AsyncSession,
+    interaction_share: InteractionShare,
+    visitor_user_id: Optional[str] = None,
+    visitor_ip: Optional[str] = None,
+    visitor_fingerprint: Optional[str] = None,
+    reward_amount: int = 5,
+) -> bool:
+    """
+    Award coins to the owner of a shared interaction when someone visits it.
+    Only rewards once per unique visitor and never rewards the owner themselves.
+    """
+    try:
+        # Get the original interaction and its owner
+        result = await db.execute(
+            select(Interaction).where(
+                Interaction.id == interaction_share.original_interaction_id
+            )
+        )
+        original_interaction = result.scalar_one_or_none()
+
+        if not original_interaction:
+            return False
+
+        # Get the owner user
+        user_result = await db.execute(
+            select(User).where(User.id == original_interaction.user_id)
+        )
+        owner_user = user_result.scalar_one_or_none()
+
+        if not owner_user:
+            return False
+
+        # Don't reward if the visitor is the owner themselves
+        if visitor_user_id and visitor_user_id == owner_user.id:
+            print(f"🚫 Owner visited their own shared interaction - no reward given")
+            return False
+
+        # Check if this visitor has already been rewarded
+        visitor_query = select(InteractionShareVisitor).where(
+            InteractionShareVisitor.interaction_share_id == interaction_share.id
+        )
+
+        # Check by user ID if available
+        if visitor_user_id:
+            visitor_query = visitor_query.where(
+                InteractionShareVisitor.visitor_user_id == visitor_user_id
+            )
+        # Check by IP if no user ID
+        elif visitor_ip:
+            visitor_query = visitor_query.where(
+                InteractionShareVisitor.visitor_ip == visitor_ip
+            )
+        # Check by fingerprint if no user ID or IP
+        elif visitor_fingerprint:
+            visitor_query = visitor_query.where(
+                InteractionShareVisitor.visitor_fingerprint == visitor_fingerprint
+            )
+        else:
+            # No way to identify visitor uniquely
+            print(f"⚠️ Cannot identify visitor uniquely - no reward given")
+            return False
+
+        existing_visitor_result = await db.execute(visitor_query)
+        existing_visitor = existing_visitor_result.scalar_one_or_none()
+
+        if existing_visitor:
+            if existing_visitor.reward_given:
+                print(f"🎯 Visitor already rewarded - no duplicate reward")
+                return False
+            else:
+                # Update existing visitor record
+                existing_visitor.reward_given = True
+                existing_visitor.visited_at = datetime.utcnow()
+        else:
+            # Create new visitor record
+            new_visitor = InteractionShareVisitor(
+                interaction_share_id=interaction_share.id,
+                visitor_user_id=visitor_user_id,
+                visitor_ip=visitor_ip,
+                visitor_fingerprint=visitor_fingerprint,
+                reward_given=True,
+                visited_at=datetime.utcnow(),
+            )
+            db.add(new_visitor)
+
+        # Award coins to the owner
+        owner_user.current_points += reward_amount
+        owner_user.total_points_earned += reward_amount
+
+        # Create a point transaction record
+        point_transaction = PointTransaction(
+            user_id=owner_user.id,
+            transaction_type="earned",
+            points=reward_amount,
+            description=f"Reward for shared interaction visit (Share ID: {interaction_share.share_id})",
+        )
+        db.add(point_transaction)
+
+        # Update visit count and timestamp
+        interaction_share.visit_count += 1
+        interaction_share.last_visited_at = datetime.utcnow()
+
+        await db.commit()
+
+        print(
+            f"🎉 Awarded {reward_amount} coins to user {owner_user.id} for unique share visit"
+        )
+        return True
+
+    except Exception as e:
+        await db.rollback()
+        print(f"❌ Failed to award share visit reward: {e}")
+        return False

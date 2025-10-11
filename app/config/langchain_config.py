@@ -45,6 +45,9 @@ class StudyGuruPrompts:
         4. Provide a summary title that describes what you will help the user with
         5. Based on the question type:
            - If MCQ: Extract each question/exercise part as a separate question
+             * If the document contains actual multiple choice options (like: A, B, C, D or a, b, c, d or 1, 2, 3, 4), include them in the "options" field
+             * If the document does NOT contain multiple choice options, omit the "options" field entirely
+             * For the "answer" field: provide the correct option letter if options exist, or provide the actual solution/answer if no options are given
            - If written: Provide organized explanatory content
 
         Respond in the detected language and format your response as JSON with this structure:
@@ -58,8 +61,10 @@ class StudyGuruPrompts:
                 "questions": [
                     {{
                         "question": "question text (e.g., 'Solve |1 - 2x| = 3')",
+                        // Include "options" field ONLY if the document contains actual multiple choice options
+                        // If no options exist, omit this field entirely
                         "options": {{"a": "option1", "b": "option2", "c": "option3", "d": "option4"}},
-                        "answer": "correct option letter or 'N/A' if no options given",
+                        "answer": "correct option letter (if options exist) or actual solution (if no options)",
                         "explanation": "step-by-step solution or brief explanation"
                     }}
                 ]
@@ -84,19 +89,39 @@ class StudyGuruPrompts:
             (
                 "system",
                 """
-        You are a strict content guardrail for an educational platform. Review all user inputs—including text and any attached images—and determine whether the request violates any of the following rules:
+        You are a content guardrail for an educational platform. Review all user inputs—including text and any attached images—and determine whether the request violates any of the following rules:
 
         STRICT VIOLATION RULES:
         1. REJECT any images of people's faces, portraits, selfies, or photographs of individuals (even if they appear to be studying)
         2. REJECT content related to adult, explicit, or inappropriate material
         3. REJECT requests for direct code generation (e.g., "write a Java function"), except when analyzing educational code problems
         4. REJECT any content that is NOT educational, study, or research-related
-        5. ACCEPT ONLY: textbooks, notes, diagrams, charts, educational worksheets, practice problems, study materials, equations, or handwritten notes WITHOUT faces
+
+        ACCEPT THESE EDUCATIONAL CONTENT TYPES:
+        - Textbooks, workbooks, and study guides
+        - Educational worksheets and practice problems
+        - Mathematical equations, formulas, and problem sets
+        - Science diagrams, charts, and educational illustrations
+        - Handwritten notes and study materials (WITHOUT faces)
+        - Exercise sheets with numbered problems
+        - Academic papers and research documents
+        - Educational quizzes and assessments
+        - Study notes and summaries
+        - Any content clearly related to learning and education
 
         IMPORTANT FOR IMAGES:
         - If an image contains a human face or portrait: REJECT with violation_type "non_educational_content"
         - If an image is a selfie or photo of a person: REJECT with violation_type "non_educational_content"  
-        - If an image is clearly educational content (textbook pages, notes, diagrams): ACCEPT
+        - If an image is clearly educational content (textbook pages, worksheets, math problems, diagrams): ACCEPT
+        - If an image shows mathematical problems, equations, or educational exercises: ACCEPT
+        - If an image contains educational text, problems, or study materials: ACCEPT
+
+        EXAMPLES OF ACCEPTABLE CONTENT:
+        - Math worksheets with problems like "Solve |1 - 2x| = 3"
+        - Exercise sheets titled "Exercise 1.1" with numbered problems
+        - Science diagrams and educational charts
+        - Handwritten study notes (without faces)
+        - Textbook pages and educational materials
 
         You must respond with valid JSON in this exact format:
         {{
@@ -124,8 +149,9 @@ FORMATTING GUIDELINES:
 1. Use clear section headers with ### for main topics
 2. For MCQ content:
    - Number each question (1., 2., etc.)
-   - List options clearly (A., B., C., D.)
-   - Provide answers in format "Answer: [letter]" (without asterisks)
+   - If options exist: List options clearly (A., B., C., D.)
+   - If no options exist: Provide the solution directly
+   - Provide answers in format "Answer: [letter or solution]" (without asterisks)
    - Add explanations with "Explanation: [text]" (without asterisks)
 3. Use bullet points with • for lists and key points
 4. Use bold sparingly for truly important terms only
@@ -157,8 +183,9 @@ FORMATTING GUIDELINES:
 1. Use clear section headers with ### for main topics
 2. For MCQ content:
    - Number each question clearly (1., 2., etc.)
-   - List options in format: A. [option], B. [option], etc.
-   - Provide answers as "Answer: [letter]" (without asterisks or bold)
+   - If options exist: List options in format: A. [option], B. [option], etc.
+   - If no options exist: Provide the solution directly without listing options
+   - Provide answers as "Answer: [letter or solution]" (without asterisks or bold)
    - Include explanations as "Explanation: [detailed explanation]" (without asterisks or bold)
 3. Use bullet points with • for lists and key concepts
 4. Use plain text formatting - avoid LaTeX, special symbols, or complex markdown
@@ -235,7 +262,7 @@ class StudyGuruModels:
 
     @staticmethod
     def get_guardrail_model(
-        temperature: float = 0.1, max_tokens: int = 150
+        temperature: float = 0.1, max_tokens: int = 300
     ) -> ChatOpenAI:
         """Get configured guardrail model (cost-optimized and fast)"""
         return ChatOpenAI(
@@ -304,7 +331,7 @@ class StudyGuruChains:
     @staticmethod
     def get_guardrail_chain():
         """Get guardrail check chain"""
-        model = StudyGuruModels.get_guardrail_model(temperature=0.1, max_tokens=200)
+        model = StudyGuruModels.get_guardrail_model(temperature=0.1, max_tokens=300)
         parser = JsonOutputParser()
         return StudyGuruPrompts.GUARDRAIL_CHECK | model | parser
 

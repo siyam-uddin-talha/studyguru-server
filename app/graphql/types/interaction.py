@@ -31,10 +31,22 @@ class InteractionType:
     user_id: str
     title: Optional[str] = None
     summary_title: Optional[str] = None
+    is_pinned: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     file: Optional[MediaType] = None
     conversations: Optional[List[ConversationType]] = None
+
+
+@strawberry.type
+class InteractionShareType:
+    id: str
+    original_interaction_id: str
+    share_id: str
+    is_public: Optional[bool] = None
+    visit_count: Optional[int] = None
+    last_visited_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
 
 @strawberry.type
@@ -82,6 +94,43 @@ class DeleteInteractionInput:
 class CancelGenerationInput:
     interaction_id: str
     conversation_id: Optional[str] = None
+
+
+@strawberry.input
+class PinInteractionInput:
+    interaction_id: str
+    is_pinned: bool
+
+
+@strawberry.input
+class ShareInteractionInput:
+    interaction_id: str
+
+
+@strawberry.input
+class GetSharedInteractionInput:
+    share_id: str
+
+
+@strawberry.input
+class GetShareStatsInput:
+    interaction_id: str
+
+
+@strawberry.type
+class ShareInteractionResponse:
+    success: bool
+    message: Optional[str] = None
+    share_id: Optional[str] = None
+    share_url: Optional[str] = None
+
+
+@strawberry.type
+class ShareStatsResponse:
+    success: bool
+    message: Optional[str] = None
+    share_stats: Optional[InteractionShareType] = None
+    total_coins_earned: Optional[int] = None
 
 
 @strawberry.type
