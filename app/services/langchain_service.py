@@ -735,6 +735,163 @@ class LangChainService:
 
                 return fallback_result
 
+    async def summarize_conversation(
+        self, user_message: str, ai_response: str
+    ) -> Dict[str, Any]:
+        """
+        Extract key facts and create a semantic summary from a single conversation exchange.
+
+        Returns a dictionary with:
+        - key_facts: List of important facts discussed
+        - main_topics: List of main topics covered
+        - semantic_summary: Concise summary of the conversation
+        - important_terms: List of important terms mentioned
+        - context_for_future: Context useful for future conversations
+        """
+        try:
+            print(f"\n{'='*60}")
+            print(f"📊 SUMMARIZING CONVERSATION")
+            print(f"{'='*60}")
+            print(f"User message length: {len(user_message)}")
+            print(f"AI response length: {len(ai_response)}")
+
+            # Use conversation summarization chain
+            chain = StudyGuruConfig.CHAINS.get_conversation_summarization_chain()
+
+            # Truncate to reasonable lengths to save costs
+            user_msg_truncated = (
+                user_message[:500] if len(user_message) > 500 else user_message
+            )
+            ai_resp_truncated = (
+                ai_response[:1000] if len(ai_response) > 1000 else ai_response
+            )
+
+            result = await chain.ainvoke(
+                {
+                    "user_message": user_msg_truncated,
+                    "ai_response": ai_resp_truncated,
+                }
+            )
+
+            print(f"✅ Conversation summary created:")
+            print(f"   Topics: {result.get('main_topics', [])}")
+            print(f"   Facts: {len(result.get('key_facts', []))} key facts")
+            print(f"{'='*60}\n")
+
+            return result
+
+        except Exception as e:
+            print(f"❌ Conversation summarization error: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+            # Return minimal summary on error
+            return {
+                "key_facts": [],
+                "main_topics": ["General Discussion"],
+                "semantic_summary": "Educational conversation about various topics.",
+                "important_terms": [],
+                "context_for_future": "User is engaged in educational learning.",
+            }
+
+    async def update_interaction_summary(
+        self,
+        current_summary: Optional[Dict[str, Any]],
+        new_user_message: str,
+        new_ai_response: str,
+    ) -> Dict[str, Any]:
+        """
+        Update the running semantic summary of an interaction with a new conversation.
+
+        Args:
+            current_summary: The existing accumulated summary (or None for first conversation)
+            new_user_message: The latest user message
+            new_ai_response: The latest AI response
+
+        Returns a dictionary with:
+        - updated_summary: Comprehensive running summary
+        - key_topics: All important topics covered so far
+        - recent_focus: What the user has been focusing on recently
+        - accumulated_facts: Critical facts to remember
+        """
+        try:
+            print(f"\n{'='*60}")
+            print(f"🔄 UPDATING INTERACTION SUMMARY")
+            print(f"{'='*60}")
+            print(f"Has existing summary: {current_summary is not None}")
+            print(f"New message length: {len(new_user_message)}")
+            print(f"New response length: {len(new_ai_response)}")
+
+            # For first conversation, create initial summary
+            if not current_summary or not current_summary.get("updated_summary"):
+                print("   Creating initial summary...")
+                conv_summary = await self.summarize_conversation(
+                    new_user_message, new_ai_response
+                )
+
+                initial_summary = {
+                    "updated_summary": conv_summary.get("semantic_summary", ""),
+                    "key_topics": conv_summary.get("main_topics", []),
+                    "recent_focus": conv_summary.get("context_for_future", ""),
+                    "accumulated_facts": conv_summary.get("key_facts", []),
+                }
+
+                print(f"✅ Initial summary created")
+                print(f"{'='*60}\n")
+                return initial_summary
+
+            # Update existing summary
+            chain = StudyGuruConfig.CHAINS.get_interaction_summary_update_chain()
+
+            # Truncate to reasonable lengths
+            current_summary_text = current_summary.get("updated_summary", "")[:1000]
+            new_user_truncated = (
+                new_user_message[:500]
+                if len(new_user_message) > 500
+                else new_user_message
+            )
+            new_ai_truncated = (
+                new_ai_response[:1000]
+                if len(new_ai_response) > 1000
+                else new_ai_response
+            )
+
+            result = await chain.ainvoke(
+                {
+                    "current_summary": current_summary_text,
+                    "new_user_message": new_user_truncated,
+                    "new_ai_response": new_ai_truncated,
+                }
+            )
+
+            print(f"✅ Summary updated:")
+            print(f"   Topics: {result.get('key_topics', [])}")
+            print(
+                f"   Facts: {len(result.get('accumulated_facts', []))} accumulated facts"
+            )
+            print(f"   Recent focus: {result.get('recent_focus', '')[:100]}...")
+            print(f"{'='*60}\n")
+
+            return result
+
+        except Exception as e:
+            print(f"❌ Summary update error: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+            # Return current summary unchanged on error
+            if current_summary:
+                return current_summary
+            else:
+                return {
+                    "updated_summary": "Educational conversation in progress.",
+                    "key_topics": ["General Discussion"],
+                    "recent_focus": "User learning",
+                    "accumulated_facts": [],
+                }
+
 
 # Global instance
 langchain_service = LangChainService()

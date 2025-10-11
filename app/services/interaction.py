@@ -23,6 +23,7 @@ from app.services.cache_service import (
 )
 import json
 from app.core.config import settings
+from app.constants.constant import RESPONSE_STATUS
 from pydantic import BaseModel
 from app.api.websocket_routes import notify_message_received, notify_ai_response_ready
 from app.api.sse_routes import notify_message_received_sse, notify_ai_response_ready_sse
@@ -114,6 +115,16 @@ async def process_conversation_message(
     """
     Optimized conversation processor with parallel operations and aggressive caching.
     """
+
+    # Validate input - ensure user has provided some content
+    if not message or not message.strip():
+        if not media_files or len(media_files) == 0:
+            return {
+                "success": False,
+                "message": "Please provide a message or attach a file",
+                "interaction_id": str(interaction.id) if interaction else None,
+                "ai_response": "Please provide a message or attach a file to get help.",
+            }
 
     # Use a single DB session for the entire operation
     async with AsyncSessionLocal() as db:
@@ -249,43 +260,94 @@ async def process_conversation_message(
                 ]
                 cache_hash = str(hash("".join(cache_key_components)))
 
-                cached_context = await get_cached_user_context(
-                    f"{user_id}_{cache_hash}"
-                )
-                if cached_context:
-                    return cached_context.get("context", "")
+                # Temporarily disable cache to test fresh context retrieval
+                # cached_context = await get_cached_user_context(
+                #     f"{user_id}_{cache_hash}"
+                # )
+                # if cached_context:
+                #     return cached_context.get("context", "")
 
-                # Build optimized query
+                # === STEP 1: Get interaction-level semantic summary ===
+                semantic_context = ""
+                if interaction and interaction.semantic_summary:
+                    summary_data = interaction.semantic_summary
+                    print(f"📚 Using interaction semantic summary:")
+                    print(f"   Topics: {summary_data.get('key_topics', [])}")
+                    print(f"   Facts: {len(summary_data.get('accumulated_facts', []))}")
+
+                    # Build rich semantic context from the summary
+                    semantic_parts = []
+
+                    # Add the main summary
+                    if summary_data.get("updated_summary"):
+                        semantic_parts.append(
+                            f"**Conversation Summary:**\n{summary_data['updated_summary']}"
+                        )
+
+                    # Add recent focus (most important for understanding current context)
+                    if summary_data.get("recent_focus"):
+                        semantic_parts.append(
+                            f"**Recent Focus:**\n{summary_data['recent_focus']}"
+                        )
+
+                    # Add key topics
+                    if summary_data.get("key_topics"):
+                        topics_str = ", ".join(summary_data["key_topics"][:5])
+                        semantic_parts.append(f"**Topics Covered:** {topics_str}")
+
+                    # Add accumulated facts (critical for answering follow-up questions)
+                    if summary_data.get("accumulated_facts"):
+                        facts = summary_data["accumulated_facts"][
+                            :3
+                        ]  # Top 3 most important
+                        if facts:
+                            facts_str = "\n".join(f"- {fact}" for fact in facts)
+                            semantic_parts.append(f"**Key Facts:**\n{facts_str}")
+
+                    semantic_context = "\n\n".join(semantic_parts)
+                    print(
+                        f"   Semantic context length: {len(semantic_context)} characters"
+                    )
+
+                # === STEP 2: Build optimized vector search query ===
                 vector_query_parts = []
                 if message:
                     vector_query_parts.append(message)
                 if interaction and interaction.title:
                     vector_query_parts.append(f"Topic: {interaction.title}")
 
+                # Enhance query with key topics from semantic summary for better retrieval
+                if interaction and interaction.semantic_summary:
+                    topics = interaction.semantic_summary.get("key_topics", [])
+                    if topics:
+                        vector_query_parts.append(
+                            " ".join(topics[:2])
+                        )  # Add top 2 topics
+
                 vector_query = (
                     " ".join(vector_query_parts).strip() or "educational context"
                 )
 
-                # Parallel similarity searches with reduced top_k
+                # === STEP 3: Parallel similarity searches ===
                 search_tasks = []
 
-                # Interaction-specific search (highest priority)
+                # Interaction-specific search (highest priority - includes recent conversations)
                 if interaction and interaction.id:
                     search_tasks.append(
                         langchain_service.similarity_search_by_interaction(
                             query=vector_query,
                             user_id=str(user_id),
                             interaction_id=str(interaction.id),
-                            top_k=2,
+                            top_k=5,  # Increased for better context retrieval
                         )
                     )
 
-                # General search (lower priority, smaller result set)
+                # General search (lower priority, smaller result set - finds related past conversations)
                 search_tasks.append(
                     langchain_service.similarity_search(
                         query=vector_query,
                         user_id=str(user_id),
-                        top_k=3,  # Reduced from 4
+                        top_k=3,
                     )
                 )
 
@@ -300,34 +362,71 @@ async def process_conversation_message(
                     if not isinstance(result, Exception) and result:
                         similar.extend(result)
 
-                # Fast context building with aggressive limits
+                # Debug: Print what we found
+                print(f"🔍 Vector DB Search Results: Found {len(similar)} results")
+                for idx, m in enumerate(similar[:5]):
+                    print(
+                        f"  Result {idx+1}: Title='{m.get('title', '')}', Score={m.get('score', 0)}, Content Length={len(m.get('content', ''))}"
+                    )
+
+                # === STEP 4: Fast context building with priority for summaries ===
                 context_parts = []
                 seen_titles = set()
 
-                for m in similar[:3]:  # Only process top 3 results
+                for m in similar[:5]:  # Process top 5 results for better context
                     title = (m.get("title") or "").strip()
                     content = (m.get("content") or "").strip()
                     score = m.get("score", 0)
                     priority = m.get("priority", "normal")
+                    metadata = m.get("metadata", {})
 
                     if title in seen_titles:
                         continue
                     seen_titles.add(title)
 
-                    # Faster score filtering
-                    if score > (0.3 if priority == "high" else 0.4):
-                        # Aggressive content truncation
-                        if len(content) > 150:  # Very short content
-                            content = content[:150] + "..."
+                    # More lenient score filtering to include relevant context
+                    # Accept scores > 0.0 for interaction-specific searches
+                    if score >= 0.0 or priority == "high":
+                        # Check if this result has a summary in metadata (prioritize it!)
+                        has_summary = metadata.get("summary")
 
-                        if title not in ["User message", "AI response"]:
-                            context_parts.append(f"**{title}**\n{content}")
+                        # For results with summaries, include the summary instead of truncated content
+                        if has_summary:
+                            context_parts.append(
+                                f"**{title} (Summary):**\n{has_summary}"
+                            )
                         else:
-                            context_parts.append(content)
+                            # Moderate content truncation to preserve context
+                            if len(content) > 500:
+                                content = content[:500] + "..."
 
-                context_text = "\n\n---\n\n".join(
-                    context_parts[:2]
-                )  # Max 2 context pieces
+                            if title not in ["User message", "AI response"]:
+                                context_parts.append(f"**{title}:**\n{content}")
+                            else:
+                                context_parts.append(content)
+
+                # === STEP 5: Combine semantic summary with vector search results ===
+                final_context_parts = []
+
+                # Semantic summary goes FIRST (most important for understanding overall context)
+                if semantic_context:
+                    final_context_parts.append(semantic_context)
+
+                # Then add specific conversation context from vector search
+                if context_parts:
+                    final_context_parts.append(
+                        "\n\n---\n\n**Related Conversations:**\n"
+                        + "\n\n---\n\n".join(context_parts[:3])
+                    )
+
+                context_text = "\n\n---\n\n".join(final_context_parts)
+
+                # Debug: Print final context
+                print(f"🔍 Final Context Length: {len(context_text)} characters")
+                print(f"   Includes semantic summary: {bool(semantic_context)}")
+                print(f"   Includes {len(context_parts[:3])} conversation snippets")
+                if context_text:
+                    print(f"🔍 Context Preview: {context_text[:300]}...")
 
                 # Cache aggressively
                 await cache_user_context(
@@ -794,7 +893,7 @@ async def process_conversation_message(
                     },
                 },
                 status="failed",
-                error_message="Insufficient points",
+                error_message=RESPONSE_STATUS.INSUFFICIENT_BALANCE,
                 tokens_used=tokens_used,
                 points_cost=points_cost,
                 input_tokens=input_tokens,
@@ -815,7 +914,7 @@ async def process_conversation_message(
 
             return {
                 "success": False,
-                "message": "Insufficient points",
+                "message": RESPONSE_STATUS.INSUFFICIENT_BALANCE,
                 "interaction_id": str(interaction.id),
                 "ai_response": insufficient_points_message,  # Include the error message
             }
@@ -894,6 +993,7 @@ async def process_conversation_message(
         )
 
         # Run embeddings and cache invalidation in background
+        print(f"🔄 Starting background embeddings for interaction {interaction.id}")
         asyncio.create_task(
             _background_operations(
                 user_conv.id,
@@ -1161,46 +1261,128 @@ async def _background_operations(
     message: str,
     ai_content: str,
 ):
-    """Run embeddings and cache operations in background"""
+    """Run embeddings, summarization, and cache operations in background"""
     try:
-        # Create embeddings in parallel
+        print(f"📦 Background operations started for interaction {interaction_id}")
+        print(f"   User message length: {len(message) if message else 0}")
+        print(f"   AI content length: {len(ai_content) if ai_content else 0}")
+
+        # === STEP 1: Create semantic summary ===
+        conversation_summary = None
+        if message and ai_content:
+            try:
+                print(f"   📊 Creating semantic summary...")
+                conversation_summary = await langchain_service.summarize_conversation(
+                    user_message=message, ai_response=ai_content
+                )
+                print(f"   ✅ Semantic summary created")
+            except Exception as sum_error:
+                print(f"   ⚠️  Semantic summary creation failed: {sum_error}")
+
+        # === STEP 2: Update interaction-level running summary ===
+        try:
+            print(f"   🔄 Updating interaction-level summary...")
+            async with AsyncSessionLocal() as db:
+                # Get current interaction
+                result = await db.execute(
+                    select(Interaction).where(Interaction.id == str(interaction_id))
+                )
+                interaction = result.scalar_one_or_none()
+
+                if interaction:
+                    current_summary = interaction.semantic_summary
+
+                    # Update the running summary
+                    updated_summary = (
+                        await langchain_service.update_interaction_summary(
+                            current_summary=current_summary,
+                            new_user_message=message,
+                            new_ai_response=ai_content,
+                        )
+                    )
+
+                    # Save updated summary to database
+                    interaction.semantic_summary = updated_summary
+                    await db.commit()
+
+                    print(f"   ✅ Interaction summary updated and saved")
+                    print(f"      Topics: {len(updated_summary.get('key_topics', []))}")
+                    print(
+                        f"      Facts: {len(updated_summary.get('accumulated_facts', []))}"
+                    )
+        except Exception as sum_update_error:
+            print(f"   ⚠️  Interaction summary update failed: {sum_update_error}")
+
+        # === STEP 3: Create embeddings with enhanced metadata ===
         embedding_tasks = []
 
+        # Prepare metadata with summary information
+        enhanced_metadata = {
+            "interaction_id": str(interaction_id),
+        }
+
+        if conversation_summary:
+            enhanced_metadata["summary"] = conversation_summary.get(
+                "semantic_summary", ""
+            )
+            enhanced_metadata["topics"] = conversation_summary.get("main_topics", [])
+            enhanced_metadata["key_facts"] = conversation_summary.get("key_facts", [])
+
         if message:
+            print(
+                f"   ✅ Creating embedding for user message (conv_id: {user_conv_id})"
+            )
+            user_metadata = {**enhanced_metadata, "type": "user_message"}
             embedding_tasks.append(
                 langchain_service.upsert_embedding(
                     conv_id=str(user_conv_id),
                     user_id=str(user_id),
-                    text=message[:500],  # Truncate for faster processing
+                    text=message,  # Full message content
                     title="User message",
-                    metadata={
-                        "interaction_id": str(interaction_id),
-                        "type": "user_message",
-                    },
+                    metadata=user_metadata,
                 )
             )
 
         if ai_content:
+            print(f"   ✅ Creating embedding for AI response (conv_id: {ai_conv_id})")
+            ai_metadata = {**enhanced_metadata, "type": "ai_response"}
             embedding_tasks.append(
                 langchain_service.upsert_embedding(
                     conv_id=str(ai_conv_id),
                     user_id=str(user_id),
-                    text=ai_content[:500],  # Truncate for faster processing
+                    text=ai_content,  # Full AI content
                     title="AI response",
-                    metadata={
-                        "interaction_id": str(interaction_id),
-                        "type": "ai_response",
-                    },
+                    metadata=ai_metadata,
                 )
             )
 
         # Run embeddings in parallel
         if embedding_tasks:
-            await asyncio.gather(*embedding_tasks, return_exceptions=True)
+            print(
+                f"   🚀 Running {len(embedding_tasks)} embedding tasks in parallel..."
+            )
+            results = await asyncio.gather(*embedding_tasks, return_exceptions=True)
 
-        # Invalidate cache
+            # Check for errors
+            for idx, result in enumerate(results):
+                if isinstance(result, Exception):
+                    print(f"   ❌ Embedding task {idx+1} failed: {result}")
+                else:
+                    print(f"   ✅ Embedding task {idx+1} completed successfully")
+        else:
+            print(f"   ⚠️  No embedding tasks created (empty message/content)")
+
+        # === STEP 4: Invalidate cache ===
+        print(f"   🔄 Invalidating user cache for user {user_id}")
         await invalidate_user_cache(str(user_id))
 
+        print(
+            f"✅ Background operations completed successfully for interaction {interaction_id}"
+        )
+
     except Exception as e:
-        print(f"Background operations error: {e}")
+        print(f"❌ Background operations error for interaction {interaction_id}: {e}")
+        import traceback
+
+        traceback.print_exc()
         pass

@@ -28,3 +28,4 @@ class COIN(str, enum.Enum):
 class RESPONSE_STATUS(str, enum.Enum):
     ACCOUNT_EXIST = "account_registered"
     NOT_FOUND = "no_account_found"
+    INSUFFICIENT_BALANCE = "insufficient_balance"

@@ -234,6 +234,80 @@ Respond in valid JSON format:
         ]
     )
 
+    CONVERSATION_SUMMARIZATION = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+You are an expert at extracting key facts and creating semantic summaries from educational conversations.
+
+Your task is to analyze a conversation between a user and AI, then extract:
+1. Key facts and important information discussed
+2. Main concepts and topics covered
+3. Problems solved or questions answered
+4. Important formulas, equations, or rules mentioned
+5. Context that would be useful for future conversations
+
+Create a concise but comprehensive summary that captures the essence of what was discussed.
+Focus on educational content, not conversational fluff.
+
+Respond in valid JSON format:
+{{
+    "key_facts": [
+        "fact 1: specific information learned",
+        "fact 2: important concept discussed",
+        "fact 3: problem solved or explained"
+    ],
+    "main_topics": ["topic1", "topic2", "topic3"],
+    "semantic_summary": "A concise 2-3 sentence summary capturing the essence of the conversation and its educational value",
+    "important_terms": ["term1", "term2", "term3"],
+    "context_for_future": "What context would be most useful for understanding follow-up questions in this conversation"
+}}
+                """,
+            ),
+            (
+                "human",
+                "User message: {user_message}\n\nAI response: {ai_response}",
+            ),
+        ]
+    )
+
+    INTERACTION_SUMMARY_UPDATE = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+You are an expert at maintaining a running semantic summary of an educational conversation.
+
+You will be given:
+1. The current accumulated summary of previous conversations
+2. A new conversation exchange that just happened
+
+Your task is to create an UPDATED summary that:
+- Incorporates new key facts and topics from the latest exchange
+- Maintains important context from previous conversations
+- Removes redundant or less important information to stay concise
+- Prioritizes the most recent and most relevant information
+- Keeps the summary under 500 words
+
+The summary should be optimized for helping the AI understand context in future conversations.
+
+Respond in valid JSON format:
+{{
+    "updated_summary": "The comprehensive running summary incorporating all important information",
+    "key_topics": ["all important topics covered so far"],
+    "recent_focus": "What the user has been focusing on most recently (last 2-3 exchanges)",
+    "accumulated_facts": ["critical facts that should be remembered for future conversations"]
+}}
+                """,
+            ),
+            (
+                "human",
+                "Current accumulated summary: {current_summary}\n\nNew user message: {new_user_message}\n\nNew AI response: {new_ai_response}",
+            ),
+        ]
+    )
+
 
 class StudyGuruModels:
     """Model configurations for StudyGuru"""
@@ -352,6 +426,20 @@ class StudyGuruChains:
         model = StudyGuruModels.get_title_model(temperature=0.3, max_tokens=100)
         parser = JsonOutputParser()
         return StudyGuruPrompts.TITLE_GENERATION | model | parser
+
+    @staticmethod
+    def get_conversation_summarization_chain():
+        """Get conversation summarization chain"""
+        model = StudyGuruModels.get_title_model(temperature=0.2, max_tokens=400)
+        parser = JsonOutputParser()
+        return StudyGuruPrompts.CONVERSATION_SUMMARIZATION | model | parser
+
+    @staticmethod
+    def get_interaction_summary_update_chain():
+        """Get interaction summary update chain"""
+        model = StudyGuruModels.get_title_model(temperature=0.2, max_tokens=500)
+        parser = JsonOutputParser()
+        return StudyGuruPrompts.INTERACTION_SUMMARY_UPDATE | model | parser
 
 
 class StudyGuruConfig:
