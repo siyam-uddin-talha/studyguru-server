@@ -15,17 +15,14 @@ from app.core.database import Base
 import enum
 import uuid
 
-
 class AccountProvider(enum.Enum):
     EMAIL = "EMAIL"
     GOOGLE = "GOOGLE"
-
 
 class UserAccountType(enum.Enum):
     SUPER_ADMIN = "SUPER_ADMIN"
     ADMIN = "ADMIN"
     USER = "USER"
-
 
 class User(Base):
     __tablename__ = "user"

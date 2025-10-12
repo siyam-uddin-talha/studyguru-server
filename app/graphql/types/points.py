@@ -2,7 +2,6 @@ import strawberry
 from typing import Optional, List
 from datetime import datetime
 
-
 @strawberry.type
 class PointTransactionType:
     id: str
@@ -13,7 +12,6 @@ class PointTransactionType:
     conversation_id: Optional[str] = None
     created_at: Optional[datetime] = None
 
-
 @strawberry.type
 class PointsHistoryResponse:
     success: bool
@@ -21,13 +19,11 @@ class PointsHistoryResponse:
     result: Optional[List[PointTransactionType]] = None
     total: Optional[int] = None
 
-
 @strawberry.type
 class UserPointsInfo:
     current_points: int
     total_points_earned: int
     total_points_used: int
-
 
 @strawberry.type
 class PointsInfoResponse:

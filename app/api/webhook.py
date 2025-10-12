@@ -32,7 +32,6 @@ if paddle:
 # Routers
 webhook_router = APIRouter()
 
-
 @webhook_router.post("/paddle")
 async def paddle_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """Handle Paddle webhooks"""
@@ -80,25 +79,21 @@ async def paddle_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     pass
     # Temporarily disabled - function body commented out
 
-
 # Paddle webhook handlers
 async def handle_subscription_created(data: dict, db: AsyncSession):
     """Handle new subscription creation"""
     # Implementation for subscription creation
     pass
 
-
 async def handle_subscription_updated(data: dict, db: AsyncSession):
     """Handle subscription updates"""
     # Implementation for subscription updates
     pass
 
-
 async def handle_subscription_cancelled(data: dict, db: AsyncSession):
     """Handle subscription cancellation"""
     # Implementation for subscription cancellation
     pass
-
 
 async def handle_transaction_completed(data: dict, db: AsyncSession):
     """Handle completed transactions (points purchase)"""

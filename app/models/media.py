@@ -5,7 +5,6 @@ from app.core.database import Base
 
 import uuid
 
-
 # class ImageMedia(Base):
 #     __tablename__ = "image_media"
 
@@ -15,7 +14,6 @@ import uuid
 #     size = Column(Float, nullable=False)
 #     meme_type = Column(String(191), nullable=False)
 #     created_at = Column(DateTime, default=func.now(), nullable=True)
-
 
 class Media(Base):
     __tablename__ = "media"

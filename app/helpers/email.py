@@ -14,11 +14,9 @@ from email.utils import formataddr
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 env = Environment(loader=FileSystemLoader(templates_dir))
 
-
 def render_template(template_name: str, **kwargs):
     template = env.get_template(template_name)
     return template.render(**kwargs)
-
 
 async def send_email(to_email: str, subject: str, html_content: str):
     """Send email using SMTP"""
@@ -44,9 +42,7 @@ async def send_email(to_email: str, subject: str, html_content: str):
 
         return True
     except Exception as e:
-        print(f"Email sending failed: {e}")
         return False
-
 
 async def send_verification_email(email: str, pin: int, recipient_name: str):
     """Send verification email wit OTP"""
@@ -56,7 +52,6 @@ async def send_verification_email(email: str, pin: int, recipient_name: str):
     )
     return await send_email(email, subject, html_content)
 
-
 async def send_reset_email(email: str, pin: int, recipient_name: str):
     """Send password reset email with PIN"""
     subject = "Use this OTP to reset your password"
@@ -64,7 +59,6 @@ async def send_reset_email(email: str, pin: int, recipient_name: str):
         "reset_password.html", name=recipient_name, otp=str(pin), email=email
     )
     return await send_email(email, subject, html_content)
-
 
 async def send_welcome_email(email: str, recipient_name: str, isByEmail: bool):
     """Send Welcome email"""

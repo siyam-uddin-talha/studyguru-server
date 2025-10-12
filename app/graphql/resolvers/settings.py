@@ -22,7 +22,6 @@ from app.helpers.pivot import get_or_create_country_from_object
 
 from app.constants.constant import CONSTANTS, COIN
 
-
 @strawberry.type
 class SettingsQuery:
     @strawberry.field
@@ -79,7 +78,6 @@ class SettingsQuery:
             return PasswordConfirmationResponse(
                 success=False, message=str(e), has_password=False
             )
-
 
 @strawberry.type
 class SettingsMutation:

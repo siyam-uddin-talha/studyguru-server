@@ -4,7 +4,6 @@ from sqlalchemy import select
 import uuid
 from app.models.pivot import Country
 
-
 async def get_or_create_country(db: AsyncSession, country_code: str, **kwargs):
     """
     Get an existing country by country_code or create a new one if it doesn't exist.
@@ -67,7 +66,6 @@ async def get_or_create_country(db: AsyncSession, country_code: str, **kwargs):
         else:
             # Re-raise the original error if it's not a race condition
             raise e
-
 
 async def get_or_create_country_from_object(db: AsyncSession, country_obj):
     """Wrapper that accepts a Country object and calls the main function"""

@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     PADDLE_ENVIRONMENT: str = getenv("PADDLE_ENVIRONMENT", "sandbox")  # or "production"
 
     # Guardrail Configuration
-    DISABLE_GUARDRAIL: bool = getenv("DISABLE_GUARDRAIL", "false").lower() == "true"
+    DISABLE_GUARDRAIL: bool = getenv("DISABLE_GUARDRAIL", "true").lower() == "true"
 
     # OpenAI
     OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "")

@@ -6,7 +6,6 @@ from app.helpers.websocket_auth import get_current_user_from_websocket
 
 router = APIRouter()
 
-
 # Store active WebSocket connections
 class ConnectionManager:
     def __init__(self):
@@ -40,7 +39,6 @@ class ConnectionManager:
                 await connection.send_text(json.dumps(message))
                 sent_successfully = True
             except Exception as e:
-                print(f"Failed to send WebSocket message: {e}")
                 # Remove dead connections
                 self.active_connections[user_id].remove(connection)
 
@@ -49,9 +47,7 @@ class ConnectionManager:
                 f"Failed to send message to any WebSocket connection for user {user_id}"
             )
 
-
 manager = ConnectionManager()
-
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -91,7 +87,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket, user_id)
 
-
 # Function to send message received notification
 async def notify_message_received(
     user_id: str, interaction_id: str, conversation_id: str
@@ -106,7 +101,6 @@ async def notify_message_received(
         },
     }
     await manager.send_personal_message(message, user_id)
-
 
 # Function to send AI response ready notification
 async def notify_ai_response_ready(user_id: str, interaction_id: str, ai_response: str):

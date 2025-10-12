@@ -9,7 +9,6 @@ from app.graphql.types.subscription import (
 from app.core.config import settings
 from typing import Optional
 
-
 def parse_photo_url(photo_url: str) -> str:
     """Parse photo URL to include S3 bucket URL if needed"""
     if not photo_url:
@@ -19,7 +18,6 @@ def parse_photo_url(photo_url: str) -> str:
         return photo_url
 
     return f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{photo_url}"
-
 
 async def create_user_profile(user: User) -> Account:
     """Create user profile from User model"""
@@ -83,7 +81,6 @@ async def create_user_profile(user: User) -> Account:
         education_level=user.education_level,
         birthday=user.birthday,
     )
-
 
 async def get_current_user_from_context(context) -> Optional[User]:
     """Extract current user from GraphQL context"""

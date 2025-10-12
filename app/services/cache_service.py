@@ -7,7 +7,6 @@ import time
 from typing import Any, Optional, Dict
 from functools import wraps
 
-
 class SimpleCache:
     """Simple in-memory cache with TTL support"""
 
@@ -58,10 +57,8 @@ class SimpleCache:
             for key in expired_keys:
                 del self._cache[key]
 
-
 # Global cache instance
 cache_service = SimpleCache(default_ttl=300)
-
 
 def cached(ttl: int = 300, key_prefix: str = ""):
     """Decorator for caching function results"""
@@ -86,7 +83,6 @@ def cached(ttl: int = 300, key_prefix: str = ""):
 
     return decorator
 
-
 async def cache_user_context(
     user_id: str, context_data: Dict[str, Any], ttl: int = 600
 ):
@@ -94,12 +90,10 @@ async def cache_user_context(
     key = f"user_context:{user_id}"
     await cache_service.set(key, context_data, ttl)
 
-
 async def get_cached_user_context(user_id: str) -> Optional[Dict[str, Any]]:
     """Get cached user context data"""
     key = f"user_context:{user_id}"
     return await cache_service.get(key)
-
 
 async def cache_interaction_data(
     interaction_id: str, data: Dict[str, Any], ttl: int = 300
@@ -108,18 +102,15 @@ async def cache_interaction_data(
     key = f"interaction:{interaction_id}"
     await cache_service.set(key, data, ttl)
 
-
 async def get_cached_interaction_data(interaction_id: str) -> Optional[Dict[str, Any]]:
     """Get cached interaction data"""
     key = f"interaction:{interaction_id}"
     return await cache_service.get(key)
 
-
 async def invalidate_user_cache(user_id: str):
     """Invalidate all cache entries for a user"""
     # This is a simple implementation - in production you might want more sophisticated invalidation
     await cache_service.delete(f"user_context:{user_id}")
-
 
 async def invalidate_interaction_cache(interaction_id: str):
     """Invalidate cache entries for an interaction"""

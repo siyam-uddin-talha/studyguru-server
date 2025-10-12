@@ -7,10 +7,8 @@ from .subscription import PurchasedSubscriptionType
 from typing import Type
 import enum
 
-
 AccountProviderEnum: Type[AccountProvider] = strawberry.enum(AccountProvider)
 UserAccountTypeEnum: Type[UserAccountType] = strawberry.enum(UserAccountType)
-
 
 @strawberry.type
 class Account:
@@ -41,7 +39,6 @@ class Account:
     total_points_earned: Optional[int] = None
     total_points_used: Optional[int] = None
 
-
 @strawberry.type
 class AuthType:
     success: bool
@@ -49,7 +46,6 @@ class AuthType:
     account: Optional[Account] = None
     token: Optional[str] = None
     response_status: Optional[str] = None
-
 
 @strawberry.type
 class AuthLoginType:
@@ -60,7 +56,6 @@ class AuthLoginType:
     token: Optional[str] = None
     account: Optional[Account] = None
 
-
 @strawberry.input
 class LoginInput:
     email: Optional[str] = None
@@ -68,7 +63,6 @@ class LoginInput:
     phone_number: Optional[str] = None
     provider: str
     country: Optional[CountryInput] = None
-
 
 @strawberry.input
 class AccountAccessInput:

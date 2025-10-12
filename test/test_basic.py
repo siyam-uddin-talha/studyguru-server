@@ -21,16 +21,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get("/")
 async def root():
     return {"message": "StudyGuru Pro API - Basic Test"}
 
-
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
-
 
 if __name__ == "__main__":
     import uvicorn

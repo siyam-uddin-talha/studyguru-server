@@ -13,7 +13,6 @@ s3_client = boto3.client(
     region_name=settings.AWS_ORIGIN,
 )
 
-
 class FileService:
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
@@ -167,5 +166,4 @@ class FileService:
             s3_client.delete_object(Bucket=settings.AWS_S3_BUCKET, Key=s3_key)
             return True
         except Exception as e:
-            print(f"Error deleting file from S3: {e}")
             return False

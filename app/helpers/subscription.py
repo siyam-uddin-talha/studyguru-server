@@ -18,7 +18,6 @@ from app.models.interaction import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 
-
 async def get_or_create_free_subscription(db: AsyncSession) -> PurchasedSubscription:
     """Get or create a free subscription for new users"""
 
@@ -43,7 +42,6 @@ async def get_or_create_free_subscription(db: AsyncSession) -> PurchasedSubscrip
     await db.refresh(purchased_sub)
 
     return purchased_sub
-
 
 async def add_point_transaction_async(
     db: AsyncSession,
@@ -128,7 +126,6 @@ async def add_point_transaction_async(
         await db.rollback()
         raise Exception(f"Unexpected error: {str(e)}")
 
-
 async def add_earned_points_async(
     db: AsyncSession,
     user_id: str,
@@ -147,7 +144,6 @@ async def add_earned_points_async(
         description=description,
         conversation_id=conversation_id,
     )
-
 
 async def add_used_points_async(
     db: AsyncSession,
@@ -168,7 +164,6 @@ async def add_used_points_async(
         conversation_id=conversation_id,
     )
 
-
 async def add_purchased_points_async(
     db: AsyncSession, user_id: str, points: int, description: Optional[str] = None
 ) -> Optional[PointTransaction]:
@@ -183,7 +178,6 @@ async def add_purchased_points_async(
         description=description,
     )
 
-
 async def add_purchased_points_async(
     db: AsyncSession, user_id: str, points: int, description: Optional[str] = None
 ) -> Optional[PointTransaction]:
@@ -197,7 +191,6 @@ async def add_purchased_points_async(
         points=points,
         description=description,
     )
-
 
 # Batch operations for better performance
 async def add_multiple_transactions_async(
@@ -271,7 +264,6 @@ async def add_multiple_transactions_async(
         await db.rollback()
         raise Exception(f"Batch transaction failed: {str(e)}")
 
-
 async def award_share_visit_reward(
     db: AsyncSession,
     interaction_share: InteractionShare,
@@ -307,7 +299,6 @@ async def award_share_visit_reward(
 
         # Don't reward if the visitor is the owner themselves
         if visitor_user_id and visitor_user_id == owner_user.id:
-            print(f"🚫 Owner visited their own shared interaction - no reward given")
             return False
 
         # Check if this visitor has already been rewarded
@@ -332,7 +323,6 @@ async def award_share_visit_reward(
             )
         else:
             # No way to identify visitor uniquely
-            print(f"⚠️ Cannot identify visitor uniquely - no reward given")
             return False
 
         existing_visitor_result = await db.execute(visitor_query)
@@ -340,7 +330,6 @@ async def award_share_visit_reward(
 
         if existing_visitor:
             if existing_visitor.reward_given:
-                print(f"🎯 Visitor already rewarded - no duplicate reward")
                 return False
             else:
                 # Update existing visitor record
@@ -377,12 +366,8 @@ async def award_share_visit_reward(
 
         await db.commit()
 
-        print(
-            f"🎉 Awarded {reward_amount} coins to user {owner_user.id} for unique share visit"
-        )
         return True
 
     except Exception as e:
         await db.rollback()
-        print(f"❌ Failed to award share visit reward: {e}")
         return False

@@ -5,12 +5,10 @@ from app.graphql.types.auth import Account
 from .common import CountryInput
 from datetime import datetime
 
-
 @strawberry.input
 class UpdatePasswordInput:
     current_password: str
     new_password: str
-
 
 @strawberry.input
 class UpdateProfileInput:
@@ -33,14 +31,12 @@ class UpdateProfileInput:
     # purchased_subscription: Optional[PurchasedSubscriptionType] = None
     country: Optional[CountryInput] = None
 
-
 @strawberry.type
 class SettingsResponse:
     success: bool
     message: str
     account: Optional[Account] = None
     logout: Optional[bool] = False
-
 
 @strawberry.type
 class PasswordConfirmationResponse:

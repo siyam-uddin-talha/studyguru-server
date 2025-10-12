@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from typing import Dict, Any, Optional, List, Tuple
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -82,7 +83,6 @@ class LangChainService:
         """Initialize Milvus vector store"""
         try:
             if not settings.ZILLIZ_URI or not settings.ZILLIZ_TOKEN:
-                print("Vector database not configured, skipping initialization")
                 return
 
             # Connect to Milvus
@@ -158,10 +158,7 @@ class LangChainService:
                 },
             )
 
-            print("Vector store initialized successfully")
-
         except Exception as e:
-            print(f"Failed to initialize vector store: {e}")
             self.vector_store = None
 
     async def analyze_document(
@@ -205,7 +202,6 @@ class LangChainService:
             return result
 
         except Exception as e:
-            print(f"Document analysis error: {str(e)}")
             return {
                 "type": "error",
                 "language": "unknown",
@@ -234,15 +230,12 @@ class LangChainService:
 
             # Build multimodal content
             multimodal_content = self._build_multimodal_content(message, image_urls)
-            print(f"🛡️ GUARDRAIL CHECK - Content: {multimodal_content}")
 
             # Run guardrail check
             result = await chain.ainvoke(
                 {"content": multimodal_content},
                 config={"callbacks": [callback_handler]},
             )
-
-            print(f"🛡️ GUARDRAIL RESULT: {result}")
 
             # Convert dict result to GuardrailOutput object
             if isinstance(result, dict):
@@ -251,12 +244,10 @@ class LangChainService:
                     violation_type=result.get("violation_type"),
                     reasoning=result.get("reasoning", "No reasoning provided"),
                 )
-                print(f"🛡️ GUARDRAIL OUTPUT: {guardrail_output}")
                 return guardrail_output
             return result
 
         except Exception as e:
-            print(f"🛡️ GUARDRAIL ERROR: {str(e)}")
             return GuardrailOutput(
                 is_violation=False,
                 violation_type=None,
@@ -298,19 +289,33 @@ class LangChainService:
             # Build system prompt
             if interaction_title and interaction_summary:
                 system_prompt = f"""
-                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context.
+                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
                 
                 Current conversation topic: {interaction_title}
                 Context summary: {interaction_summary}
                 
-                Instructions:
-                1. Use the retrieved context from the user's learning history when relevant to provide better, personalized responses
-                2. If the context is not relevant to the current question, answer based on your knowledge
-                3. Maintain consistency with the user's learning style and previous interactions
-                4. Provide clear, educational explanations that build upon previous knowledge when possible
-                5. If this is a follow-up question, reference relevant previous discussions when helpful
+                CRITICAL INSTRUCTIONS FOR CONTEXT USAGE:
+                1. **ALWAYS USE THE PROVIDED CONTEXT** - The user's learning history and previous conversations are provided to help you give personalized, contextual responses
+                2. **Reference previous discussions** - If the current question relates to something discussed before, explicitly reference it
+                3. **Build upon previous knowledge** - Use the context to understand what the user already knows and build upon it
+                4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
+                5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
+                
+                SPECIFIC QUESTION REFERENCE HANDLING:
+                - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
+                - Look for numbered questions, MCQ questions, or problems in the context
+                - Find the specific question the user is referring to and provide a direct answer/explanation
+                - If you cannot find the specific question in the context, ask the user to clarify which question they mean
+                
+                CONTEXT INTEGRATION STRATEGY:
+                - If the context contains relevant information, incorporate it naturally into your response
+                - If the user asks a follow-up question, use the context to understand what they're referring to
+                - If the context shows the user is working on a specific topic, tailor your response accordingly
+                - If the context contains uploaded documents or previous explanations, reference them when relevant
+                - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
                 
                 Always provide helpful, accurate educational assistance. Keep responses concise but informative.
+                **Most importantly: Use the provided context to personalize and enhance your response.**
                 """
             else:
                 system_prompt = """
@@ -320,16 +325,39 @@ class LangChainService:
             # Build user content
             user_content = []
             if context:
-                user_content.append(
-                    {
-                        "type": "text",
-                        "text": f"**Relevant Learning Context:**\n{context}\n",
-                    }
+                # Check if user is asking about a specific numbered item
+                is_specific_query = re.search(
+                    r"(equation|question|problem|mcq)\s+(\d+)",
+                    message or "",
+                    re.IGNORECASE,
                 )
+
+                if is_specific_query:
+                    match = re.search(
+                        r"(equation|question|problem|mcq)\s+(\d+)",
+                        message,
+                        re.IGNORECASE,
+                    )
+                    item_type = match.group(1)
+                    item_number = match.group(2)
+
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": f"**URGENT: USER IS ASKING ABOUT SPECIFIC {item_type.upper()} {item_number}**\n\n**CONTEXT TO SEARCH:**\n{context}\n\n**CRITICAL INSTRUCTIONS:**\n1. The user is asking about {item_type} {item_number} specifically\n2. **YOU MUST FIND {item_type.upper()} {item_number} IN THE CONTEXT ABOVE**\n3. Look for patterns like '{item_number}.' or '{item_type} {item_number}' in the context\n4. **DO NOT give generic information** - find and explain the exact {item_type} {item_number} from the context\n5. If you cannot find {item_type} {item_number} in the context, say so clearly and ask for clarification\n\n",
+                        }
+                    )
+                else:
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": f"**IMPORTANT: USER'S LEARNING CONTEXT AND HISTORY:**\n{context}\n\n**CRITICAL INSTRUCTIONS:**\n1. Use this context to provide personalized, relevant responses\n2. Reference previous discussions, build upon existing knowledge, and maintain consistency with the user's learning journey\n3. **IF THE USER ASKS ABOUT A SPECIFIC QUESTION NUMBER** (like 'mcq 3', 'question 2', 'problem 1'), search the context for that exact numbered question and provide a direct answer\n4. Look for numbered questions, MCQ questions, or problems in the context and answer the specific one the user is asking about\n\n",
+                        }
+                    )
 
             if message:
                 user_content.append(
-                    {"type": "text", "text": f"**Current Question:** {message}"}
+                    {"type": "text", "text": f"**CURRENT USER QUESTION:** {message}"}
                 )
             elif image_urls:
                 user_content.append(
@@ -387,19 +415,33 @@ class LangChainService:
             # Build system prompt (same as non-streaming)
             if interaction_title and interaction_summary:
                 system_prompt = f"""
-                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context.
+                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
                 
                 Current conversation topic: {interaction_title}
                 Context summary: {interaction_summary}
                 
-                Instructions:
-                1. Use the retrieved context from the user's learning history when relevant to provide better, personalized responses
-                2. If the context is not relevant to the current question, answer based on your knowledge
-                3. Maintain consistency with the user's learning style and previous interactions
-                4. Provide clear, educational explanations that build upon previous knowledge when possible
-                5. If this is a follow-up question, reference relevant previous discussions when helpful
+                CRITICAL INSTRUCTIONS FOR CONTEXT USAGE:
+                1. **ALWAYS USE THE PROVIDED CONTEXT** - The user's learning history and previous conversations are provided to help you give personalized, contextual responses
+                2. **Reference previous discussions** - If the current question relates to something discussed before, explicitly reference it
+                3. **Build upon previous knowledge** - Use the context to understand what the user already knows and build upon it
+                4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
+                5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
+                
+                SPECIFIC QUESTION REFERENCE HANDLING:
+                - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
+                - Look for numbered questions, MCQ questions, or problems in the context
+                - Find the specific question the user is referring to and provide a direct answer/explanation
+                - If you cannot find the specific question in the context, ask the user to clarify which question they mean
+                
+                CONTEXT INTEGRATION STRATEGY:
+                - If the context contains relevant information, incorporate it naturally into your response
+                - If the user asks a follow-up question, use the context to understand what they're referring to
+                - If the context shows the user is working on a specific topic, tailor your response accordingly
+                - If the context contains uploaded documents or previous explanations, reference them when relevant
+                - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
                 
                 Always provide helpful, accurate educational assistance. Keep responses concise but informative.
+                **Most importantly: Use the provided context to personalize and enhance your response.**
                 """
             else:
                 system_prompt = """
@@ -409,16 +451,39 @@ class LangChainService:
             # Build user content
             user_content = []
             if context:
-                user_content.append(
-                    {
-                        "type": "text",
-                        "text": f"**Relevant Learning Context:**\n{context}\n",
-                    }
+                # Check if user is asking about a specific numbered item
+                is_specific_query = re.search(
+                    r"(equation|question|problem|mcq)\s+(\d+)",
+                    message or "",
+                    re.IGNORECASE,
                 )
+
+                if is_specific_query:
+                    match = re.search(
+                        r"(equation|question|problem|mcq)\s+(\d+)",
+                        message,
+                        re.IGNORECASE,
+                    )
+                    item_type = match.group(1)
+                    item_number = match.group(2)
+
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": f"**URGENT: USER IS ASKING ABOUT SPECIFIC {item_type.upper()} {item_number}**\n\n**CONTEXT TO SEARCH:**\n{context}\n\n**CRITICAL INSTRUCTIONS:**\n1. The user is asking about {item_type} {item_number} specifically\n2. **YOU MUST FIND {item_type.upper()} {item_number} IN THE CONTEXT ABOVE**\n3. Look for patterns like '{item_number}.' or '{item_type} {item_number}' in the context\n4. **DO NOT give generic information** - find and explain the exact {item_type} {item_number} from the context\n5. If you cannot find {item_type} {item_number} in the context, say so clearly and ask for clarification\n\n",
+                        }
+                    )
+                else:
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": f"**IMPORTANT: USER'S LEARNING CONTEXT AND HISTORY:**\n{context}\n\n**CRITICAL INSTRUCTIONS:**\n1. Use this context to provide personalized, relevant responses\n2. Reference previous discussions, build upon existing knowledge, and maintain consistency with the user's learning journey\n3. **IF THE USER ASKS ABOUT A SPECIFIC QUESTION NUMBER** (like 'mcq 3', 'question 2', 'problem 1'), search the context for that exact numbered question and provide a direct answer\n4. Look for numbered questions, MCQ questions, or problems in the context and answer the specific one the user is asking about\n\n",
+                        }
+                    )
 
             if message:
                 user_content.append(
-                    {"type": "text", "text": f"**Current Question:** {message}"}
+                    {"type": "text", "text": f"**CURRENT USER QUESTION:** {message}"}
                 )
             elif image_urls:
                 user_content.append(
@@ -509,7 +574,6 @@ class LangChainService:
             return results
 
         except Exception as e:
-            print(f"Similarity search error: {e}")
             return []
 
     async def similarity_search_by_interaction(
@@ -531,9 +595,6 @@ class LangChainService:
                 )
             except Exception as expr_error:
                 # Fallback: if interaction_id field doesn't exist, use user filter only
-                print(
-                    f"Interaction field not available, using user filter only: {expr_error}"
-                )
                 retriever = self.vector_store.as_retriever(
                     search_kwargs={
                         "k": min(
@@ -580,7 +641,6 @@ class LangChainService:
             return results
 
         except Exception as e:
-            print(f"Interaction-specific similarity search error: {e}")
             return []
 
     async def upsert_embedding(
@@ -629,14 +689,12 @@ class LangChainService:
             return True
 
         except Exception as e:
-            print(f"Failed to upsert embedding: {e}")
             return False
 
     async def delete_embeddings_by_interaction(self, interaction_id: str) -> bool:
         """Delete all embeddings for a specific interaction"""
         try:
             if not self.vector_store:
-                print("Vector store not initialized, skipping embedding deletion")
                 return False
 
             # Get the collection from the vector store
@@ -656,13 +714,9 @@ class LangChainService:
             # Flush to ensure deletion is persisted
             collection.flush()
 
-            print(f"✅ Deleted vector embeddings for interaction {interaction_id}")
             return True
 
         except Exception as e:
-            print(
-                f"⚠️ Failed to delete vector embeddings for interaction {interaction_id}: {e}"
-            )
             return False
 
     def calculate_points_cost(self, tokens_used: int) -> int:
@@ -713,7 +767,6 @@ class LangChainService:
             return title, summary_title
 
         except Exception as e:
-            print(f"Title generation error: {e}")
             import traceback
 
             traceback.print_exc()
@@ -749,11 +802,6 @@ class LangChainService:
         - context_for_future: Context useful for future conversations
         """
         try:
-            print(f"\n{'='*60}")
-            print(f"📊 SUMMARIZING CONVERSATION")
-            print(f"{'='*60}")
-            print(f"User message length: {len(user_message)}")
-            print(f"AI response length: {len(ai_response)}")
 
             # Use conversation summarization chain
             chain = StudyGuruConfig.CHAINS.get_conversation_summarization_chain()
@@ -773,15 +821,9 @@ class LangChainService:
                 }
             )
 
-            print(f"✅ Conversation summary created:")
-            print(f"   Topics: {result.get('main_topics', [])}")
-            print(f"   Facts: {len(result.get('key_facts', []))} key facts")
-            print(f"{'='*60}\n")
-
             return result
 
         except Exception as e:
-            print(f"❌ Conversation summarization error: {e}")
             import traceback
 
             traceback.print_exc()
@@ -816,16 +858,9 @@ class LangChainService:
         - accumulated_facts: Critical facts to remember
         """
         try:
-            print(f"\n{'='*60}")
-            print(f"🔄 UPDATING INTERACTION SUMMARY")
-            print(f"{'='*60}")
-            print(f"Has existing summary: {current_summary is not None}")
-            print(f"New message length: {len(new_user_message)}")
-            print(f"New response length: {len(new_ai_response)}")
 
             # For first conversation, create initial summary
             if not current_summary or not current_summary.get("updated_summary"):
-                print("   Creating initial summary...")
                 conv_summary = await self.summarize_conversation(
                     new_user_message, new_ai_response
                 )
@@ -837,8 +872,6 @@ class LangChainService:
                     "accumulated_facts": conv_summary.get("key_facts", []),
                 }
 
-                print(f"✅ Initial summary created")
-                print(f"{'='*60}\n")
                 return initial_summary
 
             # Update existing summary
@@ -865,18 +898,9 @@ class LangChainService:
                 }
             )
 
-            print(f"✅ Summary updated:")
-            print(f"   Topics: {result.get('key_topics', [])}")
-            print(
-                f"   Facts: {len(result.get('accumulated_facts', []))} accumulated facts"
-            )
-            print(f"   Recent focus: {result.get('recent_focus', '')[:100]}...")
-            print(f"{'='*60}\n")
-
             return result
 
         except Exception as e:
-            print(f"❌ Summary update error: {e}")
             import traceback
 
             traceback.print_exc()

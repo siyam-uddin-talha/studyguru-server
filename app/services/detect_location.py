@@ -8,14 +8,12 @@ import geoip2.errors
 from datetime import datetime
 import pytz
 
-
 @dataclass
 class LocationDetails:
     country: str
     country_code: str
     calling_code: str
     city: str
-
 
 class GetLocation:
     def __init__(self, request_headers: Dict[str, str], remote_address: str):
@@ -60,13 +58,10 @@ class GetLocation:
                 public_ip = self.get_public_ip_address()
                 if public_ip:
                     self.ip = public_ip
-                    print(f"Localhost detected, using public IP: {self.ip}")
                 else:
                     # Fallback to a default IP for testing (Google DNS)
                     self.ip = "8.8.8.8"
-                    print("Could not get public IP, using fallback IP for testing")
             except Exception as e:
-                print(f"Error getting public IP: {e}")
                 self.ip = "8.8.8.8"  # Fallback
 
     @property
@@ -102,7 +97,6 @@ class GetLocation:
 
                 # Handle API errors
                 if "error" in data:
-                    print(f"API Error: {data['error']}")
                     return self._get_fallback_location()
 
                 return LocationDetails(
@@ -113,10 +107,8 @@ class GetLocation:
                 )
 
         except httpx.RequestError as e:
-            print(f"Error fetching location data: {e}")
             return self._get_fallback_location()
         except Exception as e:
-            print(f"Unexpected error: {e}")
             return self._get_fallback_location()
 
     def _get_fallback_location(self) -> LocationDetails:
@@ -136,21 +128,17 @@ class GetLocation:
             response = requests.get("https://api.ipify.org", timeout=5)
             response.raise_for_status()
             ip = response.text.strip()
-            print(f"My public IP address is: {ip}")
             return ip
         except requests.exceptions.RequestException as e:
-            print(f"Error getting public IP: {e}")
             try:
                 # Fallback to alternative service
                 response = requests.get("https://httpbin.org/ip", timeout=5)
                 response.raise_for_status()
                 data = response.json()
                 ip = data.get("origin", "").split(",")[0].strip()
-                print(f"My public IP address is: {ip}")
                 return ip
             except:
                 return None
-
 
 def get_current_info(ip: str) -> Optional[str]:
     """
@@ -168,15 +156,11 @@ def get_current_info(ip: str) -> Optional[str]:
             response = reader.country(ip)
             return response.country.iso_code
     except geoip2.errors.AddressNotFoundError:
-        print(f"IP {ip} not found in database")
         return None
     except FileNotFoundError:
-        print("GeoLite2 database file not found. Download from MaxMind.")
         return None
     except Exception as e:
-        print(f"Error looking up IP {ip}: {e}")
         return None
-
 
 def get_current_info_fallback(ip: str) -> Optional[str]:
     """
@@ -194,5 +178,4 @@ def get_current_info_fallback(ip: str) -> Optional[str]:
         country_code = response.text.strip()
         return country_code if country_code != "Undefined" else None
     except Exception as e:
-        print(f"Error looking up IP {ip}: {e}")
         return None

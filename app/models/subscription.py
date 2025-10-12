@@ -15,12 +15,10 @@ from app.core.database import Base
 import enum
 import uuid
 
-
 class SubscriptionPlan(enum.Enum):
     ESSENTIAL = "ESSENTIAL"
     PLUS = "PLUS"
     ELITE = "ELITE"
-
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
@@ -43,7 +41,6 @@ class Subscription(Base):
         "PurchasedSubscription", back_populates="subscription"
     )
     billing_logs = relationship("BillingLog", back_populates="subscription")
-
 
 class PurchasedSubscription(Base):
     __tablename__ = "purchased_subscription"
@@ -68,7 +65,6 @@ class PurchasedSubscription(Base):
     )
     users = relationship("User", back_populates="purchased_subscription")
 
-
 class PointTransaction(Base):
     __tablename__ = "point_transaction"
 
@@ -85,7 +81,6 @@ class PointTransaction(Base):
     # Relationships
     user = relationship("User", back_populates="point_transactions")
     conversation = relationship("Conversation", back_populates="point_transaction")
-
 
 class BillingLog(Base):
     __tablename__ = "billing_log"

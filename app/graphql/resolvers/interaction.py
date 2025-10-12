@@ -345,6 +345,8 @@ class InteractionMutation:
 
         # If interaction_id provided validate; else create a new one
 
+        print(f"🔄 DO CONVERSATION INPUT: {input}")
+
         if input.interaction_id:
             result = await db.execute(
                 select(Interaction).where(
@@ -355,7 +357,7 @@ class InteractionMutation:
             interaction = result.scalar_one_or_none()
             if not interaction:
                 return InteractionResponse(
-                    success=False, message="No chat conversation found!"
+                    success=False, message="No conversation found!"
                 )
 
             # Check if this is a fresh interaction by querying conversations
@@ -397,19 +399,6 @@ class InteractionMutation:
         await db.refresh(interaction)
 
         # Log the complete AI response from resolver
-        print("=" * 80)
-        print("🤖 AI RESPONSE FROM RESOLVER")
-        print("=" * 80)
-        print(f"📊 Result Success: {result.get('success')}")
-        print(f"📝 Result Message: {result.get('message')}")
-        print(f"🆔 Interaction ID: {result.get('interaction_id')}")
-        print(f"📄 AI Response Type: {type(result.get('ai_response'))}")
-        print(
-            f"📄 AI Response Length: {len(str(result.get('ai_response'))) if result.get('ai_response') else 0}"
-        )
-        print("-" * 40)
-        print("🔤 AI RESPONSE CONTENT:")
-        print("-" * 40)
         ai_response = result.get("ai_response")
         if ai_response:
             # Truncate long responses for readability
@@ -581,7 +570,6 @@ class InteractionMutation:
             return DefaultResponse(success=result["success"], message=result["message"])
 
         except Exception as e:
-            print(f"Error cancelling generation: {e}")
             return DefaultResponse(
                 success=False, message=f"Failed to cancel generation: {str(e)}"
             )
@@ -597,7 +585,6 @@ class InteractionMutation:
         """
         context = info.context
         current_user = await get_current_user_from_context(context)
-        print(input, " --- input ---")
 
         if not current_user:
             return DefaultResponse(success=False, message="Authentication required")
@@ -636,7 +623,6 @@ class InteractionMutation:
             for s3_key in media_files_to_delete:
                 try:
                     await FileService.delete_file_from_s3(s3_key)
-                    print(f"✅ Deleted S3 file: {s3_key}")
                 except Exception as e:
                     print(f"⚠️  Failed to delete S3 file {s3_key}: {e}")
                     # Continue even if S3 deletion fails
@@ -646,9 +632,6 @@ class InteractionMutation:
                 from app.services.langchain_service import langchain_service
 
                 if langchain_service.vector_store:
-                    print(
-                        f"🗑️  Deleting vector embeddings for interaction {input.interaction_id}"
-                    )
                     # Delete all embeddings for this interaction
                     await langchain_service.delete_embeddings_by_interaction(
                         input.interaction_id
@@ -672,7 +655,6 @@ class InteractionMutation:
 
         except Exception as e:
             await db.rollback()
-            print(f"❌ Error deleting interaction: {e}")
             import traceback
 
             traceback.print_exc()

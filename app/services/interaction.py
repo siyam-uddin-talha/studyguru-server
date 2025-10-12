@@ -22,6 +22,7 @@ from app.services.cache_service import (
     invalidate_interaction_cache,
 )
 import json
+import re
 from app.core.config import settings
 from app.constants.constant import RESPONSE_STATUS
 from pydantic import BaseModel
@@ -313,6 +314,28 @@ async def process_conversation_message(
                 vector_query_parts = []
                 if message:
                     vector_query_parts.append(message)
+
+                    # If user is asking about a specific numbered item, enhance the query
+                    if re.search(
+                        r"(equation|question|problem|mcq)\s+(\d+)",
+                        message,
+                        re.IGNORECASE,
+                    ):
+                        match = re.search(
+                            r"(equation|question|problem|mcq)\s+(\d+)",
+                            message,
+                            re.IGNORECASE,
+                        )
+                        if match:
+                            item_type = match.group(1)
+                            item_number = match.group(2)
+                            # Add specific search terms for numbered content
+                            vector_query_parts.append(f"{item_type} {item_number}")
+                            vector_query_parts.append(f"{item_number}.")
+                            print(
+                                f"🎯 Enhanced query for specific {item_type} {item_number}"
+                            )
+
                 if interaction and interaction.title:
                     vector_query_parts.append(f"Topic: {interaction.title}")
 
@@ -327,9 +350,17 @@ async def process_conversation_message(
                 vector_query = (
                     " ".join(vector_query_parts).strip() or "educational context"
                 )
+                print(f"🔍 Final vector query: '{vector_query}'")
 
                 # === STEP 3: Parallel similarity searches ===
                 search_tasks = []
+
+                # Check if user is asking about a specific numbered item
+                is_specific_numbered_query = re.search(
+                    r"(equation|question|problem|mcq)\s+(\d+)",
+                    message or "",
+                    re.IGNORECASE,
+                )
 
                 # Interaction-specific search (highest priority - includes recent conversations)
                 if interaction and interaction.id:
@@ -338,7 +369,9 @@ async def process_conversation_message(
                             query=vector_query,
                             user_id=str(user_id),
                             interaction_id=str(interaction.id),
-                            top_k=5,  # Increased for better context retrieval
+                            top_k=(
+                                8 if is_specific_numbered_query else 5
+                            ),  # More results for specific queries
                         )
                     )
 
@@ -347,9 +380,42 @@ async def process_conversation_message(
                     langchain_service.similarity_search(
                         query=vector_query,
                         user_id=str(user_id),
-                        top_k=3,
+                        top_k=(
+                            5 if is_specific_numbered_query else 3
+                        ),  # More results for specific queries
                     )
                 )
+
+                # If asking about specific numbered item, do additional searches
+                if is_specific_numbered_query:
+                    match = re.search(
+                        r"(equation|question|problem|mcq)\s+(\d+)",
+                        message,
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        item_type = match.group(1)
+                        item_number = match.group(2)
+
+                        # Search for just the number with dot (e.g., "6.")
+                        search_tasks.append(
+                            langchain_service.similarity_search_by_interaction(
+                                query=f"{item_number}.",
+                                user_id=str(user_id),
+                                interaction_id=str(interaction.id),
+                                top_k=3,
+                            )
+                        )
+
+                        # Search for the full pattern (e.g., "equation 6")
+                        search_tasks.append(
+                            langchain_service.similarity_search_by_interaction(
+                                query=f"{item_type} {item_number}",
+                                user_id=str(user_id),
+                                interaction_id=str(interaction.id),
+                                top_k=3,
+                            )
+                        )
 
                 # Execute searches in parallel
                 search_results = await asyncio.gather(
@@ -368,6 +434,22 @@ async def process_conversation_message(
                     print(
                         f"  Result {idx+1}: Title='{m.get('title', '')}', Score={m.get('score', 0)}, Content Length={len(m.get('content', ''))}"
                     )
+                    # Check if this result contains numbered content
+                    content = m.get("content", "")
+                    if re.search(r"\d+\.\s+", content):
+                        print(f"    ✅ Contains numbered content")
+                    if "equation" in content.lower():
+                        print(f"    ✅ Contains 'equation' references")
+                    if re.search(
+                        r"equation\s+6|question\s+6|problem\s+6|6\.\s+",
+                        content,
+                        re.IGNORECASE,
+                    ):
+                        print(f"    ✅ Contains references to '6'")
+                    # Show a preview of the content
+                    if content:
+                        preview = content[:200].replace("\n", " ")
+                        print(f"    Preview: {preview}...")
 
                 # === STEP 4: Fast context building with priority for summaries ===
                 context_parts = []
@@ -396,14 +478,26 @@ async def process_conversation_message(
                                 f"**{title} (Summary):**\n{has_summary}"
                             )
                         else:
-                            # Moderate content truncation to preserve context
-                            if len(content) > 500:
-                                content = content[:500] + "..."
-
-                            if title not in ["User message", "AI response"]:
-                                context_parts.append(f"**{title}:**\n{content}")
+                            # For MCQ content, preserve the full structure to maintain question numbers
+                            if (
+                                "mcq" in title.lower()
+                                or "question" in title.lower()
+                                or re.search(r"\d+\.\s+", content)
+                            ):
+                                # Don't truncate MCQ content to preserve question structure
+                                if title not in ["User message", "AI response"]:
+                                    context_parts.append(f"**{title}:**\n{content}")
+                                else:
+                                    context_parts.append(content)
                             else:
-                                context_parts.append(content)
+                                # Moderate content truncation for non-MCQ content
+                                if len(content) > 500:
+                                    content = content[:500] + "..."
+
+                                if title not in ["User message", "AI response"]:
+                                    context_parts.append(f"**{title}:**\n{content}")
+                                else:
+                                    context_parts.append(content)
 
                 # === STEP 5: Combine semantic summary with vector search results ===
                 final_context_parts = []
@@ -419,6 +513,32 @@ async def process_conversation_message(
                         + "\n\n---\n\n".join(context_parts[:3])
                     )
 
+                # If no context found and user is asking about specific numbered item, try to get more context
+                if not context_parts and is_specific_numbered_query:
+                    print(
+                        f"⚠️ No context found for specific query, trying broader search..."
+                    )
+                    # Try a broader search without the specific number
+                    broader_search = (
+                        await langchain_service.similarity_search_by_interaction(
+                            query=interaction.title or "educational content",
+                            user_id=str(user_id),
+                            interaction_id=str(interaction.id),
+                            top_k=10,
+                        )
+                    )
+                    if broader_search:
+                        print(
+                            f"✅ Found {len(broader_search)} results in broader search"
+                        )
+                        for m in broader_search[:3]:
+                            content = m.get("content", "")
+                            if re.search(r"\d+\.\s+", content):
+                                final_context_parts.append(
+                                    f"**Additional Context:**\n{content}"
+                                )
+                                break
+
                 context_text = "\n\n---\n\n".join(final_context_parts)
 
                 # Debug: Print final context
@@ -426,7 +546,30 @@ async def process_conversation_message(
                 print(f"   Includes semantic summary: {bool(semantic_context)}")
                 print(f"   Includes {len(context_parts[:3])} conversation snippets")
                 if context_text:
-                    print(f"🔍 Context Preview: {context_text[:300]}...")
+                    print(f"🔍 Context Preview: {context_text[:500]}...")
+                    # Check if context contains numbered content
+                    if re.search(r"\d+\.\s+", context_text):
+                        print(
+                            f"✅ Context contains numbered content (questions/equations)"
+                        )
+                    else:
+                        print(f"❌ Context does NOT contain numbered content")
+                    # Check for specific patterns
+                    if "equation" in context_text.lower():
+                        print(f"✅ Context contains 'equation' references")
+                    if "mcq" in context_text.lower():
+                        print(f"✅ Context contains 'mcq' references")
+                    # Check for specific question numbers
+                    if re.search(
+                        r"equation\s+6|question\s+6|problem\s+6|6\.\s+",
+                        context_text,
+                        re.IGNORECASE,
+                    ):
+                        print(
+                            f"✅ Context contains references to '6' (equation/question/problem)"
+                        )
+                    else:
+                        print(f"❌ Context does NOT contain references to '6'")
 
                 # Cache aggressively
                 await cache_user_context(
@@ -607,7 +750,63 @@ async def process_conversation_message(
         if isinstance(context_text, Exception):
             context_text = ""
 
-        # === PHASE 3: OPTIMIZED AI GENERATION ===
+        # === PHASE 3: PRE-VALIDATE COINS BEFORE AI GENERATION ===
+        # Estimate points cost before generating response to avoid generating responses for users without enough coins
+        estimated_tokens = max_tokens + (
+            len(media_urls) * 500 if media_urls else 0
+        )  # Rough estimate
+        estimated_points_cost = langchain_service.calculate_points_cost(
+            estimated_tokens
+        )
+
+        print(f"💰 COIN VALIDATION")
+        print(f"📊 Estimated tokens: {estimated_tokens}")
+        print(f"💰 Estimated cost: {estimated_points_cost} coins")
+        print(f"💰 User balance: {user.current_points} coins")
+
+        # Check if user has enough coins BEFORE generating response
+        if user.current_points < estimated_points_cost:
+            insufficient_points_message = f"You need {estimated_points_cost} coins to get an AI response, but you only have {user.current_points} coins. Please earn more coins or upgrade your plan."
+
+            # Create AI response for insufficient points
+            ai_failed = Conversation(
+                interaction_id=str(interaction.id),
+                role=ConversationRole.AI,
+                content={
+                    "type": "text",
+                    "result": {
+                        "content": insufficient_points_message,
+                        "error": "Insufficient points for AI response",
+                    },
+                },
+                status="failed",
+                error_message=RESPONSE_STATUS.INSUFFICIENT_BALANCE,
+                tokens_used=0,
+                points_cost=0,
+                input_tokens=0,
+                output_tokens=0,
+                is_hidden=False,  # Make it visible so user can see the error
+            )
+            db.add(ai_failed)
+            await db.commit()
+
+            # Send AI response notification for insufficient points
+            asyncio.create_task(
+                _send_ai_response_notification(
+                    str(user_id),
+                    str(interaction.id),
+                    insufficient_points_message,
+                )
+            )
+
+            return {
+                "success": False,
+                "message": RESPONSE_STATUS.INSUFFICIENT_BALANCE,
+                "interaction_id": str(interaction.id),
+                "ai_response": insufficient_points_message,
+            }
+
+        # === PHASE 4: OPTIMIZED AI GENERATION ===
         print(f"🎛️ DYNAMIC TOKEN SYSTEM")
         print(f"📊 Max Tokens: {max_tokens}")
         print(f"📎 Attachments: {len(media_urls) if media_urls else 0}")
@@ -874,52 +1073,10 @@ async def process_conversation_message(
                 "ai_response": None,
             }
 
-        # === PHASE 4: FAST RESPONSE PROCESSING ===
+        # === PHASE 5: FAST RESPONSE PROCESSING ===
         points_cost = langchain_service.calculate_points_cost(tokens_used)
 
-        # Quick points check
-        if user.current_points < points_cost:
-            # Create a proper error message for insufficient points
-            insufficient_points_message = f"You need {points_cost} coins to get an AI response, but you only have {user.current_points} coins. Please earn more coins or upgrade your plan."
-
-            ai_failed = Conversation(
-                interaction_id=str(interaction.id),
-                role=ConversationRole.AI,
-                content={
-                    "type": "text",
-                    "result": {
-                        "content": insufficient_points_message,
-                        "error": "Insufficient points for AI response",
-                    },
-                },
-                status="failed",
-                error_message=RESPONSE_STATUS.INSUFFICIENT_BALANCE,
-                tokens_used=tokens_used,
-                points_cost=points_cost,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                is_hidden=False,  # Make it visible so user can see the error
-            )
-            db.add(ai_failed)
-            await db.commit()
-
-            # Send AI response notification for insufficient points
-            asyncio.create_task(
-                _send_ai_response_notification(
-                    str(user_id),
-                    str(interaction.id),
-                    insufficient_points_message,
-                )
-            )
-
-            return {
-                "success": False,
-                "message": RESPONSE_STATUS.INSUFFICIENT_BALANCE,
-                "interaction_id": str(interaction.id),
-                "ai_response": insufficient_points_message,  # Include the error message
-            }
-
-        # Update user points
+        # Update user points (we already validated they have enough coins)
         user.current_points -= points_cost
         user.total_points_used += points_cost
 
@@ -969,7 +1126,7 @@ async def process_conversation_message(
         )
         db.add(pt)
 
-        # === PHASE 5: BACKGROUND OPERATIONS ===
+        # === PHASE 6: BACKGROUND OPERATIONS ===
 
         # Commit first for faster response
         await db.commit()

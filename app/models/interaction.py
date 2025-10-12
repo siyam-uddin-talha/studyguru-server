@@ -18,11 +18,9 @@ from app.core.database import Base
 import uuid
 import enum
 
-
 class ConversationRole(enum.Enum):
     USER = "USER"
     AI = "AI"
-
 
 # Junction table for conversation-file relationships
 conversation_files = Table(
@@ -34,7 +32,6 @@ conversation_files = Table(
     Column("media_id", String(191), ForeignKey("media.id"), primary_key=True),
     Column("created_at", DateTime, default=func.now(), nullable=True),
 )
-
 
 class Interaction(Base):
     __tablename__ = "interaction"
@@ -59,7 +56,6 @@ class Interaction(Base):
     # Relationships
     user = relationship("User", back_populates="interactions")
     conversations = relationship("Conversation", back_populates="interaction")
-
 
 class Conversation(Base):
     __tablename__ = "conversation"
@@ -102,7 +98,6 @@ class Conversation(Base):
         "PointTransaction", back_populates="conversation", uselist=False
     )
 
-
 # Share table for temporary clone access
 class InteractionShare(Base):
     __tablename__ = "interaction_share"
@@ -123,7 +118,6 @@ class InteractionShare(Base):
     original_interaction = relationship(
         "Interaction", foreign_keys=[original_interaction_id]
     )
-
 
 # Track unique visitors to shared interactions
 class InteractionShareVisitor(Base):

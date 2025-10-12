@@ -18,7 +18,6 @@ from app.core.database import Base
 import enum
 import uuid
 
-
 class Country(Base):
     __tablename__ = "country"
 
@@ -31,7 +30,6 @@ class Country(Base):
 
     # Relationships
     users = relationship("User", back_populates="country")
-
 
 # # User-Role Pivot Model
 # class UserRolePivot(Base):
@@ -50,14 +48,12 @@ class Country(Base):
 #     # Ensure unique combination of user and role
 #     __table_args__ = (UniqueConstraint("user_id", "role_id", name="uq_user_role"),)
 
-
 # # Enum for Permission Types
 # class PermissionType(enum.Enum):
 #     READ = "read"
 #     WRITE = "write"
 #     DELETE = "delete"
 #     ADMIN = "admin"
-
 
 # # Role-Permission Pivot Model
 # class RolePermissionPivot(Base):

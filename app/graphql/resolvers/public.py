@@ -11,7 +11,6 @@ from app.graphql.types.subscription import (
 )
 from app.models.subscription import Subscription, SubscriptionPlan
 
-
 @strawberry.type
 class PublicQuery:
     @strawberry.field

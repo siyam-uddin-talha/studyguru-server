@@ -22,7 +22,6 @@ from app.workers.scheduler import start_scheduler
 # Configure logger
 logger = logging.getLogger(__name__)
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -32,14 +31,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     pass
 
-
 app = FastAPI(
     title="StudyGuru Pro API",
     description="FastAPI GraphQL API for StudyGuru Pro",
     version="1.0.0",
     lifespan=lifespan,
 )
-
 
 # Exception handler for client disconnects
 @app.exception_handler(ClientDisconnect)
@@ -50,7 +47,6 @@ async def client_disconnect_handler(request: Request, exc: ClientDisconnect):
     )
     # Return empty response - client already disconnected anyway
     return JSONResponse(status_code=499, content={"detail": "Client closed request"})
-
 
 # CORS middleware
 if settings.ENVIRONMENT == "development":
@@ -85,11 +81,9 @@ app.include_router(websocket_router, prefix="/ws")
 # Server-Sent Events routes
 app.include_router(sse_router, prefix="/api/sse")
 
-
 @app.get("/")
 async def root():
     return {"message": "StudyGuru Pro API"}
-
 
 if __name__ == "__main__":
     import uvicorn

@@ -37,7 +37,6 @@ from app.helpers.email import (
 )
 from app.constants.constant import CONSTANTS, COIN, RESPONSE_STATUS
 
-
 @strawberry.type
 class AuthQuery:
     @strawberry.field
@@ -66,12 +65,11 @@ class AuthQuery:
         # await context.db.commit()
 
         account = await create_user_profile(new_user)
-        # print(account, "-------account -----")
+        #
 
         return AuthType(
             success=True, message="Account retrieved successfully", account=account
         )
-
 
 @strawberry.type
 class AuthMutation:

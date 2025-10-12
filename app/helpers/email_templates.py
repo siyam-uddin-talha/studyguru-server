@@ -60,7 +60,6 @@ def generate_otp_email(otp: str, recipient_name: str) -> str:
     </html>
     """
 
-
 def generate_reset_pin_email(otp: str, recipient_name: str) -> str:
     """Generate password reset email template"""
     return f"""
@@ -122,7 +121,6 @@ def generate_reset_pin_email(otp: str, recipient_name: str) -> str:
     </body>
     </html>
     """
-
 
 def generate_welcome_email(
     recipient_name: str, recipient_email: str, quick_start_link: str

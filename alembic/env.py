@@ -13,12 +13,10 @@ import importlib
 import pkgutil
 import pathlib
 
-
 def import_all_models():
     package_dir = pathlib.Path(__file__).parent.parent / "app" / "models"
     for _, module_name, _ in pkgutil.iter_modules([str(package_dir)]):
         importlib.import_module(f"app.models.{module_name}")
-
 
 # Dynamically import all model files so Base.metadata is populated
 import_all_models()
@@ -43,7 +41,6 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
-
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -67,7 +64,6 @@ def run_migrations_offline() -> None:
     with context.begin_transaction():
         context.run_migrations()
 
-
 async def run_migrations_online():
     """Run migrations in 'online' mode."""
     connectable: AsyncEngine = engine
@@ -75,13 +71,11 @@ async def run_migrations_online():
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
 
-
 def do_run_migrations(connection: Connection):
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
         context.run_migrations()
-
 
 if context.is_offline_mode():
     run_migrations_offline()

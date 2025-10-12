@@ -12,7 +12,6 @@ import secrets
 from app.core.config import settings
 from app.models.user import User
 
-
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -23,7 +22,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm="HS256")
     return encoded_jwt
 
-
 def verify_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
@@ -31,16 +29,13 @@ def verify_token(token: str) -> Optional[dict]:
     except jwt.PyJWTError:
         return None
 
-
 def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(
         plain_password.encode("utf-8"), hashed_password.encode("utf-8")
     )
-
 
 async def verify_google_token(token: str) -> Optional[dict]:
     try:
@@ -51,10 +46,8 @@ async def verify_google_token(token: str) -> Optional[dict]:
     except ValueError:
         return None
 
-
 def generate_pin() -> int:
     return secrets.randbelow(900000) + 100000
-
 
 async def get_current_user(request: Request, db: AsyncSession) -> User:
     credentials_exception = HTTPException(
@@ -89,7 +82,6 @@ async def get_current_user(request: Request, db: AsyncSession) -> User:
         raise credentials_exception
 
     return user
-
 
 async def get_current_user_optional(
     request: Request, db: AsyncSession

@@ -11,7 +11,6 @@ from app.helpers.user import get_current_user_from_context
 from app.helpers.subscription import add_point_transaction_async
 from app.constants.constant import CONSTANTS
 
-
 @strawberry.type
 class RewardMutation:
     @strawberry.mutation
@@ -77,8 +76,6 @@ class RewardMutation:
                 )
                 updated_user = result.scalar_one_or_none()
 
-                print(points_to_add, "-------points_to_add -----")
-
                 return RewardPointsResponse(
                     success=True,
                     message=f"Successfully earned {points_to_add} points!",
@@ -91,7 +88,6 @@ class RewardMutation:
                 )
 
         except Exception as e:
-            print(f"Error adding reward points: {str(e)}")
             return RewardPointsResponse(
                 success=False, message="Failed to process reward. Please try again."
             )

@@ -3,7 +3,6 @@ from typing import Optional
 import jwt
 from app.core.config import settings
 
-
 async def get_current_user_from_websocket(websocket: WebSocket) -> Optional[str]:
     """
     Extract user ID from WebSocket connection.
