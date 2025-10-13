@@ -14,7 +14,7 @@ import sys
 import os
 
 # Add the server directory to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.document_integration_service import (
     document_integration_service,

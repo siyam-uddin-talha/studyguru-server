@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 # Add the server directory to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.performance_monitoring_service import (
     performance_monitoring_service,

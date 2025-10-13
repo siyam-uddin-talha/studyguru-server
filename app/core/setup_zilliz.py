@@ -68,7 +68,7 @@ def setup_zilliz_credentials():
             print(f"   {key}: {value}")
 
     print("\n🚀 You can now run the vector database test:")
-    print("   python3 test_vector_db.py")
+    print("   python3 test/test_vector_db.py")
 
 
 if __name__ == "__main__":
