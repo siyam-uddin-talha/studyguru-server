@@ -38,7 +38,14 @@ async def init_db():
     try:
         async with engine.begin() as conn:
             # Import all models here to ensure they are registered
-            from app.models import user, subscription, media, pivot, interaction
+            from app.models import (
+                user,
+                subscription,
+                media,
+                pivot,
+                interaction,
+                context,
+            )
 
             # Create tables if they don't exist
             await conn.run_sync(Base.metadata.create_all)

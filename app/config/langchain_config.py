@@ -154,6 +154,13 @@ CRITICAL INSTRUCTIONS FOR CONTEXT USAGE:
 4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
 5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
 
+CONTEXT SOURCES TO USE:
+- **Semantic Summary**: Use the conversation summary to understand the overall learning context
+- **Vector Search Results**: Use previous discussions and explanations from the user's history
+- **Document Content**: Use uploaded documents, worksheets, and educational materials
+- **Cross-Interaction Learning**: Use knowledge from related conversations across different interactions
+- **Related Conversations**: Use recent conversations within the same interaction
+
 SPECIFIC QUESTION REFERENCE HANDLING:
 - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
 - Look for numbered questions, MCQ questions, or problems in the context
@@ -166,6 +173,13 @@ CONTEXT INTEGRATION STRATEGY:
 - If the context shows the user is working on a specific topic, tailor your response accordingly
 - If the context contains uploaded documents or previous explanations, reference them when relevant
 - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
+
+CONTEXT USAGE EXAMPLES:
+- "Based on our previous discussion about [topic], let me explain..."
+- "As we discussed earlier, [concept] works by..."
+- "Looking at the document you uploaded, I can see that..."
+- "From your previous questions about [topic], I understand you're learning..."
+- "In question 3 from your worksheet, the answer is..."
 
 FORMATTING GUIDELINES:
 1. Use clear section headers with ### for main topics
@@ -187,6 +201,13 @@ EDUCATIONAL APPROACH:
 - Encourage critical thinking
 - Provide clear, concise explanations
 - **Most importantly: Use the provided context to personalize and enhance your response**
+
+FAILURE MODES TO AVOID:
+- Ignoring the provided context and giving generic responses
+- Not referencing previous discussions when relevant
+- Not using uploaded documents when they contain relevant information
+- Not building upon the user's existing knowledge
+- Not maintaining consistency with previous explanations
 
 Always maintain professional, encouraging tone while being educational and helpful. Remember: the context is there to help you provide better, more personalized assistance.
                 """,
@@ -270,21 +291,36 @@ Your task is to analyze a conversation between a user and AI, then extract:
 3. Problems solved or questions answered
 4. Important formulas, equations, or rules mentioned
 5. Context that would be useful for future conversations
+6. Specific question numbers or problems referenced
+7. Learning progress indicators
+8. Areas where the user might need more help
 
 Create a concise but comprehensive summary that captures the essence of what was discussed.
 Focus on educational content, not conversational fluff.
 
+IMPORTANT: Pay special attention to:
+- Numbered questions, problems, or equations mentioned
+- Specific concepts the user is learning
+- Areas where the user showed confusion or needed clarification
+- Solutions provided and explanations given
+- Any follow-up questions that might arise
+
 Respond in valid JSON format:
 {{
     "key_facts": [
-        "fact 1: specific information learned",
-        "fact 2: important concept discussed",
-        "fact 3: problem solved or explained"
+        "fact 1: specific information learned with context",
+        "fact 2: important concept discussed with details",
+        "fact 3: problem solved or explained with solution"
     ],
     "main_topics": ["topic1", "topic2", "topic3"],
     "semantic_summary": "A concise 2-3 sentence summary capturing the essence of the conversation and its educational value",
     "important_terms": ["term1", "term2", "term3"],
-    "context_for_future": "What context would be most useful for understanding follow-up questions in this conversation"
+    "context_for_future": "What context would be most useful for understanding follow-up questions in this conversation",
+    "question_numbers": [1, 2, 3],
+    "learning_progress": "What the user has learned or is learning",
+    "potential_follow_ups": ["follow-up question 1", "follow-up question 2"],
+    "difficulty_level": "beginner|intermediate|advanced",
+    "subject_area": "math|science|language|other"
 }}
                 """,
             ),
@@ -312,15 +348,30 @@ Your task is to create an UPDATED summary that:
 - Removes redundant or less important information to stay concise
 - Prioritizes the most recent and most relevant information
 - Keeps the summary under 500 words
+- Tracks learning progress and difficulty progression
+- Identifies patterns in user questions and learning style
 
 The summary should be optimized for helping the AI understand context in future conversations.
+
+IMPORTANT: Pay special attention to:
+- Question numbers and problem references
+- Learning progression and difficulty changes
+- Areas where the user consistently needs help
+- Concepts that are building upon each other
+- User's preferred learning style and pace
 
 Respond in valid JSON format:
 {{
     "updated_summary": "The comprehensive running summary incorporating all important information",
     "key_topics": ["all important topics covered so far"],
     "recent_focus": "What the user has been focusing on most recently (last 2-3 exchanges)",
-    "accumulated_facts": ["critical facts that should be remembered for future conversations"]
+    "accumulated_facts": ["critical facts that should be remembered for future conversations"],
+    "question_numbers": [1, 2, 3, 4, 5],
+    "learning_progression": "How the user's understanding has evolved",
+    "difficulty_trend": "beginner|intermediate|advanced",
+    "learning_patterns": ["pattern1", "pattern2"],
+    "struggling_areas": ["area1", "area2"],
+    "mastered_concepts": ["concept1", "concept2"]
 }}
                 """,
             ),

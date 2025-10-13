@@ -2,6 +2,7 @@ import os
 import json
 import re
 from typing import Dict, Any, Optional, List, Tuple
+from datetime import datetime
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -301,6 +302,13 @@ class LangChainService:
                 4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
                 5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
                 
+                CONTEXT SOURCES TO USE:
+                - **Semantic Summary**: Use the conversation summary to understand the overall learning context
+                - **Vector Search Results**: Use previous discussions and explanations from the user's history
+                - **Document Content**: Use uploaded documents, worksheets, and educational materials
+                - **Cross-Interaction Learning**: Use knowledge from related conversations across different interactions
+                - **Related Conversations**: Use recent conversations within the same interaction
+                
                 SPECIFIC QUESTION REFERENCE HANDLING:
                 - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
                 - Look for numbered questions, MCQ questions, or problems in the context
@@ -313,6 +321,20 @@ class LangChainService:
                 - If the context shows the user is working on a specific topic, tailor your response accordingly
                 - If the context contains uploaded documents or previous explanations, reference them when relevant
                 - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
+                
+                CONTEXT USAGE EXAMPLES:
+                - "Based on our previous discussion about [topic], let me explain..."
+                - "As we discussed earlier, [concept] works by..."
+                - "Looking at the document you uploaded, I can see that..."
+                - "From your previous questions about [topic], I understand you're learning..."
+                - "In question 3 from your worksheet, the answer is..."
+                
+                FAILURE MODES TO AVOID:
+                - Ignoring the provided context and giving generic responses
+                - Not referencing previous discussions when relevant
+                - Not using uploaded documents when they contain relevant information
+                - Not building upon the user's existing knowledge
+                - Not maintaining consistency with previous explanations
                 
                 Always provide helpful, accurate educational assistance. Keep responses concise but informative.
                 **Most importantly: Use the provided context to personalize and enhance your response.**
@@ -427,6 +449,13 @@ class LangChainService:
                 4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
                 5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
                 
+                CONTEXT SOURCES TO USE:
+                - **Semantic Summary**: Use the conversation summary to understand the overall learning context
+                - **Vector Search Results**: Use previous discussions and explanations from the user's history
+                - **Document Content**: Use uploaded documents, worksheets, and educational materials
+                - **Cross-Interaction Learning**: Use knowledge from related conversations across different interactions
+                - **Related Conversations**: Use recent conversations within the same interaction
+                
                 SPECIFIC QUESTION REFERENCE HANDLING:
                 - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
                 - Look for numbered questions, MCQ questions, or problems in the context
@@ -439,6 +468,20 @@ class LangChainService:
                 - If the context shows the user is working on a specific topic, tailor your response accordingly
                 - If the context contains uploaded documents or previous explanations, reference them when relevant
                 - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
+                
+                CONTEXT USAGE EXAMPLES:
+                - "Based on our previous discussion about [topic], let me explain..."
+                - "As we discussed earlier, [concept] works by..."
+                - "Looking at the document you uploaded, I can see that..."
+                - "From your previous questions about [topic], I understand you're learning..."
+                - "In question 3 from your worksheet, the answer is..."
+                
+                FAILURE MODES TO AVOID:
+                - Ignoring the provided context and giving generic responses
+                - Not referencing previous discussions when relevant
+                - Not using uploaded documents when they contain relevant information
+                - Not building upon the user's existing knowledge
+                - Not maintaining consistency with previous explanations
                 
                 Always provide helpful, accurate educational assistance. Keep responses concise but informative.
                 **Most importantly: Use the provided context to personalize and enhance your response.**
@@ -529,7 +572,66 @@ class LangChainService:
     async def similarity_search(
         self, query: str, user_id: str, top_k: int = 5
     ) -> List[Dict[str, Any]]:
-        """Perform similarity search using LangChain vector store with async optimization"""
+        """Perform similarity search using enhanced vector optimization service"""
+        try:
+            # Use the new vector optimization service for better results
+            from app.services.vector_optimization_service import (
+                vector_optimization_service,
+                SearchQuery,
+            )
+
+            search_query = SearchQuery(
+                query=query,
+                user_id=user_id,
+                top_k=top_k,
+                use_hybrid_search=True,
+                use_query_expansion=True,
+                boost_recent=True,
+            )
+
+            # Get enhanced search results
+            search_results = await vector_optimization_service.hybrid_search(
+                search_query
+            )
+
+            # Convert SearchResult objects to expected format
+            results = []
+            for result in search_results:
+                # Truncate content for faster processing
+                content = result.content
+                if len(content) > 300:
+                    content = content[:300] + "..."
+
+                results.append(
+                    {
+                        "id": result.id,
+                        "interaction_id": result.interaction_id,
+                        "title": result.title,
+                        "content": content,
+                        "metadata": result.metadata,
+                        "score": result.score,
+                        "type": result.content_type,
+                        "relevance_score": result.relevance_score,
+                        "recency_score": result.recency_score,
+                        "importance_score": result.importance_score,
+                        "topic_tags": result.topic_tags,
+                        "question_numbers": result.question_numbers,
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            print(
+                f"⚠️ Enhanced similarity search failed, falling back to basic search: {e}"
+            )
+            # Fallback to original implementation
+            return await self._basic_similarity_search(query, user_id, top_k)
+
+    async def _basic_similarity_search(
+        self, query: str, user_id: str, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Fallback basic similarity search implementation"""
         try:
             if not self.vector_store:
                 return []
@@ -579,7 +681,71 @@ class LangChainService:
     async def similarity_search_by_interaction(
         self, query: str, user_id: str, interaction_id: str, top_k: int = 3
     ) -> List[Dict[str, Any]]:
-        """Fast similarity search prioritizing specific interaction results"""
+        """Fast similarity search prioritizing specific interaction results using enhanced optimization"""
+        try:
+            # Use the new vector optimization service for better results
+            from app.services.vector_optimization_service import (
+                vector_optimization_service,
+                SearchQuery,
+            )
+
+            search_query = SearchQuery(
+                query=query,
+                user_id=user_id,
+                interaction_id=interaction_id,
+                top_k=top_k,
+                use_hybrid_search=True,
+                use_query_expansion=True,
+                boost_recent=True,
+                boost_interaction=True,  # Boost results from same interaction
+            )
+
+            # Get enhanced search results
+            search_results = await vector_optimization_service.hybrid_search(
+                search_query
+            )
+
+            # Convert SearchResult objects to expected format
+            results = []
+            for result in search_results:
+                # Minimal truncation for speed
+                content = result.content
+                if len(content) > 150:
+                    content = content[:150] + "..."
+
+                results.append(
+                    {
+                        "id": result.id,
+                        "interaction_id": result.interaction_id,
+                        "title": result.title,
+                        "content": content,
+                        "metadata": result.metadata,
+                        "score": result.score,
+                        "type": result.content_type,
+                        "priority": "high",  # Mark as high priority since it's from same interaction
+                        "relevance_score": result.relevance_score,
+                        "recency_score": result.recency_score,
+                        "importance_score": result.importance_score,
+                        "topic_tags": result.topic_tags,
+                        "question_numbers": result.question_numbers,
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            print(
+                f"⚠️ Enhanced interaction search failed, falling back to basic search: {e}"
+            )
+            # Fallback to original implementation
+            return await self._basic_similarity_search_by_interaction(
+                query, user_id, interaction_id, top_k
+            )
+
+    async def _basic_similarity_search_by_interaction(
+        self, query: str, user_id: str, interaction_id: str, top_k: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Fallback basic similarity search by interaction implementation"""
         try:
             if not self.vector_store:
                 return []
@@ -651,7 +817,7 @@ class LangChainService:
         title: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Upsert embedding using LangChain vector store with async optimization"""
+        """Upsert embedding using LangChain vector store with enhanced metadata"""
         try:
             if not self.vector_store:
                 return False
@@ -665,6 +831,9 @@ class LangChainService:
             if metadata and "interaction_id" in metadata:
                 interaction_id = metadata["interaction_id"]
 
+            # Enhanced metadata extraction
+            enhanced_metadata = self._extract_enhanced_metadata(text, title, metadata)
+
             # Create document (ID will be auto-generated by Milvus)
             doc = Document(
                 page_content=text,
@@ -674,6 +843,15 @@ class LangChainService:
                     "title": title or "",
                     "original_id": conv_id,  # Store original ID in metadata
                     "metadata": json.dumps(metadata or {}),
+                    "created_at": datetime.now().isoformat(),
+                    "content_type": enhanced_metadata.get("content_type", "unknown"),
+                    "topic_tags": enhanced_metadata.get("topic_tags", []),
+                    "question_numbers": enhanced_metadata.get("question_numbers", []),
+                    "key_concepts": enhanced_metadata.get("key_concepts", []),
+                    "difficulty_level": enhanced_metadata.get(
+                        "difficulty_level", "unknown"
+                    ),
+                    "subject_area": enhanced_metadata.get("subject_area", "unknown"),
                     **(metadata or {}),
                 },
             )
@@ -689,7 +867,161 @@ class LangChainService:
             return True
 
         except Exception as e:
+            print(f"❌ Error upserting embedding: {e}")
             return False
+
+    def _extract_enhanced_metadata(
+        self, text: str, title: Optional[str], metadata: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Extract enhanced metadata from text content"""
+        try:
+            enhanced_metadata = {
+                "content_type": "unknown",
+                "topic_tags": [],
+                "question_numbers": [],
+                "key_concepts": [],
+                "difficulty_level": "unknown",
+                "subject_area": "unknown",
+            }
+
+            text_lower = text.lower()
+            title_lower = (title or "").lower()
+
+            # Detect content type
+            if any(
+                keyword in text_lower
+                for keyword in ["mcq", "multiple choice", "a)", "b)", "c)", "d)"]
+            ):
+                enhanced_metadata["content_type"] = "mcq"
+            elif any(
+                keyword in text_lower
+                for keyword in ["equation", "formula", "solve", "calculate"]
+            ):
+                enhanced_metadata["content_type"] = "equation"
+            elif any(
+                keyword in text_lower
+                for keyword in ["explain", "describe", "what is", "how does"]
+            ):
+                enhanced_metadata["content_type"] = "explanation"
+            elif any(
+                keyword in text_lower for keyword in ["problem", "question", "exercise"]
+            ):
+                enhanced_metadata["content_type"] = "problem"
+            else:
+                enhanced_metadata["content_type"] = "general"
+
+            # Extract question numbers
+            question_numbers = re.findall(r"\b(\d+)\.\s+", text)
+            enhanced_metadata["question_numbers"] = list(set(question_numbers))
+
+            # Extract topic tags based on common educational terms
+            topic_keywords = {
+                "mathematics": [
+                    "math",
+                    "algebra",
+                    "geometry",
+                    "calculus",
+                    "trigonometry",
+                    "equation",
+                    "formula",
+                ],
+                "science": [
+                    "physics",
+                    "chemistry",
+                    "biology",
+                    "experiment",
+                    "hypothesis",
+                    "theory",
+                ],
+                "programming": [
+                    "code",
+                    "programming",
+                    "algorithm",
+                    "function",
+                    "variable",
+                    "loop",
+                ],
+                "language": [
+                    "grammar",
+                    "vocabulary",
+                    "sentence",
+                    "paragraph",
+                    "essay",
+                    "writing",
+                ],
+                "history": [
+                    "historical",
+                    "century",
+                    "war",
+                    "revolution",
+                    "ancient",
+                    "medieval",
+                ],
+            }
+
+            topic_tags = []
+            for topic, keywords in topic_keywords.items():
+                if any(keyword in text_lower for keyword in keywords):
+                    topic_tags.append(topic)
+
+            enhanced_metadata["topic_tags"] = topic_tags
+
+            # Extract key concepts (simple keyword extraction)
+            key_concepts = []
+            concept_patterns = [
+                r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b",  # Capitalized terms
+                r"\b\w+ing\b",  # -ing words
+                r"\b\w+tion\b",  # -tion words
+            ]
+
+            for pattern in concept_patterns:
+                concepts = re.findall(pattern, text)
+                key_concepts.extend(concepts[:5])  # Limit to 5 concepts
+
+            enhanced_metadata["key_concepts"] = list(set(key_concepts))[:10]
+
+            # Determine difficulty level
+            if any(
+                keyword in text_lower
+                for keyword in ["basic", "simple", "easy", "beginner"]
+            ):
+                enhanced_metadata["difficulty_level"] = "beginner"
+            elif any(
+                keyword in text_lower
+                for keyword in ["advanced", "complex", "difficult", "expert"]
+            ):
+                enhanced_metadata["difficulty_level"] = "advanced"
+            else:
+                enhanced_metadata["difficulty_level"] = "intermediate"
+
+            # Determine subject area
+            if enhanced_metadata["topic_tags"]:
+                enhanced_metadata["subject_area"] = enhanced_metadata["topic_tags"][0]
+            elif any(
+                keyword in text_lower
+                for keyword in ["math", "mathematics", "algebra", "geometry"]
+            ):
+                enhanced_metadata["subject_area"] = "mathematics"
+            elif any(
+                keyword in text_lower
+                for keyword in ["science", "physics", "chemistry", "biology"]
+            ):
+                enhanced_metadata["subject_area"] = "science"
+            else:
+                enhanced_metadata["subject_area"] = "general"
+
+            return enhanced_metadata
+
+        except Exception as e:
+            print(f"⚠️ Error extracting enhanced metadata: {e}")
+            return {
+                "content_type": "unknown",
+                "topic_tags": [],
+                "question_numbers": [],
+                "key_concepts": [],
+                "difficulty_level": "unknown",
+                "subject_area": "unknown",
+            }
 
     async def delete_embeddings_by_interaction(self, interaction_id: str) -> bool:
         """Delete all embeddings for a specific interaction"""
@@ -800,25 +1132,18 @@ class LangChainService:
         - semantic_summary: Concise summary of the conversation
         - important_terms: List of important terms mentioned
         - context_for_future: Context useful for future conversations
+        - question_numbers: List of question numbers referenced
+        - learning_progress: What the user has learned
+        - potential_follow_ups: Potential follow-up questions
+        - difficulty_level: Difficulty level of the content
+        - subject_area: Subject area of the content
         """
         try:
+            from app.services.semantic_summary_service import semantic_summary_service
 
-            # Use conversation summarization chain
-            chain = StudyGuruConfig.CHAINS.get_conversation_summarization_chain()
-
-            # Truncate to reasonable lengths to save costs
-            user_msg_truncated = (
-                user_message[:500] if len(user_message) > 500 else user_message
-            )
-            ai_resp_truncated = (
-                ai_response[:1000] if len(ai_response) > 1000 else ai_response
-            )
-
-            result = await chain.ainvoke(
-                {
-                    "user_message": user_msg_truncated,
-                    "ai_response": ai_resp_truncated,
-                }
+            # Use the enhanced semantic summary service
+            result = await semantic_summary_service.create_conversation_summary(
+                user_message, ai_response
             )
 
             return result
@@ -835,6 +1160,11 @@ class LangChainService:
                 "semantic_summary": "Educational conversation about various topics.",
                 "important_terms": [],
                 "context_for_future": "User is engaged in educational learning.",
+                "question_numbers": [],
+                "learning_progress": "Learning in progress",
+                "potential_follow_ups": [],
+                "difficulty_level": "beginner",
+                "subject_area": "other",
             }
 
     async def update_interaction_summary(
@@ -856,46 +1186,21 @@ class LangChainService:
         - key_topics: All important topics covered so far
         - recent_focus: What the user has been focusing on recently
         - accumulated_facts: Critical facts to remember
+        - question_numbers: All question numbers referenced
+        - learning_progression: How the user's understanding has evolved
+        - difficulty_trend: Current difficulty level
+        - learning_patterns: Patterns in user's learning
+        - struggling_areas: Areas where user needs help
+        - mastered_concepts: Concepts the user has mastered
+        - version: Version number of the summary
+        - last_updated: Timestamp of last update
         """
         try:
+            from app.services.semantic_summary_service import semantic_summary_service
 
-            # For first conversation, create initial summary
-            if not current_summary or not current_summary.get("updated_summary"):
-                conv_summary = await self.summarize_conversation(
-                    new_user_message, new_ai_response
-                )
-
-                initial_summary = {
-                    "updated_summary": conv_summary.get("semantic_summary", ""),
-                    "key_topics": conv_summary.get("main_topics", []),
-                    "recent_focus": conv_summary.get("context_for_future", ""),
-                    "accumulated_facts": conv_summary.get("key_facts", []),
-                }
-
-                return initial_summary
-
-            # Update existing summary
-            chain = StudyGuruConfig.CHAINS.get_interaction_summary_update_chain()
-
-            # Truncate to reasonable lengths
-            current_summary_text = current_summary.get("updated_summary", "")[:1000]
-            new_user_truncated = (
-                new_user_message[:500]
-                if len(new_user_message) > 500
-                else new_user_message
-            )
-            new_ai_truncated = (
-                new_ai_response[:1000]
-                if len(new_ai_response) > 1000
-                else new_ai_response
-            )
-
-            result = await chain.ainvoke(
-                {
-                    "current_summary": current_summary_text,
-                    "new_user_message": new_user_truncated,
-                    "new_ai_response": new_ai_truncated,
-                }
+            # Use the enhanced semantic summary service
+            result = await semantic_summary_service.update_interaction_summary(
+                current_summary, new_user_message, new_ai_response
             )
 
             return result
@@ -914,6 +1219,14 @@ class LangChainService:
                     "key_topics": ["General Discussion"],
                     "recent_focus": "User learning",
                     "accumulated_facts": [],
+                    "question_numbers": [],
+                    "learning_progression": "Learning in progress",
+                    "difficulty_trend": "beginner",
+                    "learning_patterns": [],
+                    "struggling_areas": [],
+                    "mastered_concepts": [],
+                    "version": 1,
+                    "last_updated": datetime.now().isoformat(),
                 }
 
 
