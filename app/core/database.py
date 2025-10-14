@@ -12,7 +12,7 @@ elif "mysql+asyncpg://" in db_url:
     # Fix common mistake: asyncpg is for PostgreSQL, not MySQL
     db_url = db_url.replace("mysql+asyncpg://", "mysql+asyncmy://", 1)
 
-engine = create_async_engine(db_url, echo=settings.ENVIRONMENT == "development")
+engine = create_async_engine(db_url, echo=settings.ENABLE_LOGS)
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(

@@ -57,6 +57,13 @@ cd studyguru-pro
 
 ```bash
 uv sync
+
+# Activate virtual environment
+# For Mac/Linux:
+source .venv/bin/activate
+
+# For Windows:
+# .venv\Scripts\activate
 ```
 
 4. **Environment Configuration**
@@ -69,11 +76,24 @@ cp .env.example .env
 5. **Database Setup**
 
 ```bash
-# Run init
+# Activate virtual environment
+# For Mac/Linux:
+source .venv/bin/activate
+
+# For Windows:
+# .venv\Scripts\activate
+
+# Check current migration status
+uv run alembic current
+
+# Run init (only needed for first time setup)
 alembic revision --autogenerate -m "init"
 
 # Run migrations
 uv run alembic upgrade head
+
+# Verify migration status
+uv run alembic current
 
 # Seed the database
 uv run python app/database/seed.py
@@ -82,6 +102,13 @@ uv run python app/database/seed.py
 6. **Run the application**
 
 ```bash
+# Activate virtual environment
+# For Mac/Linux:
+source .venv/bin/activate
+
+# For Windows:
+# .venv\Scripts\activate
+
 # Development
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 5000
 

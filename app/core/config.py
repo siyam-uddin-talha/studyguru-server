@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     )
     PORT: int = int(getenv("PORT", 8000))
     ENVIRONMENT: str = getenv("ENVIRONMENT", "development")
+    DISABLE_LOGS: bool = getenv("DISABLE_LOGS", "true").lower() == "false"
 
     # Database
     DATABASE_URL: str = getenv(
@@ -51,6 +52,9 @@ class Settings(BaseSettings):
 
     # Guardrail Configuration
     DISABLE_GUARDRAIL: bool = getenv("DISABLE_GUARDRAIL", "true").lower() == "true"
+
+    # Logging Configuration
+    ENABLE_LOGS: bool = getenv("ENABLE_LOGS", "false").lower() == "true"
 
     # OpenAI
     OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "")

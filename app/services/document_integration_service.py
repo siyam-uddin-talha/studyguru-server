@@ -25,7 +25,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import AsyncSessionLocal
 from app.models.context import DocumentContext
-from app.models.interaction import Interaction, Media
+from app.models.interaction import Interaction
+from app.models.media import Media
 from app.models.user import User
 from app.services.langchain_service import langchain_service
 from app.services.vector_optimization_service import (

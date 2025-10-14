@@ -24,6 +24,9 @@ from app.core.database import AsyncSessionLocal
 from app.core.config import settings
 import asyncio
 
+# Global task tracking for AI generation cancellation
+active_generation_tasks: Dict[str, asyncio.Task] = {}
+
 
 async def process_conversation_message(
     *,
@@ -438,20 +441,31 @@ async def process_conversation_message(
 
             # Generate conversation response using LangChain
             print(f"💬 Generating conversation response...")
+
+            # Create a task for AI generation that can be cancelled
+            task_key = f"{user_id}_{interaction.id}"
+
+            async def generate_ai_response():
+                return await langchain_service.generate_conversation_response(
+                    message=message or "",
+                    context=context_text,
+                    image_urls=media_urls,
+                    interaction_title=interaction.title if interaction else None,
+                    interaction_summary=(
+                        interaction.semantic_summary.get("updated_summary")
+                        if interaction and interaction.semantic_summary
+                        else None
+                    ),
+                    max_tokens=max_tokens,
+                )
+
+            # Create and track the task
+            generation_task = asyncio.create_task(generate_ai_response())
+            active_generation_tasks[task_key] = generation_task
+
             try:
                 ai_response, input_tokens, output_tokens, total_tokens = (
-                    await langchain_service.generate_conversation_response(
-                        message=message or "",
-                        context=context_text,
-                        image_urls=media_urls,
-                        interaction_title=interaction.title if interaction else None,
-                        interaction_summary=(
-                            interaction.semantic_summary.get("updated_summary")
-                            if interaction and interaction.semantic_summary
-                            else None
-                        ),
-                        max_tokens=max_tokens,
-                    )
+                    await generation_task
                 )
 
                 print(f"✅ AI response generated successfully")
@@ -459,12 +473,31 @@ async def process_conversation_message(
                 print(f"   Output tokens: {output_tokens}")
                 print(f"   Total tokens: {total_tokens}")
 
+            except asyncio.CancelledError:
+                print(
+                    f"🛑 AI generation was cancelled for interaction {interaction.id}"
+                )
+                # Clean up the task from tracking
+                if task_key in active_generation_tasks:
+                    del active_generation_tasks[task_key]
+                return {
+                    "success": False,
+                    "message": "AI generation was cancelled",
+                    "interaction_id": str(interaction.id),
+                }
             except Exception as e:
                 print(f"❌ AI response generation failed: {e}")
+                # Clean up the task from tracking
+                if task_key in active_generation_tasks:
+                    del active_generation_tasks[task_key]
                 return {
                     "success": False,
                     "message": f"Failed to generate response: {str(e)}",
                 }
+            finally:
+                # Clean up the task from tracking when done
+                if task_key in active_generation_tasks:
+                    del active_generation_tasks[task_key]
 
             # Create conversation entries
             print(f"💾 Creating conversation entries...")
@@ -817,6 +850,97 @@ async def _background_operations(
 
         traceback.print_exc()
         pass
+
+
+async def cancel_ai_generation(
+    user_id: str, interaction_id: str, db: AsyncSession
+) -> Dict[str, Any]:
+    """Cancel ongoing AI generation for a user's interaction"""
+    print(f"\n{'='*60}")
+    print(f"🛑 CANCELLATION REQUESTED")
+    print(f"{'='*60}")
+    print(f"👤 User ID: {user_id}")
+    print(f"💬 Interaction ID: {interaction_id}")
+    print(f"{'='*60}\n")
+
+    try:
+        # Check if the interaction exists and belongs to the user
+        result = await db.execute(
+            select(Interaction).where(
+                Interaction.id == interaction_id, Interaction.user_id == user_id
+            )
+        )
+        interaction = result.scalar_one_or_none()
+
+        if not interaction:
+            return {
+                "success": False,
+                "message": "Interaction not found or access denied",
+            }
+
+        # Check if there's an active task for this interaction
+        task_key = f"{user_id}_{interaction_id}"
+        if task_key in active_generation_tasks:
+            task = active_generation_tasks[task_key]
+            if not task.done():
+                task.cancel()
+                print(f"✅ Cancelled active AI generation task for {task_key}")
+            del active_generation_tasks[task_key]
+
+        # Find the most recent processing conversation for this interaction
+        conv_result = await db.execute(
+            select(Conversation)
+            .where(
+                Conversation.interaction_id == interaction_id,
+                Conversation.role == ConversationRole.AI,
+                Conversation.status == "processing",
+            )
+            .order_by(Conversation.created_at.desc())
+            .limit(1)
+        )
+        processing_conv = conv_result.scalar_one_or_none()
+
+        if processing_conv:
+            # Mark as cancelled
+            processing_conv.status = "cancelled"
+            processing_conv.error_message = "Generation stopped by user"
+            processing_conv.content = {
+                "type": "text",
+                "result": {"content": "Response generation was stopped by user."},
+            }
+            await db.commit()
+            print(f"✅ Marked conversation {processing_conv.id} as cancelled")
+
+            # Send notification that generation was cancelled
+            try:
+                from app.api.sse_routes import notify_ai_response_ready_sse
+
+                await notify_ai_response_ready_sse(
+                    user_id=user_id,
+                    interaction_id=interaction_id,
+                    ai_response="Response generation was stopped by user.",
+                )
+                print(f"✅ Sent cancellation notification via SSE")
+            except Exception as e:
+                print(f"⚠️  Failed to send cancellation notification: {e}")
+
+            return {
+                "success": True,
+                "message": "Generation cancelled successfully",
+                "interaction_id": interaction_id,
+            }
+        else:
+            print(f"⚠️  No processing conversation found to cancel")
+            return {
+                "success": False,
+                "message": "No active generation found",
+                "interaction_id": interaction_id,
+            }
+
+    except Exception as e:
+        print(f"❌ Error cancelling AI generation: {e}")
+        await db.rollback()
+        return {"success": False, "message": f"Failed to cancel generation: {str(e)}"}
 
 
 async def _send_notifications_background(

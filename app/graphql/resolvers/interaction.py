@@ -640,7 +640,60 @@ class InteractionMutation:
                 print(f"⚠️  Failed to delete vector embeddings: {e}")
                 # Continue even if vector deletion fails
 
-            # Delete conversations first to avoid foreign key constraint issues
+            # Delete context-related records first to avoid foreign key constraint issues
+            from app.models.context import (
+                ContextUsageLog,
+                ConversationContext,
+                DocumentContext,
+            )
+            from app.models.interaction import InteractionShare, InteractionShareVisitor
+
+            # Delete context usage logs
+            context_usage_logs = await db.execute(
+                select(ContextUsageLog).where(
+                    ContextUsageLog.interaction_id == input.interaction_id
+                )
+            )
+            for log in context_usage_logs.scalars():
+                await db.delete(log)
+
+            # Delete conversation contexts
+            conversation_contexts = await db.execute(
+                select(ConversationContext).where(
+                    ConversationContext.interaction_id == input.interaction_id
+                )
+            )
+            for context in conversation_contexts.scalars():
+                await db.delete(context)
+
+            # Delete document contexts
+            document_contexts = await db.execute(
+                select(DocumentContext).where(
+                    DocumentContext.interaction_id == input.interaction_id
+                )
+            )
+            for doc_context in document_contexts.scalars():
+                await db.delete(doc_context)
+
+            # Delete interaction share visitors first (they reference interaction_share)
+            interaction_shares = await db.execute(
+                select(InteractionShare).where(
+                    InteractionShare.original_interaction_id == input.interaction_id
+                )
+            )
+            for share in interaction_shares.scalars():
+                # Delete visitors for this share
+                visitors = await db.execute(
+                    select(InteractionShareVisitor).where(
+                        InteractionShareVisitor.interaction_share_id == share.id
+                    )
+                )
+                for visitor in visitors.scalars():
+                    await db.delete(visitor)
+                # Delete the share itself
+                await db.delete(share)
+
+            # Delete conversations
             for conversation in interaction.conversations:
                 await db.delete(conversation)
 
