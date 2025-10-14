@@ -31,9 +31,9 @@ class SemanticSummaryService:
         """
         try:
             # Use the enhanced conversation summarization chain
-            chain = (
-                langchain_service.document_analysis_chain
-            )  # This should be the conversation summarization chain
+            from app.config.langchain_config import StudyGuruConfig
+
+            chain = StudyGuruConfig.CHAINS.get_conversation_summarization_chain()
 
             # Truncate inputs to prevent token overflow
             user_msg_truncated = (

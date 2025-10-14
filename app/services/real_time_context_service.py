@@ -380,7 +380,6 @@ class RealTimeContextService:
                 context = ConversationContext(
                     interaction_id=task.interaction_id,
                     user_id=task.user_id,
-                    conversation_id=task.conversation_id,
                     context_type="conversation_cache",
                     context_data=context_data,
                     context_hash=self._calculate_context_hash(context_data),

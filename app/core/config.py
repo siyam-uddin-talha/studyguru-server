@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # Logging Configuration
     ENABLE_LOGS: bool = getenv("ENABLE_LOGS", "false").lower() == "true"
 
+    # Enhanced Document Processing Configuration
+    ENABLE_ENHANCED_PROCESSING: bool = (
+        getenv("ENABLE_ENHANCED_PROCESSING", "false").lower() == "true"
+    )
+
     # OpenAI
     OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "")
 

@@ -263,7 +263,11 @@ async def process_conversation_message(
             print(f"   Media files: {len(media_urls) if media_urls else 0}")
 
             # Check if we have images that need document analysis
-            if media_urls and len(media_urls) > 0:
+            if (
+                media_urls
+                and len(media_urls) > 0
+                and settings.ENABLE_ENHANCED_PROCESSING
+            ):
                 print(
                     "📋 ENHANCED DOCUMENT PROCESSING MODE - Processing uploaded images"
                 )
@@ -519,6 +523,19 @@ async def process_conversation_message(
             db.add(user_conv)
             await db.flush()
 
+            # Send SSE notification that user message was received
+            try:
+                from app.api.sse_routes import notify_message_received_sse
+
+                await notify_message_received_sse(
+                    user_id=str(user_id),
+                    interaction_id=str(interaction.id),
+                    conversation_id=str(user_conv.id),
+                )
+                print(f"✅ Sent message received notification via SSE")
+            except Exception as e:
+                print(f"⚠️  Failed to send message received notification: {e}")
+
             # Create AI conversation entry
             ai_conv = Conversation(
                 interaction_id=str(interaction.id),
@@ -570,6 +587,19 @@ async def process_conversation_message(
                     ai_response,
                 )
             )
+
+            # Send SSE notification that AI response is ready
+            try:
+                from app.api.sse_routes import notify_ai_response_ready_sse
+
+                await notify_ai_response_ready_sse(
+                    user_id=str(user_id),
+                    interaction_id=str(interaction.id),
+                    ai_response=ai_response,
+                )
+                print(f"✅ Sent AI response notification via SSE")
+            except Exception as e:
+                print(f"⚠️  Failed to send AI response notification: {e}")
 
             return {
                 "success": True,
