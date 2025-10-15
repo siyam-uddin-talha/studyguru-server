@@ -88,12 +88,23 @@ class DocumentIntegrationService:
         """
         Comprehensive document processing with multi-level analysis
         """
-        try:
-            print(f"📄 Starting comprehensive document processing for media {media_id}")
+        import time
 
+        doc_start = time.time()
+        print(f"📄 DOC INTEGRATION START: {doc_start:.3f} - media {media_id}")
+
+        try:
             # Step 1: Basic document analysis using LangChain
+            step1_start = time.time()
+            print(f"📄 STEP 1 START: Basic analysis at {step1_start:.3f}")
+
             basic_analysis = await langchain_service.analyze_document(
                 file_url=file_url, max_tokens=max_tokens
+            )
+
+            step1_end = time.time()
+            print(
+                f"📄 STEP 1 COMPLETE: {step1_end:.3f} (took {step1_end - step1_start:.3f}s)"
             )
 
             if basic_analysis.get("type") == "error":
@@ -102,27 +113,70 @@ class DocumentIntegrationService:
                 )
 
             # Step 2: Extract and structure content
+            step2_start = time.time()
+            print(f"📄 STEP 2 START: Extract content at {step2_start:.3f}")
+
             structured_content = await self._extract_structured_content(basic_analysis)
 
+            step2_end = time.time()
+            print(
+                f"📄 STEP 2 COMPLETE: {step2_end:.3f} (took {step2_end - step2_start:.3f}s)"
+            )
+
             # Step 3: Create document chunks
+            step3_start = time.time()
+            print(f"📄 STEP 3 START: Create chunks at {step3_start:.3f}")
+
             chunks = await self._create_document_chunks(structured_content)
 
+            step3_end = time.time()
+            print(
+                f"📄 STEP 3 COMPLETE: {step3_end:.3f} (took {step3_end - step3_start:.3f}s)"
+            )
+
             # Step 4: Analyze document structure
+            step4_start = time.time()
+            print(f"📄 STEP 4 START: Analyze structure at {step4_start:.3f}")
+
             document_analysis = await self._analyze_document_structure(
                 structured_content, chunks, basic_analysis
             )
 
+            step4_end = time.time()
+            print(
+                f"📄 STEP 4 COMPLETE: {step4_end:.3f} (took {step4_end - step4_start:.3f}s)"
+            )
+
             # Step 5: Store document context in database
+            step5_start = time.time()
+            print(f"📄 STEP 5 START: Store context at {step5_start:.3f}")
+
             await self._store_document_context(
                 media_id, interaction_id, user_id, document_analysis
             )
 
+            step5_end = time.time()
+            print(
+                f"📄 STEP 5 COMPLETE: {step5_end:.3f} (took {step5_end - step5_start:.3f}s)"
+            )
+
             # Step 6: Create embeddings for document chunks
+            step6_start = time.time()
+            print(f"📄 STEP 6 START: Create embeddings at {step6_start:.3f}")
+
             await self._create_document_embeddings(
                 user_id, interaction_id, document_analysis
             )
 
-            print(f"✅ Document processing completed successfully")
+            step6_end = time.time()
+            print(
+                f"📄 STEP 6 COMPLETE: {step6_end:.3f} (took {step6_end - step6_start:.3f}s)"
+            )
+
+            doc_end = time.time()
+            print(
+                f"✅ DOC INTEGRATION COMPLETE: {doc_end:.3f} (took {doc_end - doc_start:.3f}s)"
+            )
             return document_analysis
 
         except Exception as e:

@@ -166,6 +166,11 @@ class LangChainService:
         self, file_url: str, max_tokens: int = 1000
     ) -> Dict[str, Any]:
         """Analyze document using LangChain with vision capabilities"""
+        import time
+
+        analysis_start = time.time()
+        print(f"🔍 LANGCHAIN ANALYZE START: {analysis_start:.3f} - {file_url}")
+
         try:
             # Create callback handler to track tokens
             callback_handler = StudyGuruCallbackHandler()
@@ -195,14 +200,25 @@ class LangChainService:
             chain = analysis_prompt | self.vision_llm | self.document_parser
 
             # Run analysis (no variables needed since we constructed the prompt directly)
+            print(f"🔍 LANGCHAIN VISION MODEL CALL START: {time.time():.3f}")
             result = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
+            print(f"🔍 LANGCHAIN VISION MODEL CALL COMPLETE: {time.time():.3f}")
 
             # Add token usage
             result["token"] = callback_handler.tokens_used
 
+            analysis_end = time.time()
+            print(
+                f"🔍 LANGCHAIN ANALYZE COMPLETE: {analysis_end:.3f} (took {analysis_end - analysis_start:.3f}s)"
+            )
+
             return result
 
         except Exception as e:
+            analysis_end = time.time()
+            print(
+                f"🔍 LANGCHAIN ANALYZE ERROR: {analysis_end:.3f} (took {analysis_end - analysis_start:.3f}s) - {e}"
+            )
             return {
                 "type": "error",
                 "language": "unknown",
@@ -253,7 +269,7 @@ class LangChainService:
     async def check_guardrails(
         self, message: str, image_urls: Optional[List[str]] = None
     ) -> GuardrailOutput:
-        """Check content against guardrails using LangChain"""
+        """Check content against guardrails using LangChain - optimized for speed"""
         try:
             # Create callback handler
             callback_handler = StudyGuruCallbackHandler()
@@ -261,15 +277,21 @@ class LangChainService:
             # Use the configured guardrail prompt
             guardrail_prompt = StudyGuruConfig.PROMPTS.GUARDRAIL_CHECK
 
-            # Create chain using dedicated guardrail model
+            # Create chain using dedicated guardrail model (text-only for speed)
             chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
 
-            # Build multimodal content
-            multimodal_content = self._build_multimodal_content(message, image_urls)
+            # Build content - use text-only for guardrails (faster than vision model)
+            if image_urls:
+                # For images, just mention they exist - don't analyze them with vision model
+                content = (
+                    f"User message: {message}\nImages attached: {len(image_urls)} files"
+                )
+            else:
+                content = f"User message: {message}"
 
-            # Run guardrail check
+            # Run guardrail check (text-only, much faster)
             result = await chain.ainvoke(
-                {"content": multimodal_content},
+                {"content": content},
                 config={"callbacks": [callback_handler]},
             )
 
@@ -334,56 +356,15 @@ class LangChainService:
                 ].prompt.template
                 print("🔍 Using DOCUMENT_ANALYSIS prompt for pure document analysis")
             elif interaction_title and interaction_summary:
-                system_prompt = f"""
-                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
-                
-                Current conversation topic: {interaction_title}
-                Context summary: {interaction_summary}
-                
-                CRITICAL INSTRUCTIONS FOR CONTEXT USAGE:
-                1. **ALWAYS USE THE PROVIDED CONTEXT** - The user's learning history and previous conversations are provided to help you give personalized, contextual responses
-                2. **Reference previous discussions** - If the current question relates to something discussed before, explicitly reference it
-                3. **Build upon previous knowledge** - Use the context to understand what the user already knows and build upon it
-                4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
-                5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
-                
-                CONTEXT SOURCES TO USE:
-                - **Semantic Summary**: Use the conversation summary to understand the overall learning context
-                - **Vector Search Results**: Use previous discussions and explanations from the user's history
-                - **Document Content**: Use uploaded documents, worksheets, and educational materials
-                - **Cross-Interaction Learning**: Use knowledge from related conversations across different interactions
-                - **Related Conversations**: Use recent conversations within the same interaction
-                
-                SPECIFIC QUESTION REFERENCE HANDLING:
-                - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
-                - Look for numbered questions, MCQ questions, or problems in the context
-                - Find the specific question the user is referring to and provide a direct answer/explanation
-                - If you cannot find the specific question in the context, ask the user to clarify which question they mean
-                
-                CONTEXT INTEGRATION STRATEGY:
-                - If the context contains relevant information, incorporate it naturally into your response
-                - If the user asks a follow-up question, use the context to understand what they're referring to
-                - If the context shows the user is working on a specific topic, tailor your response accordingly
-                - If the context contains uploaded documents or previous explanations, reference them when relevant
-                - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
-                
-                CONTEXT USAGE EXAMPLES:
-                - "Based on our previous discussion about [topic], let me explain..."
-                - "As we discussed earlier, [concept] works by..."
-                - "Looking at the document you uploaded, I can see that..."
-                - "From your previous questions about [topic], I understand you're learning..."
-                - "In question 3 from your worksheet, the answer is..."
-                
-                FAILURE MODES TO AVOID:
-                - Ignoring the provided context and giving generic responses
-                - Not referencing previous discussions when relevant
-                - Not using uploaded documents when they contain relevant information
-                - Not building upon the user's existing knowledge
-                - Not maintaining consistency with previous explanations
-                
-                Always provide helpful, accurate educational assistance. Keep responses concise but informative.
-                **Most importantly: Use the provided context to personalize and enhance your response.**
-                """
+                # Use the optimized conversation prompt from config
+                system_prompt = (
+                    StudyGuruConfig.PROMPTS.CONVERSATION_WITH_CONTEXT.messages[
+                        0
+                    ].prompt.template.format(
+                        interaction_title=interaction_title,
+                        interaction_summary=interaction_summary,
+                    )
+                )
             else:
                 system_prompt = """
                 You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context. Keep responses concise but informative.
@@ -510,56 +491,15 @@ class LangChainService:
                     "🔍 Using DOCUMENT_ANALYSIS prompt for pure document analysis (streaming)"
                 )
             elif interaction_title and interaction_summary:
-                system_prompt = f"""
-                You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
-                
-                Current conversation topic: {interaction_title}
-                Context summary: {interaction_summary}
-                
-                CRITICAL INSTRUCTIONS FOR CONTEXT USAGE:
-                1. **ALWAYS USE THE PROVIDED CONTEXT** - The user's learning history and previous conversations are provided to help you give personalized, contextual responses
-                2. **Reference previous discussions** - If the current question relates to something discussed before, explicitly reference it
-                3. **Build upon previous knowledge** - Use the context to understand what the user already knows and build upon it
-                4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
-                5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
-                
-                CONTEXT SOURCES TO USE:
-                - **Semantic Summary**: Use the conversation summary to understand the overall learning context
-                - **Vector Search Results**: Use previous discussions and explanations from the user's history
-                - **Document Content**: Use uploaded documents, worksheets, and educational materials
-                - **Cross-Interaction Learning**: Use knowledge from related conversations across different interactions
-                - **Related Conversations**: Use recent conversations within the same interaction
-                
-                SPECIFIC QUESTION REFERENCE HANDLING:
-                - If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
-                - Look for numbered questions, MCQ questions, or problems in the context
-                - Find the specific question the user is referring to and provide a direct answer/explanation
-                - If you cannot find the specific question in the context, ask the user to clarify which question they mean
-                
-                CONTEXT INTEGRATION STRATEGY:
-                - If the context contains relevant information, incorporate it naturally into your response
-                - If the user asks a follow-up question, use the context to understand what they're referring to
-                - If the context shows the user is working on a specific topic, tailor your response accordingly
-                - If the context contains uploaded documents or previous explanations, reference them when relevant
-                - **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
-                
-                CONTEXT USAGE EXAMPLES:
-                - "Based on our previous discussion about [topic], let me explain..."
-                - "As we discussed earlier, [concept] works by..."
-                - "Looking at the document you uploaded, I can see that..."
-                - "From your previous questions about [topic], I understand you're learning..."
-                - "In question 3 from your worksheet, the answer is..."
-                
-                FAILURE MODES TO AVOID:
-                - Ignoring the provided context and giving generic responses
-                - Not referencing previous discussions when relevant
-                - Not using uploaded documents when they contain relevant information
-                - Not building upon the user's existing knowledge
-                - Not maintaining consistency with previous explanations
-                
-                Always provide helpful, accurate educational assistance. Keep responses concise but informative.
-                **Most importantly: Use the provided context to personalize and enhance your response.**
-                """
+                # Use the optimized conversation prompt from config
+                system_prompt = (
+                    StudyGuruConfig.PROMPTS.CONVERSATION_WITH_CONTEXT.messages[
+                        0
+                    ].prompt.template.format(
+                        interaction_title=interaction_title,
+                        interaction_summary=interaction_summary,
+                    )
+                )
             else:
                 system_prompt = """
                 You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context. Keep responses concise but informative.
@@ -911,11 +851,12 @@ class LangChainService:
             if not self.vector_store:
                 return False
 
+            # Import json at the top of the function to avoid scope issues
+            import json
+
             # Ensure text is a string - handle dict/object inputs
             if isinstance(text, dict):
                 # Convert dict to JSON string for embedding
-                import json
-
                 text = json.dumps(text, indent=2)
             elif not isinstance(text, str):
                 # Convert any other type to string
@@ -974,6 +915,9 @@ class LangChainService:
     ) -> Dict[str, Any]:
         """Extract enhanced metadata from text content"""
         try:
+            # Import json at the top of the function to avoid scope issues
+            import json
+
             enhanced_metadata = {
                 "content_type": "unknown",
                 "topic_tags": [],
@@ -985,8 +929,6 @@ class LangChainService:
 
             # Ensure text is a string for processing
             if isinstance(text, dict):
-                import json
-
                 text = json.dumps(text, indent=2)
             elif not isinstance(text, str):
                 text = str(text)

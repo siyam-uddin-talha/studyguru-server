@@ -14,6 +14,7 @@ from app.services.document_integration_service import DocumentIntegrationService
 from app.config.langchain_config import StudyGuruConfig
 
 from app.core.database import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 import asyncio
 
@@ -31,6 +32,7 @@ async def process_conversation_message(
     message: Optional[str],
     media_files: Optional[List[Dict[str, str]]],
     max_tokens: Optional[int] = None,  # Will be calculated dynamically if not provided
+    db: Optional[AsyncSession] = None,  # Database session parameter
 ) -> Dict[str, Any]:
     """
     Optimized conversation processor with parallel operations and aggressive caching.
@@ -52,16 +54,19 @@ async def process_conversation_message(
         max_tokens = StudyGuruConfig.calculate_dynamic_tokens(file_count)
         print(f"🔢 Dynamic token calculation: {file_count} files = {max_tokens} tokens")
 
-    # Use a single DB session for the entire operation
+    # Use provided DB session or create a new one
+    should_close_db = False
+    if db is None:
+        db = AsyncSessionLocal()
+        should_close_db = True
+
     try:
-        async with AsyncSessionLocal() as db:
-            user_id = user.id
-            interaction_id = interaction.id if interaction else None
+        user_id = user.id
+        interaction_id = interaction.id if interaction else None
 
-            # If interaction was passed from resolver, merge it into this session
-            if interaction:
-
-                interaction = await db.merge(interaction)
+        # If interaction was passed from resolver, merge it into this session
+        if interaction:
+            interaction = await db.merge(interaction)
 
             # === PHASE 1: PARALLEL SETUP & MEDIA PROCESSING ===
             async def process_media_parallel():
@@ -170,19 +175,42 @@ async def process_conversation_message(
             )
 
             # === PHASE 2: PARALLEL VALIDATION & CONTEXT RETRIEVAL ===
+            import time
+
+            phase2_start = time.time()
+            print(
+                f"🚀 PHASE 2 START: Guardrails + Context Retrieval at {time.time():.3f}"
+            )
+
             async def run_guardrails():
                 """Run guardrail checks"""
+                guardrail_start = time.time()
+                print(f"🛡️ GUARDRAIL START: {guardrail_start:.3f}")
+
                 if not (message or media_urls):
+                    print(f"🛡️ GUARDRAIL SKIP: No content to check")
                     return None
                 try:
-                    return await langchain_service.check_guardrails(
+                    result = await langchain_service.check_guardrails(
                         message or "", media_urls
                     )
-                except Exception:
+                    guardrail_end = time.time()
+                    print(
+                        f"🛡️ GUARDRAIL COMPLETE: {guardrail_end:.3f} (took {guardrail_end - guardrail_start:.3f}s)"
+                    )
+                    return result
+                except Exception as e:
+                    guardrail_end = time.time()
+                    print(
+                        f"🛡️ GUARDRAIL ERROR: {guardrail_end:.3f} (took {guardrail_end - guardrail_start:.3f}s) - {e}"
+                    )
                     return None
 
             async def get_context_fast():
                 """Enhanced context retrieval using multi-level strategy"""
+                context_start = time.time()
+                print(f"🔍 CONTEXT START: {context_start:.3f}")
+
                 try:
                     from app.services.context_service import context_service
 
@@ -197,6 +225,11 @@ async def process_conversation_message(
 
                     context_text = context_result.get("context", "")
                     metadata = context_result.get("metadata", {})
+
+                    context_end = time.time()
+                    print(
+                        f"🔍 CONTEXT COMPLETE: {context_end:.3f} (took {context_end - context_start:.3f}s)"
+                    )
 
                     print(f"🔍 Enhanced Context Retrieval Results:")
                     print(f"   Sources used: {metadata.get('sources_used', [])}")
@@ -221,12 +254,21 @@ async def process_conversation_message(
 
                     return context_text
                 except Exception as e:
-                    print(f"Enhanced context retrieval error: {e}")
+                    context_end = time.time()
+                    print(
+                        f"🔍 CONTEXT ERROR: {context_end:.3f} (took {context_end - context_start:.3f}s) - {e}"
+                    )
                     return ""
 
             # Run guardrails and context retrieval in parallel
+            print(f"🔄 Starting parallel guardrails + context retrieval...")
             guardrail_result, context_text = await asyncio.gather(
                 run_guardrails(), get_context_fast(), return_exceptions=True
+            )
+
+            phase2_end = time.time()
+            print(
+                f"✅ PHASE 2 COMPLETE: {phase2_end:.3f} (took {phase2_end - phase2_start:.3f}s)"
             )
 
             print(f"🔍 Context text: {context_text}")
@@ -277,6 +319,8 @@ async def process_conversation_message(
                 and len(media_urls) > 0
                 and settings.ENABLE_ENHANCED_PROCESSING
             ):
+                doc_processing_start = time.time()
+                print(f"📋 DOCUMENT PROCESSING START: {doc_processing_start:.3f}")
                 print(
                     "📋 ENHANCED DOCUMENT PROCESSING MODE - Processing uploaded images"
                 )
@@ -298,10 +342,19 @@ async def process_conversation_message(
                     else 1000
                 )
 
-                for i, media_url in enumerate(media_urls):
-                    print(
-                        f"🔍 Processing document {i+1}/{len(media_urls)}: {media_url}"
-                    )
+                print(f"📊 Document processing config:")
+                print(f"   Media URLs: {len(media_urls)}")
+                print(f"   Attachment tokens: {attachment_tokens}")
+                print(f"   Base tokens: {base_tokens}")
+                print(f"   Max tokens: {max_tokens}")
+
+                # Process all documents in parallel for much faster processing
+                async def process_single_document(
+                    i: int, media_url: str
+                ) -> Dict[str, Any]:
+                    """Process a single document with error handling"""
+                    doc_start = time.time()
+                    print(f"🔍 DOC {i+1} START: {doc_start:.3f} - {media_url}")
                     print(f"📊 Using {attachment_tokens} tokens for this document")
 
                     try:
@@ -310,12 +363,20 @@ async def process_conversation_message(
                         media_id = media_obj.id if media_obj else f"media_{i}"
 
                         # Use comprehensive document processing
+                        analysis_start = time.time()
+                        print(f"🔍 DOC {i+1} ANALYSIS START: {analysis_start:.3f}")
+
                         document_analysis = await document_integration_service.process_document_comprehensive(
                             media_id=media_id,
                             interaction_id=str(interaction.id),
                             user_id=str(user_id),
                             file_url=media_url,
                             max_tokens=attachment_tokens,
+                        )
+
+                        analysis_end = time.time()
+                        print(
+                            f"🔍 DOC {i+1} ANALYSIS COMPLETE: {analysis_end:.3f} (took {analysis_end - analysis_start:.3f}s)"
                         )
 
                         # Convert to expected format for backward compatibility
@@ -328,7 +389,7 @@ async def process_conversation_message(
                                 "title", f"Document {i+1}"
                             ),
                             "summary_title": document_analysis.content_summary,
-                            "token": attachment_tokens,  # Estimated tokens
+                            "token": attachment_tokens,
                             "_result": {
                                 "content": document_analysis.full_content,
                                 "questions": [
@@ -364,15 +425,16 @@ async def process_conversation_message(
                             },
                         }
 
-                        analysis_results.append(analysis_result)
-                        processed_documents.append(document_analysis)
-                        total_tokens += attachment_tokens
-
-                        print(f"✅ Document {i+1} processed successfully")
+                        doc_end = time.time()
+                        print(
+                            f"✅ DOC {i+1} COMPLETE: {doc_end:.3f} (took {doc_end - doc_start:.3f}s)"
+                        )
                         print(f"   Type: {document_analysis.document_type}")
                         print(f"   Questions: {document_analysis.total_questions}")
                         print(f"   Topics: {document_analysis.main_topics}")
                         print(f"   Chunks: {len(document_analysis.chunks)}")
+
+                        return analysis_result, document_analysis
 
                     except Exception as doc_error:
                         print(
@@ -384,11 +446,72 @@ async def process_conversation_message(
                                 file_url=media_url, max_tokens=attachment_tokens
                             )
                             if basic_analysis.get("type") != "error":
-                                analysis_results.append(basic_analysis)
-                                total_tokens += basic_analysis.get("token", 0)
+                                return basic_analysis, None
                         except Exception as basic_error:
                             print(f"❌ Basic analysis also failed: {basic_error}")
-                            continue
+
+                        # Return error result
+                        return {
+                            "type": "error",
+                            "language": "unknown",
+                            "title": f"Document {i+1}",
+                            "summary_title": "Processing failed",
+                            "token": 0,
+                            "_result": {
+                                "error": f"Unable to process document: {str(doc_error)}",
+                                "details": (
+                                    str(basic_error)
+                                    if "basic_error" in locals()
+                                    else str(doc_error)
+                                ),
+                            },
+                        }, None
+
+                # Process all documents in parallel
+                parallel_start = time.time()
+                print(f"🚀 PARALLEL PROCESSING START: {parallel_start:.3f}")
+                print(f"🚀 Processing {len(media_urls)} documents in parallel...")
+                document_tasks = [
+                    process_single_document(i, media_url)
+                    for i, media_url in enumerate(media_urls)
+                ]
+
+                # Wait for all documents to complete
+                print(f"⏳ Waiting for all documents to complete...")
+                document_results = await asyncio.gather(
+                    *document_tasks, return_exceptions=True
+                )
+
+                parallel_end = time.time()
+                print(
+                    f"✅ PARALLEL PROCESSING COMPLETE: {parallel_end:.3f} (took {parallel_end - parallel_start:.3f}s)"
+                )
+
+                # Process results
+                for i, result in enumerate(document_results):
+                    if isinstance(result, Exception):
+                        print(f"❌ Document {i+1} failed with exception: {result}")
+                        analysis_results.append(
+                            {
+                                "type": "error",
+                                "language": "unknown",
+                                "title": f"Document {i+1}",
+                                "summary_title": "Processing failed",
+                                "token": 0,
+                                "_result": {"error": f"Exception: {str(result)}"},
+                            }
+                        )
+                    else:
+                        analysis_result, document_analysis = result
+                        analysis_results.append(analysis_result)
+                        if document_analysis:
+                            processed_documents.append(document_analysis)
+                        total_tokens += attachment_tokens
+
+                doc_processing_end = time.time()
+                print(
+                    f"✅ DOCUMENT PROCESSING COMPLETE: {doc_processing_end:.3f} (took {doc_processing_end - doc_processing_start:.3f}s)"
+                )
 
                 if analysis_results:
 
@@ -450,12 +573,17 @@ async def process_conversation_message(
                     }
 
             # Generate conversation response using LangChain
+            ai_generation_start = time.time()
+            print(f"🤖 AI GENERATION START: {ai_generation_start:.3f}")
 
             # Create a task for AI generation that can be cancelled
             task_key = f"{user_id}_{interaction.id}"
 
             async def generate_ai_response():
-                return await langchain_service.generate_conversation_response(
+                ai_start = time.time()
+                print(f"🤖 AI SERVICE CALL START: {ai_start:.3f}")
+
+                result = await langchain_service.generate_conversation_response(
                     message=message or "",
                     context=context_text,
                     image_urls=media_urls,
@@ -468,17 +596,48 @@ async def process_conversation_message(
                     max_tokens=max_tokens,
                 )
 
+                ai_end = time.time()
+                print(
+                    f"🤖 AI SERVICE CALL COMPLETE: {ai_end:.3f} (took {ai_end - ai_start:.3f}s)"
+                )
+                return result
+
             # Create and track the task
             generation_task = asyncio.create_task(generate_ai_response())
             active_generation_tasks[task_key] = generation_task
 
             try:
+                print(f"⏳ Waiting for AI response...")
                 ai_response, input_tokens, output_tokens, total_tokens = (
                     await generation_task
                 )
+
+                ai_generation_end = time.time()
+                print(
+                    f"🤖 AI GENERATION COMPLETE: {ai_generation_end:.3f} (took {ai_generation_end - ai_generation_start:.3f}s)"
+                )
                 print("=" * 200)
+                print(f"🔄 AI RESPONSE TYPE: {type(ai_response)}")
+                print(
+                    f"🔄 AI RESPONSE LENGTH: {len(str(ai_response)) if ai_response else 0}"
+                )
                 print(f"🔄 AI RESPONSE: {ai_response}")
                 print("=" * 200)
+
+                # Check if AI response is empty or None
+                if not ai_response or (
+                    isinstance(ai_response, str) and ai_response.strip() == ""
+                ):
+                    print(f"❌ ERROR: AI response is empty or None!")
+                    print(f"   Input tokens: {input_tokens}")
+                    print(f"   Output tokens: {output_tokens}")
+                    print(f"   Total tokens: {total_tokens}")
+                    return {
+                        "success": False,
+                        "message": "AI response was empty",
+                        "interaction_id": str(interaction.id),
+                        "ai_response": "Sorry, I couldn't generate a response. Please try again.",
+                    }
 
             except asyncio.CancelledError:
 
@@ -534,10 +693,50 @@ async def process_conversation_message(
             except Exception as e:
                 print(f"⚠️  Failed to send message received notification: {e}")
 
-            # Process AI content with enhanced formatting
-            ai_content_type, processed_ai_response = _process_ai_content_fast(
-                ai_response
+            # Process AI content with enhanced formatting - with robust error handling
+            print(
+                f"🔧 CALLING _process_ai_content_fast with ai_response: {ai_response}"
             )
+
+            # Initialize fallback values
+            ai_content_type = "written"
+            processed_ai_response = (
+                str(ai_response) if ai_response else "No response generated"
+            )
+
+            try:
+                ai_content_type, processed_ai_response = _process_ai_content_fast(
+                    ai_response
+                )
+                print(
+                    f"🔧 _process_ai_content_fast returned: type={ai_content_type}, content={processed_ai_response}"
+                )
+            except Exception as processing_error:
+                print(f"⚠️ Error processing AI content: {processing_error}")
+                print(f"🔧 Using fallback processing for AI response")
+                # Use fallback processing - store raw response
+                if isinstance(ai_response, dict):
+                    ai_content_type = "structured"
+                    processed_ai_response = str(ai_response)
+                else:
+                    ai_content_type = "written"
+                    processed_ai_response = (
+                        str(ai_response) if ai_response else "No response generated"
+                    )
+                print(
+                    f"🔧 Fallback result: type={ai_content_type}, content={processed_ai_response}"
+                )
+
+            # Ensure we have valid content to store
+            if not processed_ai_response or (
+                isinstance(processed_ai_response, str)
+                and processed_ai_response.strip() == ""
+            ):
+                processed_ai_response = (
+                    "AI response was generated but could not be processed"
+                )
+                ai_content_type = "error"
+                print(f"🔧 No valid content, using error fallback")
 
             # Create AI conversation entry with enhanced content
             ai_conv = Conversation(
@@ -554,8 +753,17 @@ async def process_conversation_message(
                 status="completed",
             )
 
-            db.add(ai_conv)
-            await db.flush()
+            # CRITICAL: Always store the AI response in database, regardless of other errors
+            try:
+                db.add(ai_conv)
+                await db.flush()
+                print(f"✅ AI conversation entry added to database successfully")
+            except Exception as db_error:
+                print(
+                    f"❌ CRITICAL: Failed to add AI conversation to database: {db_error}"
+                )
+                # This is a critical error - we must not continue without storing the response
+                raise Exception(f"Failed to store AI response in database: {db_error}")
 
             # Update interaction title if needed using enhanced metadata extraction
             try:
@@ -569,11 +777,26 @@ async def process_conversation_message(
                 print(f"⚠️ Metadata extraction failed: {title_error}")
                 # Don't let title generation failure break the main AI response
 
-            # Commit all changes (including title updates)
-            await db.commit()
+            # CRITICAL: Always commit the AI response, even if other operations fail
+            try:
+                await db.commit()
+                print(f"✅ AI response committed to database successfully")
+            except Exception as commit_error:
+                print(
+                    f"❌ CRITICAL: Failed to commit AI response to database: {commit_error}"
+                )
+                # This is a critical error - we must not continue without committing the response
+                raise Exception(
+                    f"Failed to commit AI response to database: {commit_error}"
+                )
 
             # Refresh the interaction to verify the changes were saved
-            await db.refresh(interaction)
+            try:
+                await db.refresh(interaction)
+                print(f"✅ Interaction refreshed successfully")
+            except Exception as refresh_error:
+                print(f"⚠️ Failed to refresh interaction: {refresh_error}")
+                # This is not critical - the AI response is already committed
 
             # Start background operations using real-time context service
             asyncio.create_task(
@@ -598,7 +821,7 @@ async def process_conversation_message(
             except Exception as e:
                 print(f"⚠️  Failed to send AI response notification: {e}")
 
-            return {
+            result = {
                 "success": True,
                 "message": "Response generated successfully",
                 "conversation_id": str(ai_conv.id),
@@ -609,6 +832,8 @@ async def process_conversation_message(
                 "total_tokens": total_tokens,
                 "points_cost": ai_conv.points_cost,
             }
+            print(f"🔧 SERVICE RETURNING RESULT: {result}")
+            return result
 
     except Exception as e:
         print(f"❌ Error in process_conversation_message: {e}")
@@ -616,6 +841,10 @@ async def process_conversation_message(
 
         traceback.print_exc()
         return {"success": False, "message": f"An error occurred: {str(e)}"}
+    finally:
+        # Close the database session if we created it
+        if should_close_db and db:
+            await db.close()
 
 
 async def generate_mcq_questions(
@@ -1193,22 +1422,12 @@ async def _send_ai_response_notification(
 
 
 async def _extract_interaction_metadata_fast(
-    interaction: Interaction, content_text: str, original_message: str = ""
+    interaction: Interaction, content_text, original_message: str = ""
 ):
-    """Fast metadata extraction with dedicated title generation"""
+    """Fast metadata extraction with dedicated title generation using langchain_service"""
     try:
-        # First try to extract from JSON response (existing logic)
-        if content_text.strip().startswith("{"):
-            parsed_response = json.loads(content_text)
-            if isinstance(parsed_response, dict):
-                if "title" in parsed_response and not interaction.title:
-                    interaction.title = parsed_response["title"][:50]
-                if "summary_title" in parsed_response and not interaction.summary_title:
-                    interaction.summary_title = parsed_response["summary_title"][:100]
-                return  # If we got titles from JSON, we're done
-
-        # If no title from JSON or plain text response, generate one using AI
-        # Also update if current title is too generic
+        # Since title and summary_title are no longer in the prompt, always use AI generation
+        # Check if we need to update the title
         needs_title_update = (
             not interaction.title
             or not interaction.summary_title
@@ -1217,15 +1436,29 @@ async def _extract_interaction_metadata_fast(
         )
 
         if needs_title_update:
+            print(
+                f"🔍 Title update needed. Current title: '{interaction.title}', summary_title: '{interaction.summary_title}'"
+            )
 
-            # First, try AI generation
+            # Handle different content types for response preview
+            if isinstance(content_text, dict):
+                # For dictionary responses (like MCQ), convert to string for preview
+                response_preview = str(content_text)[:300]
+            elif isinstance(content_text, str):
+                response_preview = content_text[:300]
+            else:
+                response_preview = str(content_text)[:300]
+
+            print(
+                f"🔍 Calling title generation with message: '{original_message}', response_preview: '{response_preview}'"
+            )
+
+            # Use AI generation for title and summary
             try:
                 title, summary_title = (
                     await langchain_service.generate_interaction_title(
                         message=original_message,
-                        response_preview=content_text[
-                            :300
-                        ],  # First 300 chars of response
+                        response_preview=response_preview,
                     )
                 )
                 print(
@@ -1254,33 +1487,111 @@ async def _extract_interaction_metadata_fast(
                 print(f"✅ Set interaction summary_title: '{summary_title}'")
             else:
                 print(f"⚠️ No summary title generated")
+        else:
+            print(f"✅ Title and summary already exist, skipping generation")
 
-    except (json.JSONDecodeError, KeyError, TypeError, Exception) as e:
+    except Exception as e:
         print(f"Metadata extraction error: {e}")
         # Final fallback: create basic title from message
         if original_message and not interaction.title:
             interaction.title = original_message[:40].strip()
 
 
+def _format_mcq_response(mcq_data: dict) -> str:
+    """Format MCQ response into readable text for frontend display"""
+    try:
+        print(f"🔧 _format_mcq_response called with: {mcq_data}")
+        title = mcq_data.get("title", "MCQ Questions")
+        questions = mcq_data.get("_result", {}).get("questions", [])
+        print(f"🔧 Extracted title: {title}")
+        print(f"🔧 Extracted questions: {questions}")
+
+        if not questions:
+            result = f"**{title}**\n\nNo questions found in the document."
+            print(f"🔧 No questions found, returning: {result}")
+            return result
+
+        formatted_response = f"**{title}**\n\n"
+
+        for i, question_data in enumerate(questions, 1):
+            question_text = question_data.get("question", "")
+            options = question_data.get("options", {})
+            answer = question_data.get("answer", "")
+            explanation = question_data.get("explanation", "")
+
+            formatted_response += f"**{i}. {question_text}**\n"
+
+            if options:
+                for option_key, option_value in options.items():
+                    formatted_response += f"   {option_key.upper()}. {option_value}\n"
+
+            if answer:
+                formatted_response += f"\n**Answer: {answer.upper()}**\n"
+
+            if explanation:
+                formatted_response += f"**Explanation:** {explanation}\n"
+
+            formatted_response += "\n---\n\n"
+
+        result = formatted_response.strip()
+
+        # Safety check: ensure we never return empty content
+        if not result or result.strip() == "":
+            result = f"**MCQ Questions**\n\nQuestions were generated but could not be formatted properly."
+
+        print(f"🔧 _format_mcq_response returning: {result}")
+        return result
+
+    except Exception as e:
+        print(f"❌ Error formatting MCQ response: {e}")
+        result = f"**MCQ Questions**\n\nError formatting questions: {str(e)}"
+        print(f"🔧 Error case returning: {result}")
+        return result
+
+
 def _process_ai_content_fast(content_text) -> tuple[str, str]:
     """Fast AI content processing with enhanced formatting and escaped character handling"""
+    print(
+        f"🔧 PROCESS AI CONTENT START: type={type(content_text)}, length={len(str(content_text)) if content_text else 0}"
+    )
+
+    # Initialize with safe defaults
     ai_content_type = "written"
-    ai_result_content = content_text
+    ai_result_content = str(content_text) if content_text else "No content provided"
+
+    # Ensure we always return valid content
+    if not content_text:
+        print(f"🔧 No content provided, returning default")
+        return ai_content_type, ai_result_content
 
     # Handle structured responses (dictionaries) from document analysis
     if isinstance(content_text, dict):
+        print(f"🔧 PROCESSING DICT: {content_text}")
         # This is a structured response from document analysis
         ai_content_type = (
             "mcq" if content_text.get("type") == "mcq" else "document_analysis"
         )
-        # Convert to JSON string for storage
-        import json
 
-        ai_result_content = json.dumps(content_text, indent=2)
+        # Convert structured response to readable format for frontend
+        if content_text.get("type") == "mcq":
+            print(f"🔧 CALLING _format_mcq_response with: {content_text}")
+            ai_result_content = _format_mcq_response(content_text)
+            print(f"🔧 _format_mcq_response returned: {ai_result_content}")
+        else:
+            # For other structured responses, convert to JSON
+            import json
+
+            ai_result_content = json.dumps(content_text, indent=2)
+
+        print(
+            f"🔧 DICT RESULT: type={ai_content_type}, length={len(ai_result_content) if ai_result_content else 0}"
+        )
+        print(f"🔧 FINAL RESULT CONTENT: {ai_result_content}")
         return ai_content_type, ai_result_content
 
     # Handle string responses (regular conversations)
     if content_text and isinstance(content_text, str):
+        print(f"🔧 PROCESSING STRING: {content_text[:100]}...")
         # Remove escaped characters that show as backslashes
         ai_result_content = content_text.replace("\\(", "(").replace("\\)", ")")
         ai_result_content = ai_result_content.replace("\\[", "[").replace("\\]", "]")
@@ -1384,4 +1695,17 @@ def _process_ai_content_fast(content_text) -> tuple[str, str]:
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
 
+    # FINAL SAFETY CHECK: Ensure we always return valid content
+    if not ai_result_content or (
+        isinstance(ai_result_content, str) and ai_result_content.strip() == ""
+    ):
+        print(f"🔧 FINAL SAFETY: No valid content, using fallback")
+        ai_content_type = "error"
+        ai_result_content = (
+            str(content_text) if content_text else "AI response could not be processed"
+        )
+
+    print(
+        f"🔧 PROCESS AI CONTENT END: type={ai_content_type}, length={len(str(ai_result_content)) if ai_result_content else 0}"
+    )
     return ai_content_type, ai_result_content

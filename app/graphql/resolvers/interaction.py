@@ -385,13 +385,16 @@ class InteractionMutation:
             ]
 
         # Delegate to service function with dynamic token calculation
+        print(f"🔧 RESOLVER: Calling process_conversation_message")
         result = await process_conversation_message(
             user=current_user,
             interaction=interaction,
             message=input.message,
             media_files=media_files_dict,
             max_tokens=None,  # Will be calculated dynamically based on file count
+            db=db,  # Pass the database session
         )
+        print(f"🔧 RESOLVER: Got result from service: {result}")
 
         # Get the updated interaction to return current state
         # Note: The service now handles database operations, so we need to refresh from our session
@@ -399,6 +402,12 @@ class InteractionMutation:
 
         # Log the complete AI response from resolver
         ai_response = result.get("ai_response")
+        print(f"🔧 RESOLVER: Extracted ai_response: {ai_response}")
+        print(f"🔧 RESOLVER: ai_response type: {type(ai_response)}")
+        print(
+            f"🔧 RESOLVER: ai_response length: {len(str(ai_response)) if ai_response else 0}"
+        )
+
         if ai_response:
             # Truncate long responses for readability
             if len(str(ai_response)) > 500:

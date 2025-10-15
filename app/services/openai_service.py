@@ -3,6 +3,7 @@ import json
 from app.core.config import settings
 from app.services.langchain_service import langchain_service
 
+
 class OpenAIService:
     """
     Legacy wrapper for LangChain service to maintain backward compatibility

@@ -116,10 +116,7 @@ CRITICAL: If you see a document with multiple numbered questions (like 1, 2, 3, 
 
 INSTRUCTIONS:
 1. First, detect the language of the content
-2. Carefully identify the content type using the criteria above
-3. Provide a short, descriptive title for the page/content  
-4. Provide a summary title that describes what you will help the user with
-5. Based on the question type:
+2. Based on the question type:
    - If MCQ: Extract each question/exercise part as a separate question
      * Look for numbered questions (1, 2, 3, 4, 5, 6, 7, 8, 9, etc.) and extract each one
      * If the document contains actual multiple choice options (like: A, B, C, D or a, b, c, d or 1, 2, 3, 4), include them in the "options" field
@@ -135,8 +132,6 @@ For MCQ content:
 {{
     "type": "mcq",
     "language": "detected language",
-    "title": "short descriptive title for the content",
-    "summary_title": "summary of how you will help the user",
     "_result": {{
         "questions": [
             {{
@@ -158,8 +153,7 @@ For written content:
 {{
     "type": "written",
     "language": "detected language", 
-    "title": "short descriptive title for the content",
-    "summary_title": "summary of how you will help the user",
+    
     "_result": {{
         "content": "organized explanatory text as you would provide in a chat response"
     }}
@@ -190,41 +184,14 @@ CRITICAL REQUIREMENTS:
             (
                 "system",
                 """
-You are a content guardrail for an educational platform. Review user inputs and determine if they violate educational content rules.
+Educational content guardrail. Check if content violates rules.
 
-VIOLATION RULES:
-1. REJECT images showing ONLY people's faces, portraits, or selfies (no educational content)
-2. REJECT adult, explicit, or inappropriate material  
-3. REJECT non-educational content (social media, personal photos, etc.)
-4. REJECT direct code generation requests (except educational code analysis)
+REJECT: Non-educational content (selfies, social media, inappropriate material, code generation requests)
+ACCEPT: Educational content (textbooks, worksheets, math problems, study notes, academic papers, quizzes, question papers, mcq papers.)
 
-ACCEPT EDUCATIONAL CONTENT:
-- Textbooks, workbooks, study guides
-- Educational worksheets and practice problems
-- Mathematical equations and problem sets
-- Science diagrams and educational illustrations
-- Handwritten study notes (even if they contain faces in the background)
-- Exercise sheets with numbered problems
-- Academic papers and research documents
-- Educational quizzes and assessments (like MCQ papers, exam sheets)
-- Study notes and summaries
-- Scanned educational documents from educational websites
-- Any content clearly related to learning, even if it contains incidental faces
+Rule: If educational content present (math, questions, equations), ACCEPT regardless of incidental faces.
 
-CRITICAL: If the document contains educational content (math problems, questions, equations, etc.), ACCEPT it regardless of any incidental faces or people in the image.
-
-SPECIFIC EXAMPLES TO ACCEPT:
-- Mathematics quiz papers with multiple choice questions
-- Exam sheets with numbered problems
-- Educational documents from educational websites (like MathCity.org)
-- Scanned academic papers or worksheets
-- Any document with mathematical equations, problems, or educational questions
-
-BE VERY PERMISSIVE: When in doubt, ACCEPT rather than reject.
-
-RESPONSE FORMAT:
-Respond with valid JSON only. No additional text or formatting.
-
+JSON response only:
 {{
     "is_violation": false,
     "violation_type": null,
@@ -234,11 +201,9 @@ Respond with valid JSON only. No additional text or formatting.
 For violations:
 {{
     "is_violation": true,
-    "violation_type": "non_educational_content",
+    "violation_type": "non_educational_content", 
     "reasoning": "Brief explanation"
 }}
-
-CRITICAL: Respond with valid JSON only. No markdown, no explanations outside JSON.
                 """,
             ),
             ("human", "{content}"),
@@ -250,77 +215,25 @@ CRITICAL: Respond with valid JSON only. No markdown, no explanations outside JSO
             (
                 "system",
                 """
-You are StudyGuru AI, an advanced educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
+You are StudyGuru AI, an educational assistant with access to user's learning history.
 
-Current conversation topic: {interaction_title}
-Context summary: {interaction_summary}
+Topic: {interaction_title}
+Context: {interaction_summary}
 
-CRITICAL INSTRUCTIONS FOR CONTEXT USAGE:
-1. **ALWAYS USE THE PROVIDED CONTEXT** - The user's learning history and previous conversations are provided to help you give personalized, contextual responses
-2. **Reference previous discussions** - If the current question relates to something discussed before, explicitly reference it
-3. **Build upon previous knowledge** - Use the context to understand what the user already knows and build upon it
-4. **Maintain consistency** - Keep your explanations consistent with previous interactions and the user's learning style
-5. **Connect new concepts to old ones** - When introducing new concepts, relate them to what the user has learned before
-
-CONTEXT SOURCES TO USE:
-- **Semantic Summary**: Use the conversation summary to understand the overall learning context
-- **Vector Search Results**: Use previous discussions and explanations from the user's history
-- **Document Content**: Use uploaded documents, worksheets, and educational materials
-- **Cross-Interaction Learning**: Use knowledge from related conversations across different interactions
-- **Related Conversations**: Use recent conversations within the same interaction
-
-SPECIFIC QUESTION REFERENCE HANDLING:
-- If the user asks about a specific question number (e.g., "Explain mcq 3", "What is question 2?", "Solve problem 1"), you MUST search the context for that exact question
-- Look for numbered questions, MCQ questions, or problems in the context
-- Find the specific question the user is referring to and provide a direct answer/explanation
-- If you cannot find the specific question in the context, ask the user to clarify which question they mean
-
-CONTEXT INTEGRATION STRATEGY:
-- If the context contains relevant information, incorporate it naturally into your response
-- If the user asks a follow-up question, use the context to understand what they're referring to
-- If the context shows the user is working on a specific topic, tailor your response accordingly
-- If the context contains uploaded documents or previous explanations, reference them when relevant
-- **MOST IMPORTANTLY**: When the user references a specific question/problem number, find and answer that exact question from the context
-
-CONTEXT USAGE EXAMPLES:
-- "Based on our previous discussion about [topic], let me explain..."
-- "As we discussed earlier, [concept] works by..."
-- "Looking at the document you uploaded, I can see that..."
-- "From your previous questions about [topic], I understand you're learning..."
-- "In question 3 from your worksheet, the answer is..."
+INSTRUCTIONS:
+- Use provided context to personalize responses
+- Reference previous discussions and build upon existing knowledge
+- For specific question numbers (e.g., "mcq 3"), find and answer that exact question from context
+- Maintain consistency with user's learning style
 
 RESPONSE FORMAT:
-- Respond with plain text only, not JSON
-- Use clear section headers with ### for main topics
-- For MCQ content:
-   - Number each question (1., 2., etc.)
-   - If options exist: List options clearly (A., B., C., D.)
-   - If no options exist: Provide the solution directly
-- Do not wrap responses in JSON structures
-- Provide direct, conversational responses
-   - Provide answers in format "Answer: [letter or solution]" (without asterisks)
-   - Add explanations with "Explanation: [text]" (without asterisks)
-3. Use bullet points with • for lists and key points
-4. Use bold sparingly for truly important terms only
-5. Structure complex information with clear breaks between sections
-6. Avoid LaTeX symbols and mathematical notation in favor of plain text
+- Plain text only (no JSON)
+- Use ### for section headers
+- For MCQs: Number questions (1., 2., etc.), list options (A., B., C., D.) if present
+- Answer format: "Answer: [solution]" and "Explanation: [text]"
+- Use bullet points (•) for lists
 
-EDUCATIONAL APPROACH:
-- Build explanations step-by-step
-- Use examples when helpful
-- Connect concepts to real-world applications
-- Encourage critical thinking
-- Provide clear, concise explanations
-- **Most importantly: Use the provided context to personalize and enhance your response**
-
-FAILURE MODES TO AVOID:
-- Ignoring the provided context and giving generic responses
-- Not referencing previous discussions when relevant
-- Not using uploaded documents when they contain relevant information
-- Not building upon the user's existing knowledge
-- Not maintaining consistency with previous explanations
-
-Always maintain professional, encouraging tone while being educational and helpful. Remember: the context is there to help you provide better, more personalized assistance.
+Be educational, helpful, and reference context when relevant.
                 """,
             ),
             ("human", "{content}"),
@@ -569,7 +482,7 @@ class StudyGuruModels:
     """Model configurations for StudyGuru"""
 
     # Fallback models in case GPT-5 is not available
-    USE_FALLBACK_MODELS = False  # Set to False when GPT-5 is available
+    USE_FALLBACK_MODELS = True  # Set to False when GPT-5 is available
 
     @staticmethod
     def get_chat_model(
@@ -597,7 +510,7 @@ class StudyGuruModels:
                 max_tokens=max_tokens,
                 request_timeout=120,  # Increased timeout for GPT-5 reasoning
                 # GPT-5 specific parameters
-                reasoning_effort=reasoning_effort,  # "low", "medium", "high" - controls reasoning depth
+                # reasoning_effort=reasoning_effort,  # "low", "medium", "high" - controls reasoning depth
                 verbosity=verbosity,  # Control response length and detail
             )
 
@@ -613,27 +526,28 @@ class StudyGuruModels:
                 temperature=temperature,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=max_tokens,
-                request_timeout=45,
-                model_kwargs={
-                    "response_format": {
-                        "type": "json_object"
-                    }  # Force JSON output for document analysis
-                },
+                request_timeout=30,  # Reduced timeout for faster processing
+                # model_kwargs={
+                #     "response_format": {
+                #         "type": "json_object"
+                #     }  # Force JSON output for document analysis
+                # },
             )
         else:
-            # GPT-5 configuration
+            # GPT-5 configuration - optimized for speed
             return ChatOpenAI(
                 model="gpt-5",  # GPT-5 with enhanced vision capabilities
                 temperature=temperature,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=max_tokens,
-                request_timeout=90,  # Increased timeout for GPT-5 vision processing
-                verbosity=verbosity,  # Control response length and detail
-                model_kwargs={
-                    "response_format": {
-                        "type": "json_object"
-                    },  # Force JSON output for document analysis
-                },
+                request_timeout=30,  # Reduced timeout for faster processing
+                # reasoning_effort="low",  # Low reasoning for faster processing
+                verbosity="low",  # Low verbosity for faster responses
+                # model_kwargs={
+                #     "response_format": {
+                #         "type": "json_object"
+                #     },  # Force JSON output for document analysis
+                # },
             )
 
     @staticmethod
@@ -644,14 +558,14 @@ class StudyGuruModels:
         if StudyGuruModels.USE_FALLBACK_MODELS:
             # Fallback to GPT-4o-mini for compatibility
             return ChatOpenAI(
-                model="gpt-4o-mini",  # Fallback model
+                model="gpt-5o-mini",  # Fallback model
                 temperature=temperature,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=max_tokens,
                 request_timeout=15,
-                model_kwargs={
-                    "response_format": {"type": "json_object"}
-                },  # Force JSON output
+                # model_kwargs={
+                #     "response_format": {"type": "json_object"}
+                # },  # Force JSON output
             )
         else:
             # GPT-5 Mini configuration
@@ -663,9 +577,9 @@ class StudyGuruModels:
                 request_timeout=15,  # Fast timeout for guardrails
                 verbosity=verbosity,  # Control response length and detail
                 # GPT-5 specific parameters for better JSON output
-                model_kwargs={
-                    "response_format": {"type": "json_object"},  # Force JSON output
-                },
+                # model_kwargs={
+                #     "response_format": {"type": "json_object"},  # Force JSON output
+                # },
             )
 
     @staticmethod
@@ -681,11 +595,11 @@ class StudyGuruModels:
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=max_tokens,
                 request_timeout=60,
-                model_kwargs={
-                    "response_format": {
-                        "type": "json_object"
-                    }  # Force JSON output for MCQ generation
-                },
+                # model_kwargs={
+                #     "response_format": {
+                #         "type": "json_object"
+                #     }  # Force JSON output for MCQ generation
+                # },
             )
         else:
             # GPT-5 configuration
@@ -696,13 +610,13 @@ class StudyGuruModels:
                 max_tokens=max_tokens,
                 request_timeout=150,  # Increased timeout for complex reasoning with high effort
                 # GPT-5 specific parameters for complex tasks
-                reasoning_effort="high",  # Maximum reasoning depth for complex problems
+                # reasoning_effort="high",  # Maximum reasoning depth for complex problems
                 verbosity=verbosity,  # Medium verbosity for complex reasoning tasks
-                model_kwargs={
-                    "response_format": {
-                        "type": "json_object"
-                    },  # Force JSON output for MCQ generation
-                },
+                # model_kwargs={
+                #     "response_format": {
+                #         "type": "json_object"
+                #     },  # Force JSON output for MCQ generation
+                # },
             )
 
     @staticmethod
@@ -790,7 +704,7 @@ class StudyGuruChains:
     @staticmethod
     def get_guardrail_chain():
         """Get guardrail check chain"""
-        model = StudyGuruModels.get_guardrail_model(temperature=0.1, max_tokens=300)
+        model = StudyGuruModels.get_guardrail_model(temperature=0.2, max_tokens=400)
         parser = MarkdownJsonOutputParser()  # Use robust parser for guardrails
         return StudyGuruPrompts.GUARDRAIL_CHECK | model | parser
 
@@ -816,7 +730,7 @@ class StudyGuruChains:
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=300,  # Increased to ensure complete JSON response
             request_timeout=20,  # Increased timeout
-            model_kwargs={"response_format": {"type": "json_object"}},
+            # model_kwargs={"response_format": {"type": "json_object"}},
         )
         parser = MarkdownJsonOutputParser()  # Use robust parser for title generation
         return StudyGuruPrompts.TITLE_GENERATION | model | parser
@@ -831,7 +745,7 @@ class StudyGuruChains:
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=2000,  # Aggressively increased to handle reasoning + output
             request_timeout=45,  # Increased timeout for longer processing
-            model_kwargs={"response_format": {"type": "json_object"}},
+            # model_kwargs={"response_format": {"type": "json_object"}},
         )
         parser = MarkdownJsonOutputParser()
         return StudyGuruPrompts.CONVERSATION_SUMMARIZATION | model | parser
@@ -846,7 +760,7 @@ class StudyGuruChains:
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=1500,  # Aggressively increased to handle longer updates
             request_timeout=45,  # Increased timeout
-            model_kwargs={"response_format": {"type": "json_object"}},
+            # model_kwargs={"response_format": {"type": "json_object"}},
         )
         parser = MarkdownJsonOutputParser()
         return StudyGuruPrompts.INTERACTION_SUMMARY_UPDATE | model | parser

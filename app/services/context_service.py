@@ -76,36 +76,80 @@ class ContextRetrievalService:
         }
 
         try:
-            # === LEVEL 1: Interaction-level semantic summary ===
-            semantic_context = await self._get_semantic_summary_context(
-                user_id, interaction_id, retrieval_metadata
-            )
-            context_sources["semantic_summary"] = semantic_context
+            # === PARALLEL CONTEXT RETRIEVAL FOR SPEED ===
+            # Run all context retrieval levels in parallel for much faster performance
+            context_tasks = []
 
-            # === LEVEL 2: Vector search for specific content ===
-            vector_results = await self._get_vector_search_context(
-                user_id, interaction_id, message, retrieval_metadata
+            # Level 1: Semantic summary
+            context_tasks.append(
+                self._get_semantic_summary_context(
+                    user_id, interaction_id, retrieval_metadata
+                )
             )
-            context_sources["vector_search"] = vector_results
 
-            # === LEVEL 3: Document content retrieval ===
-            document_results = await self._get_document_context(
-                user_id, interaction_id, message, retrieval_metadata
-            )
-            context_sources["document_content"] = document_results
-
-            # === LEVEL 4: Cross-interaction learning (if enabled) ===
-            if include_cross_interaction:
-                cross_interaction_results = await self._get_cross_interaction_context(
+            # Level 2: Vector search
+            context_tasks.append(
+                self._get_vector_search_context(
                     user_id, interaction_id, message, retrieval_metadata
                 )
-                context_sources["cross_interaction"] = cross_interaction_results
-
-            # === LEVEL 5: Related conversations ===
-            related_conversations = await self._get_related_conversations(
-                user_id, interaction_id, message, retrieval_metadata
             )
-            context_sources["related_conversations"] = related_conversations
+
+            # Level 3: Document content
+            context_tasks.append(
+                self._get_document_context(
+                    user_id, interaction_id, message, retrieval_metadata
+                )
+            )
+
+            # Level 4: Cross-interaction (if enabled)
+            if include_cross_interaction:
+                context_tasks.append(
+                    self._get_cross_interaction_context(
+                        user_id, interaction_id, message, retrieval_metadata
+                    )
+                )
+
+            # Level 5: Related conversations
+            context_tasks.append(
+                self._get_related_conversations(
+                    user_id, interaction_id, message, retrieval_metadata
+                )
+            )
+
+            # Execute all context retrieval tasks in parallel
+            context_results = await asyncio.gather(
+                *context_tasks, return_exceptions=True
+            )
+
+            # Process results
+            context_sources["semantic_summary"] = (
+                context_results[0]
+                if not isinstance(context_results[0], Exception)
+                else {}
+            )
+            context_sources["vector_search"] = (
+                context_results[1]
+                if not isinstance(context_results[1], Exception)
+                else {}
+            )
+            context_sources["document_content"] = (
+                context_results[2]
+                if not isinstance(context_results[2], Exception)
+                else {}
+            )
+
+            if include_cross_interaction:
+                context_sources["cross_interaction"] = (
+                    context_results[3]
+                    if not isinstance(context_results[3], Exception)
+                    else {}
+                )
+
+            context_sources["related_conversations"] = (
+                context_results[-1]
+                if not isinstance(context_results[-1], Exception)
+                else {}
+            )
 
             # === CONTEXT RANKING AND OPTIMIZATION ===
             ranked_context = await self._rank_and_optimize_context(
