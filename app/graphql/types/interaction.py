@@ -5,6 +5,7 @@ from strawberry.scalars import JSON
 from app.graphql.types.points import PointTransactionType
 from app.graphql.types.media import MediaType
 
+
 @strawberry.type
 class ConversationType:
     id: str
@@ -23,6 +24,7 @@ class ConversationType:
     files: Optional[List[MediaType]] = None
     point_transaction: Optional[PointTransactionType] = None
 
+
 @strawberry.type
 class InteractionType:
     id: str
@@ -35,6 +37,7 @@ class InteractionType:
     file: Optional[MediaType] = None
     conversations: Optional[List[ConversationType]] = None
 
+
 @strawberry.type
 class InteractionShareType:
     id: str
@@ -44,6 +47,7 @@ class InteractionShareType:
     visit_count: Optional[int] = None
     last_visited_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+
 
 @strawberry.type
 class InteractionResponse:
@@ -55,52 +59,65 @@ class InteractionResponse:
     interaction: Optional[InteractionType] = None
     ai_response: Optional[str] = None
 
+
 @strawberry.input
 class MediaFileInput:
     id: str
     url: Optional[str] = None
+
 
 @strawberry.input
 class DoConversationInput:
     interaction_id: Optional[str] = None
     message: Optional[str] = ""
     media_files: Optional[List[MediaFileInput]] = None  # List of {id: str, url?: str}
-    max_tokens: Optional[int] = 500
+    max_tokens: Optional[int] = (
+        None  # Will be calculated dynamically based on file count
+    )
+
 
 @strawberry.input
 class DeleteMediaFileInput:
     media_id: str
+
 
 @strawberry.input
 class UpdateInteractionTitleInput:
     interaction_id: str
     title: str
 
+
 @strawberry.input
 class DeleteInteractionInput:
     interaction_id: str
 
+
 @strawberry.input
 class CancelGenerationInput:
-    interaction_id: str
+    interaction_id: Optional[str] = None
     conversation_id: Optional[str] = None
+
 
 @strawberry.input
 class PinInteractionInput:
     interaction_id: str
     is_pinned: bool
 
+
 @strawberry.input
 class ShareInteractionInput:
     interaction_id: str
+
 
 @strawberry.input
 class GetSharedInteractionInput:
     share_id: str
 
+
 @strawberry.input
 class GetShareStatsInput:
     interaction_id: str
+
 
 @strawberry.type
 class ShareInteractionResponse:
@@ -109,12 +126,14 @@ class ShareInteractionResponse:
     share_id: Optional[str] = None
     share_url: Optional[str] = None
 
+
 @strawberry.type
 class ShareStatsResponse:
     success: bool
     message: Optional[str] = None
     share_stats: Optional[InteractionShareType] = None
     total_coins_earned: Optional[int] = None
+
 
 @strawberry.type
 class InteractionListResponse:

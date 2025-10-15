@@ -1,31 +1,27 @@
-from fastapi import (
-    APIRouter,
-    Request,
-    HTTPException,
-    Depends,
-)
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import json
+import re
 from app.models.user import User
 from app.models.interaction import Interaction, Conversation, ConversationRole
 from app.models.media import Media
 from app.models.subscription import PointTransaction
 from app.services.langchain_service import langchain_service
-from app.services.cache_service import (
-    cache_user_context,
-    get_cached_user_context,
-    cache_interaction_data,
-    get_cached_interaction_data,
-)
+from app.services.document_integration_service import DocumentIntegrationService
+from app.config.langchain_config import StudyGuruConfig
+
 from app.core.database import AsyncSessionLocal
 from app.core.config import settings
 import asyncio
 
 # Global task tracking for AI generation cancellation
 active_generation_tasks: Dict[str, asyncio.Task] = {}
+
+# Initialize document integration service
+document_integration_service = DocumentIntegrationService()
 
 
 async def process_conversation_message(
@@ -34,7 +30,7 @@ async def process_conversation_message(
     interaction: Optional[Interaction],
     message: Optional[str],
     media_files: Optional[List[Dict[str, str]]],
-    max_tokens: int = 800,  # Reduced from 1000
+    max_tokens: Optional[int] = None,  # Will be calculated dynamically if not provided
 ) -> Dict[str, Any]:
     """
     Optimized conversation processor with parallel operations and aggressive caching.
@@ -50,11 +46,22 @@ async def process_conversation_message(
                 "ai_response": "Please provide a message or attach a file to get help.",
             }
 
+    # Calculate dynamic token limit based on file count
+    if max_tokens is None:
+        file_count = len(media_files) if media_files else 0
+        max_tokens = StudyGuruConfig.calculate_dynamic_tokens(file_count)
+        print(f"🔢 Dynamic token calculation: {file_count} files = {max_tokens} tokens")
+
     # Use a single DB session for the entire operation
     try:
         async with AsyncSessionLocal() as db:
             user_id = user.id
             interaction_id = interaction.id if interaction else None
+
+            # If interaction was passed from resolver, merge it into this session
+            if interaction:
+
+                interaction = await db.merge(interaction)
 
             # === PHASE 1: PARALLEL SETUP & MEDIA PROCESSING ===
             async def process_media_parallel():
@@ -222,6 +229,8 @@ async def process_conversation_message(
                 run_guardrails(), get_context_fast(), return_exceptions=True
             )
 
+            print(f"🔍 Context text: {context_text}")
+
             # Debug guardrail result
             if not isinstance(guardrail_result, Exception) and guardrail_result:
                 print(f"🛡️ GUARDRAIL DEBUG - Violation: {guardrail_result.is_violation}")
@@ -382,11 +391,8 @@ async def process_conversation_message(
                             continue
 
                 if analysis_results:
-                    print(
-                        f"✅ Document processing completed: {len(analysis_results)} results"
-                    )
+
                     print(f"📊 Total tokens used: {total_tokens}")
-                    print(f"📄 Processed documents: {len(processed_documents)}")
 
                     # Create conversation entry for document analysis
                     analysis_content = {
@@ -444,7 +450,6 @@ async def process_conversation_message(
                     }
 
             # Generate conversation response using LangChain
-            print(f"💬 Generating conversation response...")
 
             # Create a task for AI generation that can be cancelled
             task_key = f"{user_id}_{interaction.id}"
@@ -471,16 +476,12 @@ async def process_conversation_message(
                 ai_response, input_tokens, output_tokens, total_tokens = (
                     await generation_task
                 )
-
-                print(f"✅ AI response generated successfully")
-                print(f"   Input tokens: {input_tokens}")
-                print(f"   Output tokens: {output_tokens}")
-                print(f"   Total tokens: {total_tokens}")
+                print("=" * 200)
+                print(f"🔄 AI RESPONSE: {ai_response}")
+                print("=" * 200)
 
             except asyncio.CancelledError:
-                print(
-                    f"🛑 AI generation was cancelled for interaction {interaction.id}"
-                )
+
                 # Clean up the task from tracking
                 if task_key in active_generation_tasks:
                     del active_generation_tasks[task_key]
@@ -490,7 +491,7 @@ async def process_conversation_message(
                     "interaction_id": str(interaction.id),
                 }
             except Exception as e:
-                print(f"❌ AI response generation failed: {e}")
+
                 # Clean up the task from tracking
                 if task_key in active_generation_tasks:
                     del active_generation_tasks[task_key]
@@ -502,9 +503,6 @@ async def process_conversation_message(
                 # Clean up the task from tracking when done
                 if task_key in active_generation_tasks:
                     del active_generation_tasks[task_key]
-
-            # Create conversation entries
-            print(f"💾 Creating conversation entries...")
 
             # Create user conversation entry
             user_conv = Conversation(
@@ -532,15 +530,23 @@ async def process_conversation_message(
                     interaction_id=str(interaction.id),
                     conversation_id=str(user_conv.id),
                 )
-                print(f"✅ Sent message received notification via SSE")
+
             except Exception as e:
                 print(f"⚠️  Failed to send message received notification: {e}")
 
-            # Create AI conversation entry
+            # Process AI content with enhanced formatting
+            ai_content_type, processed_ai_response = _process_ai_content_fast(
+                ai_response
+            )
+
+            # Create AI conversation entry with enhanced content
             ai_conv = Conversation(
                 interaction_id=str(interaction.id),
                 role=ConversationRole.AI,
-                content={"type": "text", "_result": {"note": ai_response}},
+                content={
+                    "type": ai_content_type,
+                    "_result": {"content": processed_ai_response},
+                },
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 tokens_used=total_tokens,
@@ -551,30 +557,23 @@ async def process_conversation_message(
             db.add(ai_conv)
             await db.flush()
 
-            # Update interaction title if needed
-            if not interaction.title:
-                try:
-                    title, summary_title = (
-                        await langchain_service.generate_interaction_title(
-                            message or "", ai_response[:200]
-                        )
-                    )
-                    if title:
-                        interaction.title = title
-                    if summary_title:
-                        interaction.summary_title = summary_title
-                    await db.commit()
-                    print(f"✅ Updated interaction title: {title}")
-                except Exception as title_error:
-                    pass
-                    # Don't let title generation failure break the main AI response
+            # Update interaction title if needed using enhanced metadata extraction
+            try:
+                await _extract_interaction_metadata_fast(
+                    interaction=interaction,
+                    content_text=ai_response,
+                    original_message=message or "",
+                )
 
-            # Commit all changes
+            except Exception as title_error:
+                print(f"⚠️ Metadata extraction failed: {title_error}")
+                # Don't let title generation failure break the main AI response
+
+            # Commit all changes (including title updates)
             await db.commit()
 
-            print(f"✅ Conversation entries created successfully")
-            print(f"   User conversation ID: {user_conv.id}")
-            print(f"   AI conversation ID: {ai_conv.id}")
+            # Refresh the interaction to verify the changes were saved
+            await db.refresh(interaction)
 
             # Start background operations using real-time context service
             asyncio.create_task(
@@ -588,16 +587,14 @@ async def process_conversation_message(
                 )
             )
 
-            # Send SSE notification that AI response is ready
+            # Send AI response notification using enhanced function
             try:
-                from app.api.sse_routes import notify_ai_response_ready_sse
-
-                await notify_ai_response_ready_sse(
+                await _send_ai_response_notification(
                     user_id=str(user_id),
                     interaction_id=str(interaction.id),
                     ai_response=ai_response,
                 )
-                print(f"✅ Sent AI response notification via SSE")
+                print(f"✅ Sent AI response notification")
             except Exception as e:
                 print(f"⚠️  Failed to send AI response notification: {e}")
 
@@ -605,7 +602,8 @@ async def process_conversation_message(
                 "success": True,
                 "message": "Response generated successfully",
                 "conversation_id": str(ai_conv.id),
-                "ai_response": ai_response,
+                "ai_response": processed_ai_response,
+                "ai_content_type": ai_content_type,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,
@@ -614,6 +612,110 @@ async def process_conversation_message(
 
     except Exception as e:
         print(f"❌ Error in process_conversation_message: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return {"success": False, "message": f"An error occurred: {str(e)}"}
+
+
+async def generate_mcq_questions(
+    *,
+    user: User,
+    interaction: Optional[Interaction],
+    topic_or_content: str,
+    max_tokens: int = 1200,
+) -> Dict[str, Any]:
+    """
+    Generate MCQ questions for a given topic or content
+    """
+    try:
+        # Use a single DB session for the entire operation
+        async with AsyncSessionLocal() as db:
+            # Get or create interaction
+            if not interaction:
+                interaction = Interaction(
+                    user_id=user.id,
+                    title="MCQ Generation",
+                    summary="Generated multiple choice questions",
+                )
+                db.add(interaction)
+                await db.flush()
+
+            # Generate MCQ questions using LangChain
+            mcq_result = await langchain_service.generate_mcq_questions(
+                topic_or_content=topic_or_content, max_tokens=max_tokens
+            )
+
+            if mcq_result.get("type") == "error":
+                return {
+                    "success": False,
+                    "message": "Failed to generate MCQs",
+                    "error": mcq_result.get("_result", {}).get(
+                        "error", "Unknown error"
+                    ),
+                }
+
+            # Create conversation entries
+            user_conv = Conversation(
+                interaction_id=interaction.id,
+                role=ConversationRole.USER,
+                content=f"Generate MCQs for: {topic_or_content}",
+                points_cost=0,
+            )
+            db.add(user_conv)
+
+            # Format the MCQ response for display
+            questions = mcq_result.get("_result", {}).get("questions", [])
+            formatted_response = f"# {mcq_result.get('title', 'MCQ Questions')}\n\n"
+
+            for i, question in enumerate(questions, 1):
+                formatted_response += f"**{i}.** {question.get('question', '')}\n\n"
+
+                options = question.get("options", {})
+                if options:
+                    for key, value in options.items():
+                        formatted_response += f"   {key.upper()}. {value}\n"
+                    formatted_response += (
+                        f"\n**Answer:** {question.get('answer', '').upper()}\n"
+                    )
+                else:
+                    formatted_response += f"**Answer:** {question.get('answer', '')}\n"
+
+                formatted_response += (
+                    f"**Explanation:** {question.get('explanation', '')}\n\n"
+                )
+
+            ai_conv = Conversation(
+                interaction_id=interaction.id,
+                role=ConversationRole.AI,
+                content=formatted_response,
+                points_cost=StudyGuruConfig.calculate_points_cost(
+                    mcq_result.get("token", 0)
+                ),
+            )
+            db.add(ai_conv)
+
+            # Update interaction title and summary
+            interaction.title = mcq_result.get("title", "MCQ Generation")
+            interaction.summary = mcq_result.get(
+                "summary_title", "Generated multiple choice questions"
+            )
+
+            # Commit all changes
+            await db.commit()
+
+            return {
+                "success": True,
+                "message": "MCQ questions generated successfully",
+                "conversation_id": str(ai_conv.id),
+                "ai_response": formatted_response,
+                "mcq_data": mcq_result,
+                "total_questions": len(questions),
+                "points_cost": ai_conv.points_cost,
+            }
+
+    except Exception as e:
+        print(f"❌ Error in generate_mcq_questions: {e}")
         import traceback
 
         traceback.print_exc()
@@ -681,6 +783,15 @@ async def _background_operations_enhanced(
 
         # Queue AI response embedding
         if ai_content:
+            # Ensure ai_content is a string for embedding
+            ai_content_text = ai_content
+            if isinstance(ai_content, dict):
+                import json
+
+                ai_content_text = json.dumps(ai_content, indent=2)
+            elif not isinstance(ai_content, str):
+                ai_content_text = str(ai_content)
+
             ai_embedding_task_id = await real_time_context_service.queue_context_update(
                 user_id=user_id,
                 interaction_id=interaction_id,
@@ -688,7 +799,7 @@ async def _background_operations_enhanced(
                 update_type="embedding",
                 payload={
                     "conversation_id": str(ai_conv_id),
-                    "text": ai_content,
+                    "text": ai_content_text,
                     "title": f"AI response in {interaction_id}",
                     "metadata": enhanced_metadata,
                 },
@@ -840,11 +951,20 @@ async def _background_operations(
 
         # Create embeddings for AI response
         if ai_content:
+            # Ensure ai_content is a string for embedding
+            ai_content_text = ai_content
+            if isinstance(ai_content, dict):
+                import json
+
+                ai_content_text = json.dumps(ai_content, indent=2)
+            elif not isinstance(ai_content, str):
+                ai_content_text = str(ai_content)
+
             embedding_tasks.append(
                 langchain_service.upsert_embedding(
                     conv_id=str(ai_conv_id),
                     user_id=user_id,
-                    text=ai_content,
+                    text=ai_content_text,
                     title=f"AI response in {interaction_id}",
                     metadata=enhanced_metadata,
                 )
@@ -976,13 +1096,292 @@ async def cancel_ai_generation(
 async def _send_notifications_background(
     user_id: str, interaction_id: str, conversation_id: str
 ):
-    """Send background notifications (placeholder)"""
+    """Send notifications in background without blocking main flow"""
+    print(f"\n{'='*60}")
+    print(f"📤 SENDING MESSAGE_RECEIVED NOTIFICATION")
+    print(f"{'='*60}")
+    print(f"👤 User ID: {user_id}")
+    print(f"💬 Interaction ID: {interaction_id}")
+    print(f"🆔 Conversation ID: {conversation_id}")
+    print(f"{'='*60}\n")
+
+    # Try WebSocket first
     try:
-        # This would integrate with your notification system
-        print(
-            f"📱 Sending notification to user {user_id} for conversation {conversation_id}"
+        from app.api.websocket_routes import notify_message_received
+
+        await notify_message_received(
+            user_id=user_id,
+            interaction_id=interaction_id,
+            conversation_id=conversation_id,
         )
-        # Add your notification logic here
+        print(f"✅ WebSocket notification sent successfully for user {user_id}")
+    except Exception as ws_error:
+        print(f"⚠️  WebSocket notification failed: {ws_error}")
+        # Fallback to SSE
+        try:
+            from app.api.sse_routes import notify_message_received_sse
+
+            await notify_message_received_sse(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                conversation_id=conversation_id,
+            )
+            print(f"✅ SSE notification sent successfully for user {user_id}")
+        except Exception as sse_error:
+            print(f"❌ SSE notification failed: {sse_error}")
+            import traceback
+
+            traceback.print_exc()
+            print(f"❌ All notification methods failed for user {user_id}")
+
+
+async def _send_ai_response_notification(
+    user_id: str, interaction_id: str, ai_response: str
+):
+    """Send AI response notification in background without blocking main flow"""
+    print(f"\n{'='*60}")
+    print(f"📤 SENDING AI_RESPONSE_READY NOTIFICATION")
+    print(f"{'='*60}")
+    print(f"👤 User ID: {user_id}")
+    print(f"💬 Interaction ID: {interaction_id}")
+    # Handle both string and dict responses
+    if isinstance(ai_response, dict):
+        response_preview = str(ai_response)[:100] + "..."
+        response_length = len(str(ai_response))
+    else:
+        response_preview = (
+            ai_response[:100] + "..." if len(ai_response) > 100 else ai_response
+        )
+        response_length = len(ai_response)
+
+    print(f"📝 Response Length: {response_length} characters")
+    print(f"📄 Response Preview: {response_preview}")
+    print(f"{'='*60}\n")
+
+    # Try WebSocket first
+    try:
+        from app.api.websocket_routes import notify_ai_response_ready
+
+        await notify_ai_response_ready(
+            user_id=user_id,
+            interaction_id=interaction_id,
+            ai_response=ai_response,
+        )
+        print(
+            f"✅ WebSocket AI response notification sent successfully for user {user_id}"
+        )
+    except Exception as ws_error:
+        print(f"⚠️  WebSocket AI response notification failed: {ws_error}")
+        # Fallback to SSE
+        try:
+            from app.api.sse_routes import notify_ai_response_ready_sse
+
+            await notify_ai_response_ready_sse(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                ai_response=ai_response,
+            )
+            print(
+                f"✅ SSE AI response notification sent successfully for user {user_id}"
+            )
+        except Exception as sse_error:
+            print(f"❌ SSE AI response notification failed: {sse_error}")
+            import traceback
+
+            traceback.print_exc()
+            print(f"❌ All AI response notification methods failed for user {user_id}")
+
+
+async def _extract_interaction_metadata_fast(
+    interaction: Interaction, content_text: str, original_message: str = ""
+):
+    """Fast metadata extraction with dedicated title generation"""
+    try:
+        # First try to extract from JSON response (existing logic)
+        if content_text.strip().startswith("{"):
+            parsed_response = json.loads(content_text)
+            if isinstance(parsed_response, dict):
+                if "title" in parsed_response and not interaction.title:
+                    interaction.title = parsed_response["title"][:50]
+                if "summary_title" in parsed_response and not interaction.summary_title:
+                    interaction.summary_title = parsed_response["summary_title"][:100]
+                return  # If we got titles from JSON, we're done
+
+        # If no title from JSON or plain text response, generate one using AI
+        # Also update if current title is too generic
+        needs_title_update = (
+            not interaction.title
+            or not interaction.summary_title
+            or interaction.title in ["Study Session", "New Interaction"]
+            or len(interaction.title) < 5
+        )
+
+        if needs_title_update:
+
+            # First, try AI generation
+            try:
+                title, summary_title = (
+                    await langchain_service.generate_interaction_title(
+                        message=original_message,
+                        response_preview=content_text[
+                            :300
+                        ],  # First 300 chars of response
+                    )
+                )
+                print(
+                    f"🔍 Generated title: '{title}', summary_title: '{summary_title}'"
+                )
+
+            except Exception as ai_title_error:
+                print(f"⚠️ AI title generation failed: {ai_title_error}")
+                # Fallback to simple title generation
+                if original_message:
+                    title = original_message[:40].strip()
+                    summary_title = f"Help with {title.lower()}"
+                else:
+                    title = "Study Session"
+                    summary_title = "Educational assistance"
+
+            # Update interaction with generated titles
+            if title:
+                interaction.title = title
+                print(f"✅ Set interaction title: '{title}'")
+            else:
+                print(f"⚠️ No title generated")
+
+            if summary_title:
+                interaction.summary_title = summary_title
+                print(f"✅ Set interaction summary_title: '{summary_title}'")
+            else:
+                print(f"⚠️ No summary title generated")
+
+    except (json.JSONDecodeError, KeyError, TypeError, Exception) as e:
+        print(f"Metadata extraction error: {e}")
+        # Final fallback: create basic title from message
+        if original_message and not interaction.title:
+            interaction.title = original_message[:40].strip()
+
+
+def _process_ai_content_fast(content_text) -> tuple[str, str]:
+    """Fast AI content processing with enhanced formatting and escaped character handling"""
+    ai_content_type = "written"
+    ai_result_content = content_text
+
+    # Handle structured responses (dictionaries) from document analysis
+    if isinstance(content_text, dict):
+        # This is a structured response from document analysis
+        ai_content_type = (
+            "mcq" if content_text.get("type") == "mcq" else "document_analysis"
+        )
+        # Convert to JSON string for storage
+        import json
+
+        ai_result_content = json.dumps(content_text, indent=2)
+        return ai_content_type, ai_result_content
+
+    # Handle string responses (regular conversations)
+    if content_text and isinstance(content_text, str):
+        # Remove escaped characters that show as backslashes
+        ai_result_content = content_text.replace("\\(", "(").replace("\\)", ")")
+        ai_result_content = ai_result_content.replace("\\[", "[").replace("\\]", "]")
+        ai_result_content = ai_result_content.replace("\\\\", "")
+        ai_result_content = ai_result_content.replace("\\ ", " ")
+
+        # Clean up common LaTeX patterns
+        ai_result_content = ai_result_content.replace("\\geq", "≥")
+        ai_result_content = ai_result_content.replace("\\leq", "≤")
+        ai_result_content = ai_result_content.replace("\\times", "×")
+        ai_result_content = ai_result_content.replace("\\div", "÷")
+
+    # Detect MCQ patterns in plain text content (only for strings)
+    if (
+        content_text
+        and isinstance(content_text, str)
+        and not content_text.strip().startswith("{")
+    ):
+        # Check for MCQ patterns: numbered questions with Answer: sections
+        import re
+
+        # Pattern 1: Numbered questions with "Answer:" pattern
+        answer_pattern = r"\d+\.\s+.+?Answer:\s*[A-Za-z]"
+        if re.search(answer_pattern, content_text, re.MULTILINE | re.DOTALL):
+            ai_content_type = "mcq"
+            print(f"🎯 MCQ DETECTED: Answer pattern found")
+        else:
+            # Pattern 2: Multiple numbered questions with options A, B, C, D
+            option_pattern = (
+                r"\d+\.\s+.+?[A-D]\.\s+.+?[A-D]\.\s+.+?[A-D]\.\s+.+?[A-D]\."
+            )
+            if re.search(option_pattern, content_text, re.MULTILINE | re.DOTALL):
+                ai_content_type = "mcq"
+                print(f"🎯 MCQ DETECTED: Multiple choice options found")
+            else:
+                # Pattern 3: Explanation sections (common in MCQ)
+                explanation_pattern = r"Explanation:\s+.+"
+                if re.search(explanation_pattern, content_text, re.MULTILINE):
+                    ai_content_type = "mcq"
+                    print(f"🎯 MCQ DETECTED: Explanation sections found")
+
+        print(f"🔍 MCQ Detection result: {ai_content_type}")
+
+    try:
+        if content_text and content_text.strip().startswith("{"):
+            parsed_response = json.loads(content_text)
+            if isinstance(parsed_response, dict):
+                ai_content_type = parsed_response.get("type", "written")
+                result_content = parsed_response.get("_result", {})
+
+                if isinstance(result_content, dict):
+                    if "content" in result_content:
+                        ai_result_content = result_content["content"]
+                    elif "questions" in result_content:
+                        # Enhanced MCQ formatting - show ALL questions
+                        questions = result_content[
+                            "questions"
+                        ]  # Remove limit to show all questions
+                        formatted_questions = []
+
+                        for i, q in enumerate(questions, 1):
+                            question_text = q.get("question", "")
+                            options = q.get("options", {})
+                            answer = q.get("answer", "")
+                            explanation = q.get("explanation", "")
+
+                            # Format question with better structure
+                            formatted_q = f"{i}. {question_text}\n\n"
+
+                            # Format options if they exist
+                            if options and isinstance(options, dict):
+                                for opt_key, opt_value in list(options.items())[:4]:
+                                    formatted_q += (
+                                        f"{opt_key.upper()}. {str(opt_value)}\n"
+                                    )
+                                formatted_q += "\n"
+
+                            # Add answer with clear formatting
+                            if answer:
+                                formatted_q += f"Answer: {answer}\n\n"
+
+                            # Add explanation with clear formatting
+                            if explanation:
+                                formatted_q += f"Explanation: {explanation}\n"
+
+                            formatted_questions.append(formatted_q)
+
+                        ai_result_content = "\n".join(formatted_questions)
+
+        # Apply character cleaning to any processed content
+        if ai_result_content:
+            ai_result_content = ai_result_content.replace("\\(", "(").replace(
+                "\\)", ")"
+            )
+            ai_result_content = ai_result_content.replace("\\[", "[").replace(
+                "\\]", "]"
+            )
+            ai_result_content = ai_result_content.replace("\\\\", "")
+            ai_result_content = ai_result_content.replace("\\ ", " ")
+
+    except (json.JSONDecodeError, KeyError, TypeError):
         pass
-    except Exception as e:
-        print(f"❌ Notification failed: {e}")
+
+    return ai_content_type, ai_result_content

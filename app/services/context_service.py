@@ -324,9 +324,11 @@ class ContextRetrievalService:
             # Extract question numbers from the message for targeted search
             question_numbers = self._extract_question_numbers(message)
 
-            # If user is asking about specific questions, try to get those directly
+            # AGGRESSIVE APPROACH: Always try to get recent document content first
+            document_results = []
+
+            # 1. If user is asking about specific questions, try to get those directly
             if question_numbers and interaction_id:
-                document_results = []
                 for q_num in question_numbers:
                     doc_content = await document_integration_service.get_document_by_question_number(
                         user_id, interaction_id, q_num
@@ -354,15 +356,86 @@ class ContextRetrievalService:
                             }
                         )
 
-                if document_results:
-                    metadata["sources_used"].append("document_content")
-                    metadata["retrieval_times"]["document_content"] = (
-                        datetime.now() - start_time
-                    ).total_seconds()
-                    metadata["context_lengths"]["document_content"] = sum(
-                        len(result["content"]) for result in document_results
+            # 2. AGGRESSIVE FALLBACK: If no specific questions found OR user is asking general questions,
+            # get ALL document content from the current interaction
+            if not document_results and interaction_id:
+                print(
+                    f"🔍 No specific questions found, getting ALL document content for interaction {interaction_id}"
+                )
+
+                # Get all document context for this interaction
+                async with AsyncSessionLocal() as db:
+                    from app.models.context import DocumentContext
+                    from sqlalchemy import select, and_
+
+                    result = await db.execute(
+                        select(DocumentContext).where(
+                            and_(
+                                DocumentContext.user_id == user_id,
+                                DocumentContext.interaction_id == interaction_id,
+                            )
+                        )
                     )
-                    return document_results
+                    doc_contexts = result.scalars().all()
+
+                    for doc_ctx in doc_contexts:
+                        # Extract all questions from the document
+                        if doc_ctx.question_mapping:
+                            for (
+                                q_num,
+                                question_text,
+                            ) in doc_ctx.question_mapping.items():
+                                answer = doc_ctx.answer_key.get(
+                                    q_num, "Answer not provided"
+                                )
+                                document_results.append(
+                                    {
+                                        "id": f"doc_all_{q_num}",
+                                        "media_id": doc_ctx.media_id,
+                                        "document_type": doc_ctx.document_type,
+                                        "content": f"Question {q_num}: {question_text}\n\nAnswer: {answer}",
+                                        "main_topics": doc_ctx.main_topics or [],
+                                        "total_questions": len(
+                                            doc_ctx.question_mapping
+                                        ),
+                                        "relevance_score": 0.9,  # High relevance for all questions
+                                        "question_number": q_num,
+                                        "subject_area": doc_ctx.subject_area
+                                        or "unknown",
+                                        "difficulty_level": doc_ctx.difficulty_level
+                                        or "unknown",
+                                        "key_concepts": doc_ctx.key_concepts or [],
+                                    }
+                                )
+                        else:
+                            # If no question mapping, use the full content
+                            document_results.append(
+                                {
+                                    "id": f"doc_full_{doc_ctx.media_id}",
+                                    "media_id": doc_ctx.media_id,
+                                    "document_type": doc_ctx.document_type,
+                                    "content": doc_ctx.full_content
+                                    or "Document content not available",
+                                    "main_topics": doc_ctx.main_topics or [],
+                                    "total_questions": doc_ctx.total_questions or 0,
+                                    "relevance_score": 0.8,
+                                    "subject_area": doc_ctx.subject_area or "unknown",
+                                    "difficulty_level": doc_ctx.difficulty_level
+                                    or "unknown",
+                                    "key_concepts": doc_ctx.key_concepts or [],
+                                }
+                            )
+
+            if document_results:
+                metadata["sources_used"].append("document_content")
+                metadata["retrieval_times"]["document_content"] = (
+                    datetime.now() - start_time
+                ).total_seconds()
+                metadata["context_lengths"]["document_content"] = sum(
+                    len(result["content"]) for result in document_results
+                )
+                print(f"✅ Found {len(document_results)} document results for context")
+                return document_results
 
             # Fallback to document search using the integration service
             search_results = await document_integration_service.search_documents(

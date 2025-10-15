@@ -13,6 +13,7 @@ s3_client = boto3.client(
     region_name=settings.AWS_ORIGIN,
 )
 
+
 class FileService:
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
@@ -133,11 +134,11 @@ class FileService:
             output = io.BytesIO()
 
             # Determine optimal quality based on file size
-            quality = 85
+            quality = 95
             if len(image_content) > 5 * 1024 * 1024:  # > 5MB
-                quality = 70
+                quality = 90
             elif len(image_content) > 2 * 1024 * 1024:  # > 2MB
-                quality = 80
+                quality = 95
 
             image.save(output, format="JPEG", quality=quality, optimize=True)
             compressed_content = output.getvalue()

@@ -215,6 +215,41 @@ class LangChainService:
                 },
             }
 
+    async def generate_mcq_questions(
+        self, topic_or_content: str, max_tokens: int = 1200
+    ) -> Dict[str, Any]:
+        """Generate MCQ questions for a given topic or content"""
+        try:
+            # Create callback handler to track tokens
+            callback_handler = StudyGuruCallbackHandler()
+
+            # Get MCQ generation chain
+            chain = StudyGuruConfig.CHAINS.get_mcq_generation_chain()
+
+            # Run MCQ generation
+            result = await chain.ainvoke(
+                {"topic_or_content": topic_or_content},
+                config={"callbacks": [callback_handler]},
+            )
+
+            # Add token usage
+            result["token"] = callback_handler.tokens_used
+
+            return result
+
+        except Exception as e:
+            return {
+                "type": "error",
+                "language": "unknown",
+                "title": "MCQ Generation Failed",
+                "summary_title": "Sorry, we couldn't generate MCQs for this topic",
+                "token": 0,
+                "_result": {
+                    "error": "Unable to generate MCQs. Please try again with a different topic.",
+                    "details": str(e),
+                },
+            }
+
     async def check_guardrails(
         self, message: str, image_urls: Optional[List[str]] = None
     ) -> GuardrailOutput:
@@ -280,15 +315,25 @@ class LangChainService:
         image_urls: Optional[List[str]] = None,
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
-        max_tokens: int = 800,  # Reduced default max_tokens
+        max_tokens: int = 5000,  # Updated default max_tokens
     ) -> Tuple[str, int, int, int]:
         """Generate conversation response using LangChain with optimized settings"""
         try:
             # Create callback handler
             callback_handler = StudyGuruCallbackHandler()
 
-            # Build system prompt
-            if interaction_title and interaction_summary:
+            # Build system prompt - check if this is a pure document analysis request
+            is_document_analysis_only = (
+                not message and image_urls and len(image_urls) > 0
+            )
+
+            if is_document_analysis_only:
+                # Use the DOCUMENT_ANALYSIS prompt for pure image/document analysis
+                system_prompt = StudyGuruConfig.PROMPTS.DOCUMENT_ANALYSIS.messages[
+                    0
+                ].prompt.template
+                print("🔍 Using DOCUMENT_ANALYSIS prompt for pure document analysis")
+            elif interaction_title and interaction_summary:
                 system_prompt = f"""
                 You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
                 
@@ -346,7 +391,7 @@ class LangChainService:
 
             # Build user content
             user_content = []
-            if context:
+            if context and not is_document_analysis_only:
                 # Check if user is asking about a specific numbered item
                 is_specific_query = re.search(
                     r"(equation|question|problem|mcq)\s+(\d+)",
@@ -382,9 +427,15 @@ class LangChainService:
                     {"type": "text", "text": f"**CURRENT USER QUESTION:** {message}"}
                 )
             elif image_urls:
-                user_content.append(
-                    {"type": "text", "text": "**Document/Image Analysis Request:**"}
-                )
+                if is_document_analysis_only:
+                    # Use the proper document analysis format
+                    user_content.append(
+                        {"type": "text", "text": "Please analyze this document/image:"}
+                    )
+                else:
+                    user_content.append(
+                        {"type": "text", "text": "**Document/Image Analysis Request:**"}
+                    )
 
             # Add images
             if image_urls:
@@ -393,6 +444,8 @@ class LangChainService:
                         {"type": "image_url", "image_url": {"url": url}}
                     )
 
+            print(f"🔍 User content: {user_content}")
+            print(f"🔍 System prompt: {system_prompt}")
             # Create prompt
             prompt = ChatPromptTemplate.from_messages(
                 [
@@ -402,10 +455,19 @@ class LangChainService:
             )
 
             # Create chain with optimized model
-            optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
-                temperature=0.2, max_tokens=max_tokens
-            )
-            chain = prompt | optimized_llm | self.string_parser
+            if is_document_analysis_only:
+                # Use vision model and document parser for pure document analysis
+                optimized_llm = StudyGuruConfig.MODELS.get_vision_model(
+                    temperature=0.3, max_tokens=max_tokens
+                )
+                chain = prompt | optimized_llm | self.document_parser
+                print("🔍 Using vision model and document parser for document analysis")
+            else:
+                # Use chat model and string parser for regular conversations
+                optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
+                    temperature=0.2, max_tokens=max_tokens
+                )
+                chain = prompt | optimized_llm | self.string_parser
 
             # Generate response
             response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
@@ -427,15 +489,27 @@ class LangChainService:
         image_urls: Optional[List[str]] = None,
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
-        max_tokens: int = 800,
+        max_tokens: int = 5000,
     ):
         """Generate streaming conversation response for faster perceived performance"""
         try:
             # Create callback handler
             callback_handler = StudyGuruCallbackHandler()
 
-            # Build system prompt (same as non-streaming)
-            if interaction_title and interaction_summary:
+            # Build system prompt (same as non-streaming) - check if this is a pure document analysis request
+            is_document_analysis_only = (
+                not message and image_urls and len(image_urls) > 0
+            )
+
+            if is_document_analysis_only:
+                # Use the DOCUMENT_ANALYSIS prompt for pure image/document analysis
+                system_prompt = StudyGuruConfig.PROMPTS.DOCUMENT_ANALYSIS.messages[
+                    0
+                ].prompt.template
+                print(
+                    "🔍 Using DOCUMENT_ANALYSIS prompt for pure document analysis (streaming)"
+                )
+            elif interaction_title and interaction_summary:
                 system_prompt = f"""
                 You are StudyGuru AI, an educational assistant. You have access to the user's learning history and context from previous conversations and uploaded documents.
                 
@@ -493,7 +567,7 @@ class LangChainService:
 
             # Build user content
             user_content = []
-            if context:
+            if context and not is_document_analysis_only:
                 # Check if user is asking about a specific numbered item
                 is_specific_query = re.search(
                     r"(equation|question|problem|mcq)\s+(\d+)",
@@ -529,9 +603,15 @@ class LangChainService:
                     {"type": "text", "text": f"**CURRENT USER QUESTION:** {message}"}
                 )
             elif image_urls:
-                user_content.append(
-                    {"type": "text", "text": "**Document/Image Analysis Request:**"}
-                )
+                if is_document_analysis_only:
+                    # Use the proper document analysis format
+                    user_content.append(
+                        {"type": "text", "text": "Please analyze this document/image:"}
+                    )
+                else:
+                    user_content.append(
+                        {"type": "text", "text": "**Document/Image Analysis Request:**"}
+                    )
 
             # Add images
             if image_urls:
@@ -549,10 +629,19 @@ class LangChainService:
             )
 
             # Create streaming chain
-            optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
-                temperature=0.2, max_tokens=max_tokens
-            )
-            chain = prompt | optimized_llm
+            if is_document_analysis_only:
+                # Use vision model for pure document analysis (streaming not supported for document parser)
+                optimized_llm = StudyGuruConfig.MODELS.get_vision_model(
+                    temperature=0.3, max_tokens=max_tokens
+                )
+                chain = prompt | optimized_llm
+                print("🔍 Using vision model for document analysis (streaming)")
+            else:
+                # Use chat model for regular conversations
+                optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
+                    temperature=0.2, max_tokens=max_tokens
+                )
+                chain = prompt | optimized_llm
 
             # Stream response
             full_response = ""
@@ -822,6 +911,16 @@ class LangChainService:
             if not self.vector_store:
                 return False
 
+            # Ensure text is a string - handle dict/object inputs
+            if isinstance(text, dict):
+                # Convert dict to JSON string for embedding
+                import json
+
+                text = json.dumps(text, indent=2)
+            elif not isinstance(text, str):
+                # Convert any other type to string
+                text = str(text)
+
             # Truncate text to reduce embedding time and storage
             if len(text) > 1000:  # Limit text length for faster embedding
                 text = text[:1000] + "..."
@@ -883,6 +982,14 @@ class LangChainService:
                 "difficulty_level": "unknown",
                 "subject_area": "unknown",
             }
+
+            # Ensure text is a string for processing
+            if isinstance(text, dict):
+                import json
+
+                text = json.dumps(text, indent=2)
+            elif not isinstance(text, str):
+                text = str(text)
 
             text_lower = text.lower()
             title_lower = (title or "").lower()
@@ -1051,6 +1158,12 @@ class LangChainService:
         except Exception as e:
             return False
 
+    def calculate_dynamic_tokens(self, file_count: int = 0) -> int:
+        """Calculate dynamic token limit based on file count"""
+        from app.config.langchain_config import StudyGuruConfig
+
+        return StudyGuruConfig.calculate_dynamic_tokens(file_count)
+
     def calculate_points_cost(self, tokens_used: int) -> int:
         """Calculate points cost based on tokens used"""
         return max(1, tokens_used // 100)
@@ -1067,57 +1180,89 @@ class LangChainService:
             # Create callback handler for minimal token tracking
             callback_handler = StudyGuruCallbackHandler()
 
-            # Use the title generation chain
-            from app.config.langchain_config import (
-                StudyGuruModels,
-                StudyGuruPrompts,
-            )
-            from langchain_core.output_parsers import JsonOutputParser
+            # Use the improved title generation chain with robust error handling
+            from app.config.langchain_config import StudyGuruChains
 
-            # Create chain directly to avoid any import issues
-            model = StudyGuruModels.get_title_model(temperature=0.3, max_tokens=100)
-            parser = JsonOutputParser()
-            title_chain = StudyGuruPrompts.TITLE_GENERATION | model | parser
+            # Use the improved chain that handles GPT-5 JSON issues
+            title_chain = StudyGuruChains.get_title_generation_chain()
 
-            # Generate title
-            result = await title_chain.ainvoke(
-                {
-                    "message": limited_message,
-                    "response_preview": limited_response,
-                },
-                config={"callbacks": [callback_handler]},
-            )
+            # Generate title with multiple fallback attempts
+            result = None
+            for attempt in range(3):  # Try up to 3 times
+                try:
+                    result = await title_chain.ainvoke(
+                        {
+                            "message": limited_message,
+                            "response_preview": limited_response,
+                        },
+                        config={"callbacks": [callback_handler]},
+                    )
 
-            # Extract title and summary
-            title = result.get("title", "")[:50] if result.get("title") else None
-            summary_title = (
-                result.get("summary_title", "")[:100]
-                if result.get("summary_title")
-                else None
-            )
+                    # Validate result
+                    if result and isinstance(result, dict) and result.get("title"):
+                        break
+                    else:
+                        print(
+                            f"⚠️ Attempt {attempt + 1}: Invalid result format: {result}"
+                        )
+                        if attempt < 2:  # Don't sleep on last attempt
+                            import asyncio
+
+                            await asyncio.sleep(0.5)  # Brief delay before retry
+
+                except Exception as chain_error:
+                    print(f"⚠️ Attempt {attempt + 1}: Chain error: {chain_error}")
+                    if attempt < 2:  # Don't sleep on last attempt
+                        import asyncio
+
+                        await asyncio.sleep(0.5)  # Brief delay before retry
+
+            print(f"🔍 Final result from title generation: {result}")
+            print("=" * 100)
+
+            # Extract title and summary with robust validation
+            if result and isinstance(result, dict):
+                title = result.get("title", "")[:50] if result.get("title") else None
+                summary_title = (
+                    result.get("summary_title", "")[:100]
+                    if result.get("summary_title")
+                    else None
+                )
+            else:
+                title = None
+                summary_title = None
+
+            print(f"📝 Extracted title: '{title}', summary: '{summary_title}'")
 
             return title, summary_title
 
         except Exception as e:
-            import traceback
+            # Only print traceback for non-JSON parsing errors to reduce noise
+            if "json" not in str(e).lower() and "parse" not in str(e).lower():
+                import traceback
 
-            traceback.print_exc()
+                traceback.print_exc()
+            else:
+                print(
+                    f"⚠️ Title generation JSON error (using fallback): {str(e)[:100]}..."
+                )
+
             # Fallback: create simple title from message
             if message:
                 simple_title = message[:40].strip()
                 fallback_result = (simple_title, f"Help with {simple_title.lower()}")
-
+                print(f"✅ Using fallback title: '{simple_title}'")
                 return fallback_result
             elif response_preview:
                 # Try to create title from response if no message
                 simple_title = response_preview[:40].strip()
                 fallback_result = (simple_title, "Educational assistance")
-
+                print(f"✅ Using fallback title from response: '{simple_title}'")
                 return fallback_result
             else:
                 # Last resort fallback
                 fallback_result = ("Study Session", "Educational assistance")
-
+                print("✅ Using ultimate fallback title")
                 return fallback_result
 
     async def summarize_conversation(

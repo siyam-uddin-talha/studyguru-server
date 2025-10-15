@@ -345,8 +345,6 @@ class InteractionMutation:
 
         # If interaction_id provided validate; else create a new one
 
-        print(f"🔄 DO CONVERSATION INPUT: {input}")
-
         if input.interaction_id:
             result = await db.execute(
                 select(Interaction).where(
@@ -386,16 +384,17 @@ class InteractionMutation:
                 for media_file in input.media_files
             ]
 
-        # Delegate to service function
+        # Delegate to service function with dynamic token calculation
         result = await process_conversation_message(
             user=current_user,
             interaction=interaction,
             message=input.message,
             media_files=media_files_dict,
-            max_tokens=int(input.max_tokens),
+            max_tokens=None,  # Will be calculated dynamically based on file count
         )
 
         # Get the updated interaction to return current state
+        # Note: The service now handles database operations, so we need to refresh from our session
         await db.refresh(interaction)
 
         # Log the complete AI response from resolver
@@ -403,8 +402,8 @@ class InteractionMutation:
         if ai_response:
             # Truncate long responses for readability
             if len(str(ai_response)) > 500:
-                print(f"{str(ai_response)[:500]}...")
-                print(f"[TRUNCATED - Full length: {len(str(ai_response))} characters]")
+                print(f"{str(ai_response)}")
+
             else:
                 print(ai_response)
         else:
@@ -563,8 +562,33 @@ class InteractionMutation:
         db: AsyncSession = context.db
 
         try:
+            # Determine interaction_id from either direct input or conversation_id
+            interaction_id = input.interaction_id
+
+            if not interaction_id and input.conversation_id:
+                # Get interaction_id from conversation
+                from app.models.interaction import Conversation
+
+                conv_result = await db.execute(
+                    select(Conversation).where(Conversation.id == input.conversation_id)
+                )
+                conversation = conv_result.scalar_one_or_none()
+
+                if not conversation:
+                    return DefaultResponse(
+                        success=False, message="Conversation not found"
+                    )
+
+                interaction_id = conversation.interaction_id
+
+            if not interaction_id:
+                return DefaultResponse(
+                    success=False,
+                    message="Either interaction_id or conversation_id must be provided",
+                )
+
             result = await cancel_ai_generation(
-                user_id=str(current_user.id), interaction_id=input.interaction_id, db=db
+                user_id=str(current_user.id), interaction_id=interaction_id, db=db
             )
 
             return DefaultResponse(success=result["success"], message=result["message"])

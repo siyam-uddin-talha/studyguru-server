@@ -39,24 +39,86 @@ class SemanticSummaryService:
             user_msg_truncated = (
                 user_message[:500] if len(user_message) > 500 else user_message
             )
-            ai_resp_truncated = (
-                ai_response[:1000] if len(ai_response) > 1000 else ai_response
-            )
+            # Handle both string and dict responses for truncation
+            if isinstance(ai_response, dict):
+                ai_resp_truncated = str(ai_response)[:1000]
+            else:
+                ai_resp_truncated = (
+                    ai_response[:1000] if len(ai_response) > 1000 else ai_response
+                )
 
-            result = await chain.ainvoke(
-                {
-                    "user_message": user_msg_truncated,
-                    "ai_response": ai_resp_truncated,
-                }
-            )
+            # Try multiple attempts with progressive fallback
+            result = None
+            for attempt in range(2):  # Try twice with different token limits
+                try:
+                    # Adjust token limits based on attempt
+                    if attempt == 0:
+                        # First attempt: use full chain with increased tokens
+                        result = await chain.ainvoke(
+                            {
+                                "user_message": user_msg_truncated,
+                                "ai_response": ai_resp_truncated,
+                            }
+                        )
+                    else:
+                        # Second attempt: use even more truncated inputs
+                        user_msg_ultra_truncated = user_msg_truncated[:200]
+                        ai_resp_ultra_truncated = ai_resp_truncated[:400]
+                        result = await chain.ainvoke(
+                            {
+                                "user_message": user_msg_ultra_truncated,
+                                "ai_response": ai_resp_ultra_truncated,
+                            }
+                        )
+
+                    # Check if result is valid
+                    if (
+                        result
+                        and isinstance(result, dict)
+                        and result.get("semantic_summary")
+                    ):
+                        break
+                    else:
+                        print(
+                            f"⚠️ Attempt {attempt + 1}: Invalid result format: {result}"
+                        )
+
+                except Exception as chain_error:
+                    print(f"⚠️ Attempt {attempt + 1}: Chain error: {chain_error}")
+                    # Check if it's a length limit error
+                    if "length limit" in str(
+                        chain_error
+                    ).lower() or "completion_tokens" in str(chain_error):
+                        print(
+                            "⚠️ Length limit error detected, trying with shorter inputs"
+                        )
+                        continue
+                    # Check if it's a JSON parsing error
+                    elif (
+                        "json" in str(chain_error).lower()
+                        or "parse" in str(chain_error).lower()
+                    ):
+                        print("⚠️ JSON parsing error detected, using fallback summary")
+                        break
 
             # Validate and enhance the result
-            validated_result = self._validate_and_enhance_summary(result)
-
-            return validated_result
+            if result and isinstance(result, dict):
+                validated_result = self._validate_and_enhance_summary(result)
+                return validated_result
+            else:
+                print("⚠️ All attempts failed, using fallback summary")
+                return self._get_fallback_summary(user_message, ai_response)
 
         except Exception as e:
             print(f"Error creating conversation summary: {e}")
+            # Only print traceback for non-length-limit errors to reduce noise
+            if "length limit" not in str(e).lower() and "completion_tokens" not in str(
+                e
+            ):
+                import traceback
+
+                traceback.print_exc()
+
             return self._get_fallback_summary(user_message, ai_response)
 
     async def update_interaction_summary(
@@ -106,11 +168,15 @@ class SemanticSummaryService:
                 if len(new_user_message) > 500
                 else new_user_message
             )
-            new_ai_truncated = (
-                new_ai_response[:1000]
-                if len(new_ai_response) > 1000
-                else new_ai_response
-            )
+            # Handle both string and dict responses for truncation
+            if isinstance(new_ai_response, dict):
+                new_ai_truncated = str(new_ai_response)[:1000]
+            else:
+                new_ai_truncated = (
+                    new_ai_response[:1000]
+                    if len(new_ai_response) > 1000
+                    else new_ai_response
+                )
 
             result = await chain.ainvoke(
                 {
@@ -119,6 +185,15 @@ class SemanticSummaryService:
                     "new_ai_response": new_ai_truncated,
                 }
             )
+
+            # Check if result is valid
+            if not result or not isinstance(result, dict):
+                print(
+                    f"⚠️ Invalid result from interaction summary update chain: {result}"
+                )
+                return current_summary or self._get_fallback_summary(
+                    new_user_message, new_ai_response
+                )
 
             # Merge with existing summary data
             updated_summary = {
@@ -160,6 +235,16 @@ class SemanticSummaryService:
                 "last_updated": summary.get("last_updated", datetime.now().isoformat()),
             }
 
+            # Check if we have a semantic_summary from the result and use it FIRST
+            if "semantic_summary" in summary and summary["semantic_summary"]:
+                validated["updated_summary"] = summary["semantic_summary"]
+                print(
+                    f"✅ Using semantic_summary from result: {validated['updated_summary'][:100]}..."
+                )
+                print(
+                    f"🔍 Summary length: {len(validated['updated_summary'])} characters"
+                )
+
             # Validate and clean data
             validated["updated_summary"] = self._clean_text(
                 validated["updated_summary"]
@@ -168,6 +253,27 @@ class SemanticSummaryService:
             validated["learning_progression"] = self._clean_text(
                 validated["learning_progression"]
             )
+
+            # Ensure summary is not empty or too short
+            summary_text = validated["updated_summary"]
+            if not summary_text or len(summary_text) < 10:
+                print(f"⚠️ Semantic summary too short or empty, generating fallback")
+                print(
+                    f"🔍 Summary text: '{summary_text}', length: {len(summary_text) if summary_text else 0}"
+                )
+                validated["updated_summary"] = (
+                    "Educational conversation covering various topics and concepts."
+                )
+                validated["key_topics"] = validated["key_topics"] or [
+                    "General Discussion"
+                ]
+                validated["accumulated_facts"] = validated["accumulated_facts"] or [
+                    "Learning in progress"
+                ]
+            else:
+                print(
+                    f"✅ Semantic summary validation passed: {len(summary_text)} characters"
+                )
 
             # Ensure lists are properly formatted
             for list_field in [
@@ -275,11 +381,52 @@ class SemanticSummaryService:
         self, user_message: str, ai_response: str
     ) -> Dict[str, Any]:
         """Get a fallback summary when processing fails"""
+        # Try to extract some basic information from the inputs
+        topics = []
+        facts = []
+
+        # Extract basic topics from user message
+        if user_message:
+            user_lower = user_message.lower()
+            if any(
+                word in user_lower
+                for word in ["math", "mathematics", "equation", "solve"]
+            ):
+                topics.append("Mathematics")
+            if any(
+                word in user_lower
+                for word in ["science", "physics", "chemistry", "biology"]
+            ):
+                topics.append("Science")
+            if any(
+                word in user_lower
+                for word in ["english", "language", "grammar", "writing"]
+            ):
+                topics.append("Language")
+            if any(word in user_lower for word in ["history", "social", "geography"]):
+                topics.append("Social Studies")
+
+        # Extract basic facts from AI response
+        if ai_response:
+            ai_lower = ai_response.lower()
+            if "answer" in ai_lower or "solution" in ai_lower:
+                facts.append("Problem solving discussion")
+            if "explain" in ai_lower or "understand" in ai_lower:
+                facts.append("Concept explanation provided")
+
+        # Create a more intelligent summary
+        if topics:
+            summary_text = (
+                f"Educational conversation covering {', '.join(topics)} topics."
+            )
+        else:
+            summary_text = "Educational conversation covering various academic topics."
+
         return {
-            "updated_summary": "Educational conversation about various topics.",
-            "key_topics": ["General Discussion"],
-            "recent_focus": "User is engaged in educational learning.",
-            "accumulated_facts": [],
+            "updated_summary": summary_text,
+            "key_topics": topics or ["General Discussion"],
+            "recent_focus": "User is engaged in educational learning and problem-solving.",
+            "accumulated_facts": facts or ["Learning in progress"],
             "question_numbers": [],
             "learning_progression": "Learning in progress",
             "difficulty_trend": "beginner",

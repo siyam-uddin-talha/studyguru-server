@@ -197,18 +197,27 @@ class RealTimeContextService:
                 current_summary = interaction.semantic_summary
 
                 # Update using semantic summary service
-                updated_summary = (
-                    await semantic_summary_service.update_interaction_summary(
-                        current_summary=current_summary,
-                        new_user_message=user_message,
-                        new_ai_response=ai_response,
+                try:
+                    updated_summary = (
+                        await semantic_summary_service.update_interaction_summary(
+                            current_summary=current_summary,
+                            new_user_message=user_message,
+                            new_ai_response=ai_response,
+                        )
                     )
-                )
+                except Exception as summary_error:
+                    print(f"⚠️ Error updating semantic summary: {summary_error}")
+                    # Use fallback summary
+                    updated_summary = semantic_summary_service._get_fallback_summary(
+                        user_message, ai_response
+                    )
 
                 # Validate summary before saving
                 if not self._validate_semantic_summary(updated_summary):
-                    print(f"⚠️ Invalid semantic summary generated")
-                    return False
+                    print(f"⚠️ Invalid semantic summary generated, using fallback")
+                    updated_summary = semantic_summary_service._get_fallback_summary(
+                        user_message, ai_response
+                    )
 
                 # Save with transaction
                 interaction.semantic_summary = updated_summary
