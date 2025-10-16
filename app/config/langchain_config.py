@@ -5,6 +5,11 @@ LangChain configuration for StudyGuru Pro
 import os
 from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from app.config.cache_manager import cache_manager
+from langchain_core.embeddings import Embeddings
+from typing import List
+import numpy as np
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 import json
@@ -15,6 +20,68 @@ from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStoreRetriever
 
 from app.core.config import settings
+
+
+class CompatibleEmbeddings(Embeddings):
+    """Embeddings wrapper that ensures compatibility between different embedding models"""
+
+    def __init__(self, base_embeddings: Embeddings, target_dimension: int = 1536):
+        self.base_embeddings = base_embeddings
+        self.target_dimension = target_dimension
+        self.source_dimension = self._get_source_dimension()
+
+    def _get_source_dimension(self) -> int:
+        """Get the source dimension of the base embeddings"""
+        if isinstance(self.base_embeddings, GoogleGenerativeAIEmbeddings):
+            return 768  # Gemini embedding-001 dimension
+        elif isinstance(self.base_embeddings, OpenAIEmbeddings):
+            return 1536  # text-embedding-3-small dimension
+        else:
+            return 1536  # Default assumption
+
+    def _pad_embeddings(self, embeddings: List[List[float]]) -> List[List[float]]:
+        """Pad embeddings to target dimension if needed"""
+        if self.source_dimension >= self.target_dimension:
+            return embeddings
+
+        padded_embeddings = []
+        for embedding in embeddings:
+            if len(embedding) < self.target_dimension:
+                # Pad with zeros to reach target dimension
+                padding = [0.0] * (self.target_dimension - len(embedding))
+                padded_embedding = embedding + padding
+                padded_embeddings.append(padded_embedding)
+            else:
+                padded_embeddings.append(embedding)
+
+        return padded_embeddings
+
+    def _truncate_embeddings(self, embeddings: List[List[float]]) -> List[List[float]]:
+        """Truncate embeddings to source dimension if needed"""
+        if self.source_dimension >= self.target_dimension:
+            return embeddings
+
+        truncated_embeddings = []
+        for embedding in embeddings:
+            if len(embedding) > self.source_dimension:
+                # Truncate to source dimension
+                truncated_embedding = embedding[: self.source_dimension]
+                truncated_embeddings.append(truncated_embedding)
+            else:
+                truncated_embeddings.append(embedding)
+
+        return truncated_embeddings
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Embed documents with dimension compatibility"""
+        embeddings = self.base_embeddings.embed_documents(texts)
+        return self._pad_embeddings(embeddings)
+
+    def embed_query(self, text: str) -> List[float]:
+        """Embed query with dimension compatibility"""
+        embedding = self.base_embeddings.embed_query(text)
+        padded_embeddings = self._pad_embeddings([embedding])
+        return padded_embeddings[0]
 
 
 class MarkdownJsonOutputParser(JsonOutputParser):
@@ -186,23 +253,30 @@ CRITICAL REQUIREMENTS:
                 """
 Educational content guardrail. Check if content violates rules.
 
-REJECT: Non-educational content (selfies, social media, inappropriate material, code generation requests)
-ACCEPT: Educational content (textbooks, worksheets, math problems, study notes, academic papers, quizzes, question papers, mcq papers.)
+REJECT: Non-educational content (selfies, social media, inappropriate material, code generation requests, personal photos)
+ACCEPT: Educational content (textbooks, worksheets, math problems, study notes, academic papers, quizzes, question papers, mcq papers, exam papers, homework, assignments, educational diagrams, mathematical equations, scientific content)
 
-Rule: If educational content present (math, questions, equations), ACCEPT regardless of incidental faces.
+CRITICAL RULES:
+1. If you see ANY educational content (math problems, questions, equations, academic text), ACCEPT it
+2. MCQ papers, question papers, and exam papers are ALWAYS educational content
+3. Mathematical equations, formulas, and problems are educational content
+4. Textbooks, worksheets, and study materials are educational content
+5. Even if there are faces in the image, if educational content is present, ACCEPT it
+6. Empty or minimal content should be ACCEPTED (not rejected)
+7. Only reject if content is clearly non-educational (selfies, social media, inappropriate material)
 
 JSON response only:
 {{
     "is_violation": false,
     "violation_type": null,
-    "reasoning": "Educational content detected"
+    "reasoning": "Educational content detected: [brief description]"
 }}
 
 For violations:
 {{
     "is_violation": true,
     "violation_type": "non_educational_content", 
-    "reasoning": "Brief explanation"
+    "reasoning": "Brief explanation of why content is non-educational"
 }}
                 """,
             ),
@@ -479,10 +553,15 @@ GENERATION RULES:
 
 
 class StudyGuruModels:
-    """Model configurations for StudyGuru"""
+    """Model configurations for StudyGuru - supports both GPT and Gemini models"""
 
     # Fallback models in case GPT-5 is not available
     USE_FALLBACK_MODELS = True  # Set to False when GPT-5 is available
+
+    @staticmethod
+    def _is_gemini_model() -> bool:
+        """Check if Gemini model is configured"""
+        return settings.LLM_MODEL.lower() == "gemini"
 
     @staticmethod
     def get_chat_model(
@@ -490,166 +569,299 @@ class StudyGuruModels:
         max_tokens: int = 5000,
         reasoning_effort: str = "medium",
         verbosity: str = "low",
-    ) -> ChatOpenAI:
-        """Get configured chat model - using GPT-5 for superior reasoning and creativity"""
-        if StudyGuruModels.USE_FALLBACK_MODELS:
-            # Fallback to GPT-4o for compatibility
-            return ChatOpenAI(
-                model="gpt-4o",  # Fallback model
+    ):
+        """Get configured chat model - supports both GPT and Gemini"""
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Pro configuration (equivalent to GPT-4o)
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-pro",  # Using stable Gemini model
                 temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
-                request_timeout=30,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=max_tokens,
+                cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
-            # GPT-5 configuration
-            return ChatOpenAI(
-                model="gpt-5",  # Latest and most advanced model
-                temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
-                request_timeout=120,  # Increased timeout for GPT-5 reasoning
-                # GPT-5 specific parameters
-                # reasoning_effort=reasoning_effort,  # "low", "medium", "high" - controls reasoning depth
-                verbosity=verbosity,  # Control response length and detail
-            )
+            # GPT models
+            if StudyGuruModels.USE_FALLBACK_MODELS:
+                # Fallback to GPT-4o for compatibility
+                return ChatOpenAI(
+                    model="gpt-4o",  # Fallback model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=30,
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
+            else:
+                # GPT-5 configuration
+                return ChatOpenAI(
+                    model="gpt-5",  # Latest and most advanced model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=120,  # Increased timeout for GPT-5 reasoning
+                    verbosity=verbosity,  # Control response length and detail
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
 
     @staticmethod
     def get_vision_model(
         temperature: float = 0.3, max_tokens: int = 5000, verbosity: str = "low"
-    ) -> ChatOpenAI:
-        """Get configured vision model - using GPT-5 for superior vision capabilities"""
-        if StudyGuruModels.USE_FALLBACK_MODELS:
-            # Fallback to GPT-4o for compatibility
-            return ChatOpenAI(
-                model="gpt-4o",  # Fallback model
+    ):
+        """Get configured vision model - supports both GPT and Gemini"""
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Pro with vision capabilities
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-pro",  # Gemini with vision support
                 temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
-                request_timeout=30,  # Reduced timeout for faster processing
-                # model_kwargs={
-                #     "response_format": {
-                #         "type": "json_object"
-                #     }  # Force JSON output for document analysis
-                # },
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=max_tokens,
+                request_timeout=30,
+                cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
-            # GPT-5 configuration - optimized for speed
-            return ChatOpenAI(
-                model="gpt-5",  # GPT-5 with enhanced vision capabilities
-                temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
-                request_timeout=30,  # Reduced timeout for faster processing
-                # reasoning_effort="low",  # Low reasoning for faster processing
-                verbosity="low",  # Low verbosity for faster responses
-                # model_kwargs={
-                #     "response_format": {
-                #         "type": "json_object"
-                #     },  # Force JSON output for document analysis
-                # },
-            )
+            # GPT models
+            if StudyGuruModels.USE_FALLBACK_MODELS:
+                # Fallback to GPT-4o for compatibility
+                return ChatOpenAI(
+                    model="gpt-4o",  # Fallback model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=30,
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
+            else:
+                # GPT-5 configuration - optimized for speed
+                return ChatOpenAI(
+                    model="gpt-5",  # GPT-5 with enhanced vision capabilities
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=30,  # Reduced timeout for faster processing
+                    verbosity="low",  # Low verbosity for faster responses
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
 
     @staticmethod
     def get_guardrail_model(
         temperature: float = 0.1, max_tokens: int = 500, verbosity: str = "low"
-    ) -> ChatOpenAI:
-        """Get configured guardrail model using GPT-5 Mini for cost efficiency"""
-        if StudyGuruModels.USE_FALLBACK_MODELS:
-            # Fallback to GPT-4o-mini for compatibility
-            return ChatOpenAI(
-                model="gpt-5o-mini",  # Fallback model
+    ):
+        """Get configured guardrail model - supports both GPT and Gemini"""
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Flash for cost efficiency (equivalent to GPT-4o-mini)
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",  # Fast and cost-effective model
                 temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=max_tokens,
                 request_timeout=15,
-                # model_kwargs={
-                #     "response_format": {"type": "json_object"}
-                # },  # Force JSON output
+                cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
-            # GPT-5 Mini configuration
-            return ChatOpenAI(
-                model="gpt-5-mini",  # GPT-5 Mini: 83% more cost-effective than GPT-5
-                temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
-                request_timeout=15,  # Fast timeout for guardrails
-                verbosity=verbosity,  # Control response length and detail
-                # GPT-5 specific parameters for better JSON output
-                # model_kwargs={
-                #     "response_format": {"type": "json_object"},  # Force JSON output
-                # },
-            )
+            # GPT models
+            if StudyGuruModels.USE_FALLBACK_MODELS:
+                # Fallback to GPT-4o-mini for compatibility
+                return ChatOpenAI(
+                    model="gpt-4o-mini",  # Fallback model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=15,
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
+            else:
+                # GPT-5 Mini configuration
+                return ChatOpenAI(
+                    model="gpt-5-mini",  # GPT-5 Mini: 83% more cost-effective than GPT-5
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=15,  # Fast timeout for guardrails
+                    verbosity=verbosity,  # Control response length and detail
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
 
     @staticmethod
     def get_complex_reasoning_model(
         temperature: float = 0.1, max_tokens: int = 5000, verbosity: str = "medium"
-    ) -> ChatOpenAI:
-        """Get configured model for complex reasoning tasks using GPT-5 with high reasoning effort"""
-        if StudyGuruModels.USE_FALLBACK_MODELS:
-            # Fallback to GPT-4o for compatibility
-            return ChatOpenAI(
-                model="gpt-4o",  # Fallback model
+    ):
+        """Get configured model for complex reasoning tasks - supports both GPT and Gemini"""
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Pro for complex reasoning
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-pro",  # Latest Gemini for complex tasks
                 temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=max_tokens,
                 request_timeout=60,
-                # model_kwargs={
-                #     "response_format": {
-                #         "type": "json_object"
-                #     }  # Force JSON output for MCQ generation
-                # },
+                cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
-            # GPT-5 configuration
-            return ChatOpenAI(
-                model="gpt-5",  # GPT-5 for complex reasoning
-                temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,
-                request_timeout=150,  # Increased timeout for complex reasoning with high effort
-                # GPT-5 specific parameters for complex tasks
-                # reasoning_effort="high",  # Maximum reasoning depth for complex problems
-                verbosity=verbosity,  # Medium verbosity for complex reasoning tasks
-                # model_kwargs={
-                #     "response_format": {
-                #         "type": "json_object"
-                #     },  # Force JSON output for MCQ generation
-                # },
-            )
+            # GPT models
+            if StudyGuruModels.USE_FALLBACK_MODELS:
+                # Fallback to GPT-4o for compatibility
+                return ChatOpenAI(
+                    model="gpt-4o",  # Fallback model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=60,
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
+            else:
+                # GPT-5 configuration
+                return ChatOpenAI(
+                    model="gpt-5",  # GPT-5 for complex reasoning
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,
+                    request_timeout=150,  # Increased timeout for complex reasoning with high effort
+                    verbosity=verbosity,  # Medium verbosity for complex reasoning tasks
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
 
     @staticmethod
-    def get_embeddings_model() -> OpenAIEmbeddings:
-        """Get configured embeddings model"""
-        return OpenAIEmbeddings(
-            model="text-embedding-3-small", openai_api_key=settings.OPENAI_API_KEY
-        )
+    def get_embeddings_model():
+        """Get configured embeddings model - supports both GPT and Gemini with compatibility"""
+        if StudyGuruModels._is_gemini_model():
+            # Gemini embeddings model (fast and cost-efficient)
+            base_embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/embedding-001",  # Gemini embedding model
+                google_api_key=settings.GOOGLE_API_KEY,
+            )
+        else:
+            # OpenAI embeddings
+            base_embeddings = OpenAIEmbeddings(
+                model="text-embedding-3-small", openai_api_key=settings.OPENAI_API_KEY
+            )
+
+        # Wrap with compatibility layer to ensure 1536 dimensions
+        return CompatibleEmbeddings(base_embeddings, target_dimension=1536)
 
     @staticmethod
     def get_title_model(
         temperature: float = 0.3, max_tokens: int = 100, verbosity: str = "low"
-    ) -> ChatOpenAI:
-        """Get configured title generation model using GPT-5 Mini for cost efficiency"""
-        if StudyGuruModels.USE_FALLBACK_MODELS:
-            # Fallback to GPT-4o-mini for compatibility
-            return ChatOpenAI(
-                model="gpt-4o-mini",  # Fallback model
+    ):
+        """Get configured title generation model - supports both GPT and Gemini"""
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Flash for cost efficiency
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",  # Fast and cost-effective model
                 temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,  # Very low token limit for cost efficiency
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=max_tokens,
                 request_timeout=10,  # Fast timeout for quick response
+                cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
-            # GPT-5 Mini configuration
-            return ChatOpenAI(
-                model="gpt-5-mini",  # GPT-5 Mini: Most cost-effective model
-                temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=max_tokens,  # Very low token limit for cost efficiency
-                request_timeout=10,  # Fast timeout for quick response
-                verbosity=verbosity,  # Control response length and detail
-            )
+            # GPT models
+            if StudyGuruModels.USE_FALLBACK_MODELS:
+                # Fallback to GPT-4o-mini for compatibility
+                return ChatOpenAI(
+                    model="gpt-4o-mini",  # Fallback model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,  # Very low token limit for cost efficiency
+                    request_timeout=10,  # Fast timeout for quick response
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
+            else:
+                # GPT-5 Mini configuration
+                return ChatOpenAI(
+                    model="gpt-5-mini",  # GPT-5 Mini: Most cost-effective model
+                    temperature=temperature,
+                    openai_api_key=settings.OPENAI_API_KEY,
+                    max_tokens=max_tokens,  # Very low token limit for cost efficiency
+                    request_timeout=10,  # Fast timeout for quick response
+                    verbosity=verbosity,  # Control response length and detail
+                    cache=cache_manager.get_response_cache(),  # Enable response caching
+                )
+
+    @staticmethod
+    def get_model_with_context_cache(
+        model_type: str = "chat",
+        temperature: float = 0.2,
+        max_tokens: int = 5000,
+        cached_content: Optional[Any] = None,
+    ):
+        """
+        Get model with context caching for large documents
+
+        Args:
+            model_type: Type of model ("chat", "vision", "guardrail", "reasoning", "title")
+            temperature: Model temperature
+            max_tokens: Maximum output tokens
+            cached_content: Pre-cached content for context caching
+
+        Returns:
+            Model instance with context caching enabled
+        """
+        if StudyGuruModels._is_gemini_model() and cached_content:
+            # Use context caching for Gemini models
+            if model_type == "chat":
+                return ChatGoogleGenerativeAI(
+                    model="gemini-2.5-pro",
+                    temperature=temperature,
+                    google_api_key=settings.GOOGLE_API_KEY,
+                    max_output_tokens=max_tokens,
+                    cache=cache_manager.get_response_cache(),
+                    cache_context=cached_content,  # Enable context caching
+                )
+            elif model_type == "vision":
+                return ChatGoogleGenerativeAI(
+                    model="gemini-2.5-pro",
+                    temperature=temperature,
+                    google_api_key=settings.GOOGLE_API_KEY,
+                    max_output_tokens=max_tokens,
+                    request_timeout=30,
+                    cache=cache_manager.get_response_cache(),
+                    cache_context=cached_content,  # Enable context caching
+                )
+            elif model_type == "guardrail":
+                return ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
+                    temperature=temperature,
+                    google_api_key=settings.GOOGLE_API_KEY,
+                    max_output_tokens=max_tokens,
+                    request_timeout=15,
+                    cache=cache_manager.get_response_cache(),
+                    cache_context=cached_content,  # Enable context caching
+                )
+            elif model_type == "reasoning":
+                return ChatGoogleGenerativeAI(
+                    model="gemini-2.5-pro",
+                    temperature=temperature,
+                    google_api_key=settings.GOOGLE_API_KEY,
+                    max_output_tokens=max_tokens,
+                    request_timeout=60,
+                    cache=cache_manager.get_response_cache(),
+                    cache_context=cached_content,  # Enable context caching
+                )
+            elif model_type == "title":
+                return ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
+                    temperature=temperature,
+                    google_api_key=settings.GOOGLE_API_KEY,
+                    max_output_tokens=max_tokens,
+                    request_timeout=10,
+                    cache=cache_manager.get_response_cache(),
+                    cache_context=cached_content,  # Enable context caching
+                )
+
+        # Fallback to regular model without context caching
+        if model_type == "chat":
+            return StudyGuruModels.get_chat_model(temperature, max_tokens)
+        elif model_type == "vision":
+            return StudyGuruModels.get_vision_model(temperature, max_tokens)
+        elif model_type == "guardrail":
+            return StudyGuruModels.get_guardrail_model(temperature, max_tokens)
+        elif model_type == "reasoning":
+            return StudyGuruModels.get_complex_reasoning_model(temperature, max_tokens)
+        elif model_type == "title":
+            return StudyGuruModels.get_title_model(temperature, max_tokens)
+        else:
+            return StudyGuruModels.get_chat_model(temperature, max_tokens)
 
 
 class StudyGuruVectorStore:
@@ -666,10 +878,15 @@ class StudyGuruVectorStore:
 
     @staticmethod
     def get_collection_config() -> Dict[str, Any]:
-        """Get collection configuration"""
+        """Get collection configuration - uses single collection with common dimension"""
+        # Use single collection with 1536 dimensions (largest) for compatibility
+        # Gemini embeddings (768D) will be padded to 1536D
+        dimension = 1536  # Common dimension for both models
+        collection_name = settings.ZILLIZ_COLLECTION  # Single collection
+
         return {
-            "collection_name": settings.ZILLIZ_COLLECTION,
-            "dimension": 1536,  # text-embedding-3-small dimension
+            "collection_name": collection_name,
+            "dimension": dimension,
             "index_params": {
                 "index_type": "IVF_FLAT",
                 "metric_type": settings.ZILLIZ_INDEX_METRIC,

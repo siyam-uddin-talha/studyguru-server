@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = getenv("ENVIRONMENT", "development")
     DISABLE_LOGS: bool = getenv("DISABLE_LOGS", "true").lower() == "false"
 
+    LLM_MODEL: str = getenv("LLM_MODEL", "gemini")  # gpt OR gemini
+
     # Database
     DATABASE_URL: str = getenv(
         "DATABASE_URL",
@@ -64,6 +66,9 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = getenv("OPENAI_API_KEY", "")
 
+    # Google Gemini
+    GOOGLE_API_KEY: str = getenv("GOOGLE_API_KEY", "")
+
     GOOGLE_CLIENT_ID: str = getenv("GOOGLE_CLIENT_ID", "google-id")
 
     # Zilliz / Milvus Vector DB
@@ -74,6 +79,17 @@ class Settings(BaseSettings):
     ZILLIZ_DIMENSION: int = int(getenv("ZILLIZ_DIMENSION", 1536))
     ZILLIZ_INDEX_METRIC: str = getenv("ZILLIZ_INDEX_METRIC", "IP")  # or "L2", "COSINE"
     ZILLIZ_CONSISTENCY_LEVEL: str = getenv("ZILLIZ_CONSISTENCY_LEVEL", "Bounded")
+
+    # Caching Configuration
+    ENABLE_MODEL_CACHING: bool = (
+        getenv("ENABLE_MODEL_CACHING", "true").lower() == "true"
+    )
+    ENABLE_CONTEXT_CACHING: bool = (
+        getenv("ENABLE_CONTEXT_CACHING", "true").lower() == "true"
+    )
+    CACHE_TTL: int = int(getenv("CACHE_TTL", 3600))  # 1 hour default
+    CACHE_MAX_SIZE: int = int(getenv("CACHE_MAX_SIZE", 1000))  # Max cached items
+
     ADD_UNIT_ID_1: str = getenv(
         "ADD_UNIT_ID_1", "ca-app-pub-2962676217775659/5723259375"
     )

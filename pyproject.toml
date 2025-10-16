@@ -39,7 +39,9 @@ dependencies = [
     "langchain-community>=0.3.29",
     "langchain-core>=0.3.76",
     "langchain-milvus>=0.2.1",
+    "langchain-google-genai>=2.0.0",
     "psutil>=7.1.0",
+    "google-generativeai>=0.8.5",
 ]
 
 [build-system]

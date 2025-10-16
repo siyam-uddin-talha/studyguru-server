@@ -4,6 +4,7 @@ import re
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
@@ -94,8 +95,9 @@ class LangChainService:
                 secure=True,
             )
 
-            # Create or get collection
-            collection_name = settings.ZILLIZ_COLLECTION
+            # Create or get collection (single collection for both models)
+            collection_config = StudyGuruConfig.VECTOR_STORE.get_collection_config()
+            collection_name = collection_config["collection_name"]
             if not utility.has_collection(collection_name):
                 # Create collection with proper schema
                 from pymilvus import FieldSchema, CollectionSchema, DataType
@@ -124,8 +126,10 @@ class LangChainService:
                         nullable=True,
                     ),
                     FieldSchema(
-                        name="vector", dtype=DataType.FLOAT_VECTOR, dim=1536
-                    ),  # text-embedding-3-small dimension
+                        name="vector",
+                        dtype=DataType.FLOAT_VECTOR,
+                        dim=StudyGuruConfig.MODELS.get_collection_config()["dimension"],
+                    ),  # Dynamic dimension based on model
                 ]
 
                 schema = CollectionSchema(
@@ -148,7 +152,7 @@ class LangChainService:
                     },
                 )
 
-            # Initialize vector store using Zilliz
+            # Initialize vector store using Zilliz (single collection for both models)
             self.vector_store = Zilliz(
                 embedding_function=self.embeddings,
                 collection_name=collection_name,
@@ -277,23 +281,36 @@ class LangChainService:
             # Use the configured guardrail prompt
             guardrail_prompt = StudyGuruConfig.PROMPTS.GUARDRAIL_CHECK
 
-            # Create chain using dedicated guardrail model (text-only for speed)
+            # Create chain using dedicated guardrail model
             chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
 
-            # Build content - use text-only for guardrails (faster than vision model)
+            # Build content - analyze images if they exist for better accuracy
             if image_urls:
-                # For images, just mention they exist - don't analyze them with vision model
-                content = (
-                    f"User message: {message}\nImages attached: {len(image_urls)} files"
+                # For images, use vision model to properly analyze educational content
+                print(
+                    f"🛡️ GUARDRAIL: Analyzing {len(image_urls)} image(s) for educational content"
+                )
+
+                # Use vision model for image analysis
+                vision_chain = (
+                    guardrail_prompt | self.vision_llm | self.guardrail_parser
+                )
+
+                # Build multimodal content for vision model
+                multimodal_content = self._build_multimodal_content(message, image_urls)
+
+                # Run guardrail check with vision model
+                result = await vision_chain.ainvoke(
+                    {"content": multimodal_content},
+                    config={"callbacks": [callback_handler]},
                 )
             else:
+                # Text-only content
                 content = f"User message: {message}"
-
-            # Run guardrail check (text-only, much faster)
-            result = await chain.ainvoke(
-                {"content": content},
-                config={"callbacks": [callback_handler]},
-            )
+                result = await chain.ainvoke(
+                    {"content": content},
+                    config={"callbacks": [callback_handler]},
+                )
 
             # Convert dict result to GuardrailOutput object
             if isinstance(result, dict):
@@ -601,7 +618,7 @@ class LangChainService:
     async def similarity_search(
         self, query: str, user_id: str, top_k: int = 5
     ) -> List[Dict[str, Any]]:
-        """Perform similarity search using enhanced vector optimization service"""
+        """Perform similarity search using enhanced vector optimization service with cross-model compatibility"""
         try:
             # Use the new vector optimization service for better results
             from app.services.vector_optimization_service import (
@@ -654,7 +671,7 @@ class LangChainService:
             print(
                 f"⚠️ Enhanced similarity search failed, falling back to basic search: {e}"
             )
-            # Fallback to original implementation
+            # Fallback to basic search
             return await self._basic_similarity_search(query, user_id, top_k)
 
     async def _basic_similarity_search(
@@ -1078,8 +1095,9 @@ class LangChainService:
             if not self.vector_store:
                 return False
 
-            # Get the collection from the vector store
-            collection_name = settings.ZILLIZ_COLLECTION
+            # Get the collection from the vector store (single collection for both models)
+            collection_config = StudyGuruConfig.VECTOR_STORE.get_collection_config()
+            collection_name = collection_config["collection_name"]
             collection = Collection(collection_name)
 
             # Load collection to memory for operations
