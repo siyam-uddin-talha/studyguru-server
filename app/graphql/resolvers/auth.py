@@ -37,6 +37,7 @@ from app.helpers.email import (
 )
 from app.constants.constant import CONSTANTS, COIN, RESPONSE_STATUS
 
+
 @strawberry.type
 class AuthQuery:
     @strawberry.field
@@ -70,6 +71,7 @@ class AuthQuery:
         return AuthType(
             success=True, message="Account retrieved successfully", account=account
         )
+
 
 @strawberry.type
 class AuthMutation:

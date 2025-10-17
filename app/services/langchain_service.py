@@ -347,6 +347,48 @@ class LangChainService:
 
         return content
 
+    def _is_simple_question(self, message: str) -> bool:
+        """Check if a question is simple and doesn't need extensive context processing"""
+        if not message:
+            return True
+
+        message_lower = message.lower().strip()
+
+        # Simple question patterns that don't need extensive context
+        simple_patterns = [
+            r"^tell me about\s+",
+            r"^what is\s+",
+            r"^explain\s+",
+            r"^define\s+",
+            r"^how does\s+",
+            r"^why\s+",
+            r"^when\s+",
+            r"^where\s+",
+            r"^who\s+",
+        ]
+
+        # Check if message matches simple patterns
+        for pattern in simple_patterns:
+            if re.match(pattern, message_lower):
+                return True
+
+        # Check if message is short and doesn't contain complex terms
+        if len(message) < 50 and not any(
+            term in message_lower
+            for term in [
+                "solve",
+                "calculate",
+                "equation",
+                "formula",
+                "problem",
+                "question",
+                "mcq",
+            ]
+        ):
+            return True
+
+        return False
+
     async def generate_conversation_response(
         self,
         message: str,
@@ -518,8 +560,9 @@ class LangChainService:
                     )
                 )
             else:
+                # Optimized system prompt for streaming - simpler and faster
                 system_prompt = """
-                You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance based on the user's question and any provided context. Keep responses concise but informative.
+                You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance. Keep responses concise and informative. For simple questions, give direct answers without extensive context processing.
                 """
 
             # Build user content
@@ -585,7 +628,7 @@ class LangChainService:
                 ]
             )
 
-            # Create streaming chain
+            # Create streaming chain with optimized settings
             if is_document_analysis_only:
                 # Use vision model for pure document analysis (streaming not supported for document parser)
                 optimized_llm = StudyGuruConfig.MODELS.get_vision_model(
@@ -594,20 +637,46 @@ class LangChainService:
                 chain = prompt | optimized_llm
                 print("🔍 Using vision model for document analysis (streaming)")
             else:
-                # Use chat model for regular conversations
+                # Use chat model for regular conversations with speed optimizations
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
-                    temperature=0.2, max_tokens=max_tokens
+                    temperature=0.1,  # Lower temperature for faster, more deterministic responses
+                    max_tokens=max_tokens,
+                    reasoning_effort="low",  # Minimal reasoning for speed
+                    verbosity="low",  # Minimal verbosity for speed
                 )
                 chain = prompt | optimized_llm
+                print(
+                    "🔍 Using optimized chat model for streaming (low reasoning, low verbosity)"
+                )
 
-            # Stream response
+            # Stream response using direct model streaming
             full_response = ""
-            async for chunk in chain.astream(
-                {}, config={"callbacks": [callback_handler]}
-            ):
-                if hasattr(chunk, "content") and chunk.content:
-                    full_response += chunk.content
-                    yield chunk.content
+            print(f"🤖 Starting LangChain streaming...")
+
+            # Use the model's streaming capability directly
+            if hasattr(optimized_llm, "astream"):
+                print(f"🤖 Using direct model streaming (astream)")
+                # Try direct streaming from the model
+                messages = prompt.format_messages()
+                async for chunk in optimized_llm.astream(
+                    messages,
+                    config={"callbacks": [callback_handler]},
+                ):
+                    if hasattr(chunk, "content") and chunk.content:
+                        print(f"🤖 Direct streaming chunk: '{chunk.content}'")
+                        full_response += chunk.content
+                        yield chunk.content
+            else:
+                print(f"🤖 Using chain streaming (fallback)")
+                # Fallback: Use chain streaming with proper configuration
+                async for chunk in chain.astream(
+                    {},
+                    config={"callbacks": [callback_handler], "stream_mode": "values"},
+                ):
+                    if hasattr(chunk, "content") and chunk.content:
+                        print(f"🤖 Chain streaming chunk: '{chunk.content}'")
+                        full_response += chunk.content
+                        yield chunk.content
 
             # Store the final response and token usage in the callback handler
             callback_handler.final_response = full_response

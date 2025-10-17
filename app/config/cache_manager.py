@@ -8,8 +8,7 @@ from datetime import datetime, timedelta
 import hashlib
 import json
 
-from langchain.cache import InMemoryCache, SQLiteCache
-from langchain_google_genai import GoogleAICacheManager
+from langchain_community.cache import InMemoryCache, SQLiteCache
 from langchain.globals import set_llm_cache, get_llm_cache
 
 from app.core.config import settings
@@ -39,8 +38,9 @@ class StudyGuruCacheManager:
             set_llm_cache(self.response_cache)
 
         if settings.ENABLE_CONTEXT_CACHING and settings.LLM_MODEL.lower() == "gemini":
-            # Initialize Google AI context cache manager
-            self.context_cache_manager = GoogleAICacheManager()
+            # Context caching will be handled by the model's cache_context parameter
+            # No separate cache manager needed for Gemini context caching
+            self.context_cache_manager = None
 
     def get_response_cache(self):
         """Get the response cache instance"""
@@ -60,7 +60,7 @@ class StudyGuruCacheManager:
         Returns:
             CachedContent object or None if caching is disabled
         """
-        if not settings.ENABLE_CONTEXT_CACHING or not self.context_cache_manager:
+        if not settings.ENABLE_CONTEXT_CACHING:
             return None
 
         try:
@@ -74,10 +74,13 @@ class StudyGuruCacheManager:
                 if self._is_cache_valid(cached_item, ttl_hours):
                     return cached_item["content"]
 
-            # Create new cached content
-            cached_content = self.context_cache_manager.create_cached_content(
-                model=model, contents=contents
-            )
+            # For Gemini models, we'll use the contents directly as cached content
+            # The actual context caching will be handled by the model's cache_context parameter
+            cached_content = {
+                "model": model,
+                "contents": contents,
+                "cache_key": cache_key,
+            }
 
             # Store in our cache registry
             self.cached_contents[cache_key] = {

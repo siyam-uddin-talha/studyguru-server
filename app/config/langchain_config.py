@@ -567,7 +567,7 @@ class StudyGuruModels:
     def get_chat_model(
         temperature: float = 0.2,
         max_tokens: int = 5000,
-        reasoning_effort: str = "medium",
+        reasoning_effort: str = "low",  # Reduced from "medium" for faster responses
         verbosity: str = "low",
     ):
         """Get configured chat model - supports both GPT and Gemini"""
@@ -578,6 +578,7 @@ class StudyGuruModels:
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
+                request_timeout=30,  # Reduced timeout for faster responses
                 cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
@@ -593,14 +594,14 @@ class StudyGuruModels:
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
             else:
-                # GPT-5 configuration
+                # GPT-5 configuration - optimized for speed
                 return ChatOpenAI(
                     model="gpt-5",  # Latest and most advanced model
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
-                    request_timeout=120,  # Increased timeout for GPT-5 reasoning
-                    verbosity=verbosity,  # Control response length and detail
+                    request_timeout=60,  # Reduced from 120 to 60 seconds for faster responses
+                    verbosity="low",  # Always use low verbosity for speed
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
 

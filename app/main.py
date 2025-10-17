@@ -13,6 +13,9 @@ from app.core.config import settings
 from app.graphql.schema import schema, get_context
 from app.api.webhook import webhook_router
 from app.api.app_routes import account_router, interaction_router
+from app.api.interaction_routes import (
+    interaction_router as streaming_interaction_router,
+)
 from app.api.websocket_routes import router as websocket_router
 from app.api.sse_routes import router as sse_router
 
@@ -84,6 +87,7 @@ app.include_router(graphql_app, prefix="/graphql")
 app.include_router(webhook_router, prefix="/webhook")
 app.include_router(account_router, prefix="/api/app")
 app.include_router(interaction_router, prefix="/api/app")
+app.include_router(streaming_interaction_router, prefix="/api/stream")
 
 # WebSocket routes
 app.include_router(websocket_router, prefix="/ws")
