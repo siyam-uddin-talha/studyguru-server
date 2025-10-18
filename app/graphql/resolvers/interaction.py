@@ -17,6 +17,7 @@ from app.graphql.types.interaction import (
     UpdateInteractionTitleInput,
     CancelGenerationInput,
     DeleteInteractionInput,
+    DeleteInteractionsInput,
     PinInteractionInput,
     ShareInteractionInput,
     GetSharedInteractionInput,
@@ -69,12 +70,14 @@ class InteractionQuery:
         )
         interactions = result.scalars().all()
 
-        # Get total count
-        count_result = await db.execute(
-            select(Interaction).where(Interaction.user_id == current_user.id)
+        # Get total count efficiently
+        total_result = await db.scalar(
+            select(func.count())
+            .select_from(Interaction)
+            .where(Interaction.user_id == current_user.id)
         )
-        total = len(count_result.scalars().all())
-
+        total = total_result or 0
+        # print("total", total)
         # Convert to response types
         doc_material_types = []
         for interaction in interactions:
@@ -326,119 +329,119 @@ class InteractionMutation:
 
         return DefaultResponse(success=True, message="Document deleted successfully")
 
-    @strawberry.mutation
-    async def do_conversation(
-        self,
-        info,
-        input: DoConversationInput,
-    ) -> InteractionResponse:
-        context = info.context
-        current_user = await get_current_user_from_context(context)
+    # @strawberry.mutation
+    # async def do_conversation(
+    #     self,
+    #     info,
+    #     input: DoConversationInput,
+    # ) -> InteractionResponse:
+    #     context = info.context
+    #     current_user = await get_current_user_from_context(context)
 
-        if not current_user:
-            return InteractionResponse(success=False, message=CONSTANTS.NOT_FOUND)
+    #     if not current_user:
+    #         return InteractionResponse(success=False, message=CONSTANTS.NOT_FOUND)
 
-        db: AsyncSession = context.db
+    #     db: AsyncSession = context.db
 
-        interaction = None
-        is_fresh_interaction = False
+    #     interaction = None
+    #     is_fresh_interaction = False
 
-        # If interaction_id provided validate; else create a new one
+    #     # If interaction_id provided validate; else create a new one
 
-        if input.interaction_id:
-            result = await db.execute(
-                select(Interaction).where(
-                    Interaction.id == input.interaction_id,
-                    Interaction.user_id == current_user.id,
-                )
-            )
-            interaction = result.scalar_one_or_none()
-            if not interaction:
-                return InteractionResponse(
-                    success=False, message="No conversation found!"
-                )
+    #     if input.interaction_id:
+    #         result = await db.execute(
+    #             select(Interaction).where(
+    #                 Interaction.id == input.interaction_id,
+    #                 Interaction.user_id == current_user.id,
+    #             )
+    #         )
+    #         interaction = result.scalar_one_or_none()
+    #         if not interaction:
+    #             return InteractionResponse(
+    #                 success=False, message="No conversation found!"
+    #             )
 
-            # Check if this is a fresh interaction by querying conversations
-            conv_result = await db.execute(
-                select(Conversation).where(
-                    Conversation.interaction_id == interaction.id
-                )
-            )
-            existing_conversations = conv_result.scalars().all()
-            is_fresh_interaction = len(existing_conversations) == 0
-        else:
-            interaction = Interaction(
-                user_id=str(current_user.id),
-                title=None,
-                summary_title=None,
-            )
-            db.add(interaction)
-            await db.commit()  # Commit the transaction so the interaction is persisted
-            is_fresh_interaction = True  # New interaction is always fresh
+    #         # Check if this is a fresh interaction by querying conversations
+    #         conv_result = await db.execute(
+    #             select(Conversation).where(
+    #                 Conversation.interaction_id == interaction.id
+    #             )
+    #         )
+    #         existing_conversations = conv_result.scalars().all()
+    #         is_fresh_interaction = len(existing_conversations) == 0
+    #     else:
+    #         interaction = Interaction(
+    #             user_id=str(current_user.id),
+    #             title=None,
+    #             summary_title=None,
+    #         )
+    #         db.add(interaction)
+    #         await db.commit()  # Commit the transaction so the interaction is persisted
+    #         is_fresh_interaction = True  # New interaction is always fresh
 
-        # Convert GraphQL input to service format
-        media_files_dict = None
-        if input.media_files:
-            media_files_dict = [
-                {"id": media_file.id, "url": media_file.url}
-                for media_file in input.media_files
-            ]
+    #     # Convert GraphQL input to service format
+    #     media_files_dict = None
+    #     if input.media_files:
+    #         media_files_dict = [
+    #             {"id": media_file.id, "url": media_file.url}
+    #             for media_file in input.media_files
+    #         ]
 
-        # Delegate to service function with dynamic token calculation
-        print(f"🔧 RESOLVER: Calling process_conversation_message")
-        result = await process_conversation_message(
-            user=current_user,
-            interaction=interaction,
-            message=input.message,
-            media_files=media_files_dict,
-            max_tokens=None,  # Will be calculated dynamically based on file count
-            db=db,  # Pass the database session
-        )
-        print(f"🔧 RESOLVER: Got result from service: {result}")
+    #     # Delegate to service function with dynamic token calculation
+    #     print(f"🔧 RESOLVER: Calling process_conversation_message")
+    #     result = await process_conversation_message(
+    #         user=current_user,
+    #         interaction=interaction,
+    #         message=input.message,
+    #         media_files=media_files_dict,
+    #         max_tokens=None,  # Will be calculated dynamically based on file count
+    #         db=db,  # Pass the database session
+    #     )
+    #     print(f"🔧 RESOLVER: Got result from service: {result}")
 
-        # Get the updated interaction to return current state
-        # Note: The service now handles database operations, so we need to refresh from our session
-        await db.refresh(interaction)
+    #     # Get the updated interaction to return current state
+    #     # Note: The service now handles database operations, so we need to refresh from our session
+    #     await db.refresh(interaction)
 
-        # Log the complete AI response from resolver
-        ai_response = result.get("ai_response")
-        print(f"🔧 RESOLVER: Extracted ai_response: {ai_response}")
-        print(f"🔧 RESOLVER: ai_response type: {type(ai_response)}")
-        print(
-            f"🔧 RESOLVER: ai_response length: {len(str(ai_response)) if ai_response else 0}"
-        )
+    #     # Log the complete AI response from resolver
+    #     ai_response = result.get("ai_response")
+    #     print(f"🔧 RESOLVER: Extracted ai_response: {ai_response}")
+    #     print(f"🔧 RESOLVER: ai_response type: {type(ai_response)}")
+    #     print(
+    #         f"🔧 RESOLVER: ai_response length: {len(str(ai_response)) if ai_response else 0}"
+    #     )
 
-        if ai_response:
-            # Truncate long responses for readability
-            if len(str(ai_response)) > 500:
-                print(f"{str(ai_response)}")
+    #     if ai_response:
+    #         # Truncate long responses for readability
+    #         if len(str(ai_response)) > 500:
+    #             print(f"{str(ai_response)}")
 
-            else:
-                print(ai_response)
-        else:
-            print("No AI response content")
-        print("=" * 80)
+    #         else:
+    #             print(ai_response)
+    #     else:
+    #         print("No AI response content")
+    #     print("=" * 80)
 
-        return InteractionResponse(
-            success=bool(result.get("success")),
-            message=result.get("message"),
-            interaction_id=result.get("interaction_id"),
-            is_new_interaction=is_fresh_interaction,
-            interaction=(
-                None
-                if not is_fresh_interaction
-                else InteractionType(
-                    id=interaction.id,
-                    user_id=interaction.user_id,
-                    title=interaction.title,
-                    summary_title=interaction.summary_title,
-                    is_pinned=interaction.is_pinned,
-                    created_at=interaction.created_at,
-                    updated_at=interaction.updated_at,
-                )
-            ),
-            ai_response=result.get("ai_response"),  # The actual AI response content
-        )
+    #     return InteractionResponse(
+    #         success=bool(result.get("success")),
+    #         message=result.get("message"),
+    #         interaction_id=result.get("interaction_id"),
+    #         is_new_interaction=is_fresh_interaction,
+    #         interaction=(
+    #             None
+    #             if not is_fresh_interaction
+    #             else InteractionType(
+    #                 id=interaction.id,
+    #                 user_id=interaction.user_id,
+    #                 title=interaction.title,
+    #                 summary_title=interaction.summary_title,
+    #                 is_pinned=interaction.is_pinned,
+    #                 created_at=interaction.created_at,
+    #                 updated_at=interaction.updated_at,
+    #             )
+    #         ),
+    #         ai_response=result.get("ai_response"),  # The actual AI response content
+    #     )
 
     @strawberry.mutation
     async def delete_media_file(
@@ -746,6 +749,150 @@ class InteractionMutation:
             traceback.print_exc()
             return DefaultResponse(
                 success=False, message=f"Failed to delete conversation: {str(e)}"
+            )
+
+    @strawberry.mutation
+    async def delete_interactions(
+        self,
+        info,
+        input: DeleteInteractionsInput,
+    ) -> DefaultResponse:
+        """
+        Delete multiple interactions and all associated data (conversations, media files, embeddings)
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        if not input.interaction_ids or len(input.interaction_ids) == 0:
+            return DefaultResponse(success=False, message="No interactions to delete")
+
+        db: AsyncSession = context.db
+
+        try:
+            # Import context models
+            from app.models.context import (
+                ContextUsageLog,
+                ConversationContext,
+                DocumentContext,
+            )
+            from app.models.interaction import InteractionShare, InteractionShareVisitor
+
+            deleted_count = 0
+            failed_deletions = []
+
+            for interaction_id in input.interaction_ids:
+                try:
+                    # Get the interaction with all related data
+                    result = await db.execute(
+                        select(Interaction)
+                        .options(
+                            selectinload(Interaction.conversations).selectinload(
+                                Conversation.files
+                            )
+                        )
+                        .where(
+                            Interaction.id == interaction_id,
+                            Interaction.user_id == current_user.id,
+                        )
+                    )
+                    interaction = result.scalar_one_or_none()
+
+                    if not interaction:
+                        failed_deletions.append(interaction_id)
+                        continue
+
+                    # Delete context usage logs
+                    context_logs = await db.execute(
+                        select(ContextUsageLog).where(
+                            ContextUsageLog.interaction_id == interaction_id
+                        )
+                    )
+                    for log in context_logs.scalars():
+                        await db.delete(log)
+
+                    # Delete media files associated with conversations
+                    for conversation in interaction.conversations:
+                        for file in conversation.files:
+                            # Delete from S3 (if needed)
+                            # Note: You might want to add S3 deletion logic here
+                            await db.delete(file)
+
+                    # Delete conversation contexts
+                    conversation_contexts = await db.execute(
+                        select(ConversationContext).where(
+                            ConversationContext.interaction_id == interaction_id
+                        )
+                    )
+                    for context in conversation_contexts.scalars():
+                        await db.delete(context)
+
+                    # Delete document contexts
+                    document_contexts = await db.execute(
+                        select(DocumentContext).where(
+                            DocumentContext.interaction_id == interaction_id
+                        )
+                    )
+                    for doc_context in document_contexts.scalars():
+                        await db.delete(doc_context)
+
+                    # Delete interaction share visitors first (they reference interaction_share)
+                    interaction_shares = await db.execute(
+                        select(InteractionShare).where(
+                            InteractionShare.original_interaction_id == interaction_id
+                        )
+                    )
+                    for share in interaction_shares.scalars():
+                        # Delete visitors for this share
+                        visitors = await db.execute(
+                            select(InteractionShareVisitor).where(
+                                InteractionShareVisitor.interaction_share_id == share.id
+                            )
+                        )
+                        for visitor in visitors.scalars():
+                            await db.delete(visitor)
+                        # Delete the share itself
+                        await db.delete(share)
+
+                    # Delete conversations
+                    for conversation in interaction.conversations:
+                        await db.delete(conversation)
+
+                    # Delete the interaction
+                    await db.delete(interaction)
+                    deleted_count += 1
+
+                except Exception as e:
+                    failed_deletions.append(interaction_id)
+                    continue
+
+            await db.commit()
+
+            if deleted_count == 0:
+                return DefaultResponse(
+                    success=False,
+                    message="No interactions were deleted. Please check if you have permission to delete these conversations.",
+                )
+            elif len(failed_deletions) > 0:
+                return DefaultResponse(
+                    success=True,
+                    message=f"Successfully deleted {deleted_count} conversation(s). {len(failed_deletions)} conversation(s) could not be deleted.",
+                )
+            else:
+                return DefaultResponse(
+                    success=True,
+                    message=f"Successfully deleted {deleted_count} conversation(s)",
+                )
+
+        except Exception as e:
+            await db.rollback()
+            import traceback
+
+            traceback.print_exc()
+            return DefaultResponse(
+                success=False, message=f"Failed to delete conversations: {str(e)}"
             )
 
     @strawberry.mutation

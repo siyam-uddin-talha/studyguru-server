@@ -78,7 +78,8 @@ async def process_conversation_message(
                 media_urls = []
 
                 # Process all media files concurrently
-                media_tasks = []
+                media_ids_to_fetch = []
+
                 for media_file in media_files:
                     media_id = media_file.get("id")
                     media_url = media_file.get("url")
@@ -95,23 +96,20 @@ async def process_conversation_message(
                         media_objects.append(mock_media)
                         media_urls.append(media_url)
                     else:
-                        # Queue database lookup
-                        media_tasks.append(
-                            db.execute(select(Media).where(Media.id == media_id))
-                        )
+                        # Collect media IDs for batch fetch
+                        media_ids_to_fetch.append(media_id)
 
-                # Execute all DB queries in parallel
-                if media_tasks:
-                    media_results = await asyncio.gather(
-                        *media_tasks, return_exceptions=True
+                # Single optimized query for all media files by ID
+                if media_ids_to_fetch:
+                    result = await db.execute(
+                        select(Media).where(Media.id.in_(media_ids_to_fetch))
                     )
-                    for result in media_results:
-                        if not isinstance(result, Exception):
-                            media = result.scalar_one_or_none()
-                            if media:
-                                media_objects.append(media)
-                                media_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
-                                media_urls.append(media_url)
+                    fetched_media = result.scalars().all()
+
+                    for media in fetched_media:
+                        media_objects.append(media)
+                        media_url = f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media.s3_key}"
+                        media_urls.append(media_url)
 
                 return media_objects, media_urls
 
@@ -663,15 +661,19 @@ async def process_conversation_message(
                 if task_key in active_generation_tasks:
                     del active_generation_tasks[task_key]
 
-            # Create user conversation entry
+            # Create user conversation entry (store media IDs instead of URLs)
             user_conv = Conversation(
                 interaction_id=str(interaction.id),
                 role=ConversationRole.USER,
                 content={
                     "type": "text",
                     "_result": {
-                        "note": message or "User uploaded document",
-                        "media_urls": media_urls or [],
+                        "note": message or "",
+                        "media_ids": (
+                            [media.id for media in media_objects]
+                            if media_objects
+                            else []
+                        ),
                     },
                 },
                 status="completed",

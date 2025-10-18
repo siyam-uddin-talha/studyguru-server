@@ -214,6 +214,23 @@ async def websocket_stream_conversation(websocket: WebSocket):
             # First, let's do the conversation setup and context retrieval
             # (similar to process_conversation_message but without the AI generation)
 
+            # Process media files if present (optimized with single query)
+            media_objects = []
+            if media_files:
+                # Extract all media IDs
+                media_ids = [
+                    media_file.get("id")
+                    for media_file in media_files
+                    if media_file.get("id")
+                ]
+
+                # Single optimized query for all media files
+                if media_ids:
+                    result = await db.execute(
+                        select(Media).where(Media.id.in_(media_ids))
+                    )
+                    media_objects = result.scalars().all()
+
             # Create user conversation entry
             user_conv = Conversation(
                 interaction_id=str(interaction.id),
@@ -221,8 +238,8 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 content={
                     "type": "text",
                     "_result": {
-                        "note": message or "User uploaded document",
-                        "media_urls": media_files or [],
+                        "note": message or "",
+                        "media_ids": [media.id for media in media_objects],
                     },
                 },
                 status="completed",

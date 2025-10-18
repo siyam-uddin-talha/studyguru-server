@@ -93,6 +93,11 @@ class DeleteInteractionInput:
 
 
 @strawberry.input
+class DeleteInteractionsInput:
+    interaction_ids: List[str]
+
+
+@strawberry.input
 class CancelGenerationInput:
     interaction_id: Optional[str] = None
     conversation_id: Optional[str] = None
