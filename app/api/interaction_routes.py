@@ -85,20 +85,16 @@ async def websocket_stream_conversation(websocket: WebSocket):
     This endpoint provides the same functionality as the do_conversation mutation
     but streams the AI response in real-time using WebSocket.
     """
-    print("🔍 WebSocket /stream-conversation - Connection attempt")
 
     try:
         # Authenticate user first
-        print("🔍 WebSocket /stream-conversation - Starting authentication")
+
         user_id = await get_current_user_from_websocket(websocket)
-        print(
-            f"🔍 WebSocket /stream-conversation - Authentication successful, user_id: {user_id}"
-        )
 
         await websocket.accept()
-        print("🔍 WebSocket /stream-conversation - Connection accepted")
+
     except Exception as e:
-        print(f"❌ WebSocket /stream-conversation - Authentication failed: {e}")
+
         raise
 
     try:
@@ -132,10 +128,6 @@ async def websocket_stream_conversation(websocket: WebSocket):
             interaction_id = payload.get("interaction_id")
             media_files = payload.get("media_files", [])
             max_tokens = payload.get("max_tokens", 5000)
-
-            print(
-                f"🔍 WebSocket /stream-conversation - Received payload: message='{message[:50]}...', interaction_id={interaction_id}"
-            )
 
             # Validate input
             if not message or not message.strip():
@@ -357,13 +349,21 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 )
 
                 # Create AI conversation entry
+                # Handle MCQ responses differently - store structured data directly
+                if ai_content_type == "mcq" and isinstance(processed_ai_response, dict):
+                    # Store MCQ data directly without wrapping
+                    content = processed_ai_response
+                else:
+                    # Use the old structure for other content types
+                    content = {
+                        "type": ai_content_type,
+                        "_result": {"content": processed_ai_response},
+                    }
+
                 ai_conv = Conversation(
                     interaction_id=str(interaction.id),
                     role=ConversationRole.AI,
-                    content={
-                        "type": ai_content_type,
-                        "_result": {"content": processed_ai_response},
-                    },
+                    content=content,
                     input_tokens=0,  # We don't have token info from streaming
                     output_tokens=0,
                     tokens_used=0,

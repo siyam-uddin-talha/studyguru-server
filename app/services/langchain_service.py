@@ -128,7 +128,9 @@ class LangChainService:
                     FieldSchema(
                         name="vector",
                         dtype=DataType.FLOAT_VECTOR,
-                        dim=StudyGuruConfig.MODELS.get_collection_config()["dimension"],
+                        dim=StudyGuruConfig.VECTOR_STORE.get_collection_config()[
+                            "dimension"
+                        ],
                     ),  # Dynamic dimension based on model
                 ]
 
@@ -164,6 +166,9 @@ class LangChainService:
             )
 
         except Exception as e:
+            print(f"❌ Vector store initialization failed: {e}")
+            print(f"   ZILLIZ_URI: {settings.ZILLIZ_URI}")
+            print(f"   ZILLIZ_TOKEN: {'***' if settings.ZILLIZ_TOKEN else 'None'}")
             self.vector_store = None
 
     async def analyze_document(
@@ -749,6 +754,7 @@ class LangChainService:
         """Fallback basic similarity search implementation"""
         try:
             if not self.vector_store:
+                print("⚠️ Vector store not available for similarity search")
                 return []
 
             # Create retriever with user filter and reduced top_k for faster search
@@ -935,6 +941,7 @@ class LangChainService:
         """Upsert embedding using LangChain vector store with enhanced metadata"""
         try:
             if not self.vector_store:
+                print(f"⚠️ Vector store not available for embedding creation")
                 return False
 
             # Import json at the top of the function to avoid scope issues

@@ -28,6 +28,7 @@ from app.graphql.types.interaction import (
 from app.models.interaction import Interaction, InteractionShare
 from app.models.media import Media
 from app.models.interaction import Conversation, ConversationRole
+from app.core.config import settings
 from app.models.user import User
 
 from app.services.interaction import process_conversation_message, cancel_ai_generation
@@ -178,12 +179,46 @@ class InteractionQuery:
                         )
                     )
 
+            # Process content to resolve media_ids to proper file information
+            processed_content = conv.content
+            if conv.content and isinstance(conv.content, dict):
+                # Check if content has media_ids that need to be resolved
+                if (
+                    conv.content.get("_result")
+                    and conv.content["_result"].get("media_ids")
+                    and isinstance(conv.content["_result"]["media_ids"], list)
+                ):
+
+                    # Fetch media files for the media_ids
+                    media_ids = conv.content["_result"]["media_ids"]
+                    media_result = await db.execute(
+                        select(Media).where(Media.id.in_(media_ids))
+                    )
+                    media_files_for_content = media_result.scalars().all()
+
+                    # Create media_urls from the fetched media files
+                    media_urls = []
+                    for media_file in media_files_for_content:
+                        media_urls.append(
+                            {
+                                "id": media_file.id,
+                                "url": f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{media_file.s3_key}",
+                                "type": media_file.file_type,
+                                "name": media_file.original_filename,
+                                "size": media_file.original_size,
+                            }
+                        )
+
+                    # Update the content with media_urls
+                    processed_content = conv.content.copy()
+                    processed_content["_result"]["media_urls"] = media_urls
+
             conversation_types.append(
                 ConversationType(
                     id=conv.id,
                     interaction_id=conv.interaction_id,
                     role=conv.role.value if conv.role else "USER",
-                    content=conv.content,
+                    content=processed_content,
                     question_type=conv.question_type,
                     detected_language=conv.detected_language,
                     tokens_used=conv.tokens_used or 0,

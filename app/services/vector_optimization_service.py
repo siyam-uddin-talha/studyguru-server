@@ -192,6 +192,10 @@ class VectorOptimizationService:
     ) -> List[SearchResult]:
         """Perform semantic similarity search"""
         try:
+            if not self.vector_store:
+                print("⚠️ Vector store not available for semantic search")
+                return []
+
             all_results = []
 
             for query in expanded_queries:

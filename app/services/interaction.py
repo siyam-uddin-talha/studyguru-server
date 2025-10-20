@@ -741,19 +741,38 @@ async def process_conversation_message(
                 print(f"🔧 No valid content, using error fallback")
 
             # Create AI conversation entry with enhanced content
-            ai_conv = Conversation(
-                interaction_id=str(interaction.id),
-                role=ConversationRole.AI,
-                content={
-                    "type": ai_content_type,
-                    "_result": {"content": processed_ai_response},
-                },
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                tokens_used=total_tokens,
-                points_cost=langchain_service.calculate_points_cost(total_tokens),
-                status="completed",
+            # Handle MCQ responses differently - store structured data directly
+            print(
+                f"🔧 Database storage check: ai_content_type={ai_content_type}, processed_ai_response_type={type(processed_ai_response)}"
             )
+            if ai_content_type == "mcq" and isinstance(processed_ai_response, dict):
+                print(f"🔧 Storing MCQ data directly in database")
+                ai_conv = Conversation(
+                    interaction_id=str(interaction.id),
+                    role=ConversationRole.AI,
+                    content=processed_ai_response,  # Store MCQ data directly
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    tokens_used=total_tokens,
+                    points_cost=langchain_service.calculate_points_cost(total_tokens),
+                    status="completed",
+                )
+            else:
+                print(f"🔧 Using old structure for content type: {ai_content_type}")
+                # For other content types, use the existing structure
+                ai_conv = Conversation(
+                    interaction_id=str(interaction.id),
+                    role=ConversationRole.AI,
+                    content={
+                        "type": ai_content_type,
+                        "_result": {"content": processed_ai_response},
+                    },
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    tokens_used=total_tokens,
+                    points_cost=langchain_service.calculate_points_cost(total_tokens),
+                    status="completed",
+                )
 
             # CRITICAL: Always store the AI response in database, regardless of other errors
             try:
@@ -895,31 +914,20 @@ async def generate_mcq_questions(
             )
             db.add(user_conv)
 
-            # Format the MCQ response for display
+            # Store MCQ data in structured format for proper frontend rendering
             questions = mcq_result.get("_result", {}).get("questions", [])
-            formatted_response = f"# {mcq_result.get('title', 'MCQ Questions')}\n\n"
 
-            for i, question in enumerate(questions, 1):
-                formatted_response += f"**{i}.** {question.get('question', '')}\n\n"
-
-                options = question.get("options", {})
-                if options:
-                    for key, value in options.items():
-                        formatted_response += f"   {key.upper()}. {value}\n"
-                    formatted_response += (
-                        f"\n**Answer:** {question.get('answer', '').upper()}\n"
-                    )
-                else:
-                    formatted_response += f"**Answer:** {question.get('answer', '')}\n"
-
-                formatted_response += (
-                    f"**Explanation:** {question.get('explanation', '')}\n\n"
-                )
+            # Create structured MCQ content for frontend
+            structured_mcq_content = {
+                "type": "mcq",
+                "language": mcq_result.get("language", "english"),
+                "_result": {"questions": questions},
+            }
 
             ai_conv = Conversation(
                 interaction_id=interaction.id,
                 role=ConversationRole.AI,
-                content=formatted_response,
+                content=structured_mcq_content,  # Store structured data directly
                 points_cost=StudyGuruConfig.calculate_points_cost(
                     mcq_result.get("token", 0)
                 ),
@@ -939,7 +947,7 @@ async def generate_mcq_questions(
                 "success": True,
                 "message": "MCQ questions generated successfully",
                 "conversation_id": str(ai_conv.id),
-                "ai_response": formatted_response,
+                "ai_response": structured_mcq_content,
                 "mcq_data": mcq_result,
                 "total_questions": len(questions),
                 "points_cost": ai_conv.points_cost,
@@ -962,6 +970,8 @@ async def _background_operations_enhanced(
     ai_content: str,
 ):
     """Enhanced background operations using real-time context service"""
+    import json  # Import json at the top of the function to avoid scope issues
+
     try:
         print(
             f"🔄 Starting enhanced background operations for interaction {interaction_id}"
@@ -1017,8 +1027,6 @@ async def _background_operations_enhanced(
             # Ensure ai_content is a string for embedding
             ai_content_text = ai_content
             if isinstance(ai_content, dict):
-                import json
-
                 ai_content_text = json.dumps(ai_content, indent=2)
             elif not isinstance(ai_content, str):
                 ai_content_text = str(ai_content)
@@ -1102,6 +1110,8 @@ async def _background_operations(
     ai_content: str,
 ):
     """Original background operations for conversation processing (fallback)"""
+    import json  # Import json at the top of the function to avoid scope issues
+
     try:
         print(
             f"🔄 Starting fallback background operations for interaction {interaction_id}"
@@ -1185,8 +1195,6 @@ async def _background_operations(
             # Ensure ai_content is a string for embedding
             ai_content_text = ai_content
             if isinstance(ai_content, dict):
-                import json
-
                 ai_content_text = json.dumps(ai_content, indent=2)
             elif not isinstance(ai_content, str):
                 ai_content_text = str(ai_content)
@@ -1553,6 +1561,8 @@ def _format_mcq_response(mcq_data: dict) -> str:
 
 def _process_ai_content_fast(content_text) -> tuple[str, str]:
     """Fast AI content processing with enhanced formatting and escaped character handling"""
+    import json  # Import json at the top of the function to avoid scope issues
+
     print(
         f"🔧 PROCESS AI CONTENT START: type={type(content_text)}, length={len(str(content_text)) if content_text else 0}"
     )
@@ -1574,15 +1584,13 @@ def _process_ai_content_fast(content_text) -> tuple[str, str]:
             "mcq" if content_text.get("type") == "mcq" else "document_analysis"
         )
 
-        # Convert structured response to readable format for frontend
+        # For MCQ responses, keep the structured data intact
         if content_text.get("type") == "mcq":
-            print(f"🔧 CALLING _format_mcq_response with: {content_text}")
-            ai_result_content = _format_mcq_response(content_text)
-            print(f"🔧 _format_mcq_response returned: {ai_result_content}")
+            print(f"🔧 MCQ response detected, keeping structured data")
+            # Return the MCQ data directly without formatting
+            return ai_content_type, content_text
         else:
             # For other structured responses, convert to JSON
-            import json
-
             ai_result_content = json.dumps(content_text, indent=2)
 
         print(
@@ -1638,9 +1646,33 @@ def _process_ai_content_fast(content_text) -> tuple[str, str]:
         print(f"🔍 MCQ Detection result: {ai_content_type}")
 
     try:
-        if content_text and content_text.strip().startswith("{"):
-            parsed_response = json.loads(content_text)
+        # First, try to extract JSON from markdown code blocks
+        json_content = content_text
+        if "```json" in content_text:
+            # Extract JSON from markdown code blocks
+            import re
+
+            json_match = re.search(r"```json\s*(.*?)\s*```", content_text, re.DOTALL)
+            if json_match:
+                json_content = json_match.group(1).strip()
+                print(f"🔧 Extracted JSON from markdown: {json_content[:100]}...")
+
+        # Try to parse as JSON
+        if json_content and (
+            json_content.strip().startswith("{") or "```json" in content_text
+        ):
+            parsed_response = json.loads(json_content)
             if isinstance(parsed_response, dict):
+                # Check if this is MCQ data first
+                if parsed_response.get("type") == "mcq":
+                    ai_content_type = "mcq"
+                    print(
+                        f"🔧 MCQ JSON detected in string content, returning structured data"
+                    )
+                    # Return the structured MCQ data directly
+                    return ai_content_type, parsed_response
+
+                # For other types, use the existing logic
                 ai_content_type = parsed_response.get("type", "written")
                 result_content = parsed_response.get("_result", {})
 
@@ -1648,40 +1680,17 @@ def _process_ai_content_fast(content_text) -> tuple[str, str]:
                     if "content" in result_content:
                         ai_result_content = result_content["content"]
                     elif "questions" in result_content:
-                        # Enhanced MCQ formatting - show ALL questions
-                        questions = result_content[
-                            "questions"
-                        ]  # Remove limit to show all questions
-                        formatted_questions = []
-
-                        for i, q in enumerate(questions, 1):
-                            question_text = q.get("question", "")
-                            options = q.get("options", {})
-                            answer = q.get("answer", "")
-                            explanation = q.get("explanation", "")
-
-                            # Format question with better structure
-                            formatted_q = f"{i}. {question_text}\n\n"
-
-                            # Format options if they exist
-                            if options and isinstance(options, dict):
-                                for opt_key, opt_value in list(options.items())[:4]:
-                                    formatted_q += (
-                                        f"{opt_key.upper()}. {str(opt_value)}\n"
-                                    )
-                                formatted_q += "\n"
-
-                            # Add answer with clear formatting
-                            if answer:
-                                formatted_q += f"Answer: {answer}\n\n"
-
-                            # Add explanation with clear formatting
-                            if explanation:
-                                formatted_q += f"Explanation: {explanation}\n"
-
-                            formatted_questions.append(formatted_q)
-
-                        ai_result_content = "\n".join(formatted_questions)
+                        # For MCQ data, keep it structured instead of formatting as string
+                        questions = result_content["questions"]
+                        if questions and isinstance(questions, list):
+                            # Return structured MCQ data
+                            ai_content_type = "mcq"
+                            ai_result_content = {
+                                "type": "mcq",
+                                "language": "english",
+                                "_result": {"questions": questions},
+                            }
+                            return ai_content_type, ai_result_content
 
         # Apply character cleaning to any processed content
         if ai_result_content:
