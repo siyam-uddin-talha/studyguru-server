@@ -556,7 +556,7 @@ class StudyGuruModels:
     """Model configurations for StudyGuru - supports both GPT and Gemini models"""
 
     # Fallback models in case GPT-5 is not available
-    USE_FALLBACK_MODELS = True  # Set to False when GPT-5 is available
+    USE_FALLBACK_MODELS = False  # Set to False when GPT-5 is available
 
     @staticmethod
     def _is_gemini_model() -> bool:
@@ -569,6 +569,7 @@ class StudyGuruModels:
         max_tokens: int = 5000,
         reasoning_effort: str = "low",  # Reduced from "medium" for faster responses
         verbosity: str = "low",
+        streaming: bool = True,
     ):
         """Get configured chat model - supports both GPT and Gemini"""
         if StudyGuruModels._is_gemini_model():
@@ -578,7 +579,7 @@ class StudyGuruModels:
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
-                request_timeout=30,  # Reduced timeout for faster responses
+                request_timeout=120,  # Increased timeout for longer responses
                 cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
@@ -590,7 +591,8 @@ class StudyGuruModels:
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
-                    request_timeout=30,
+                    request_timeout=120,
+                    streaming=streaming,
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
             else:
@@ -600,14 +602,18 @@ class StudyGuruModels:
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
-                    request_timeout=60,  # Reduced from 120 to 60 seconds for faster responses
-                    verbosity="low",  # Always use low verbosity for speed
+                    request_timeout=120,  # Reduced from 120 to 60 seconds for faster responses
+                    streaming=streaming,
+                    # verbosity="low",  # Always use low verbosity for speed
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
 
     @staticmethod
     def get_vision_model(
-        temperature: float = 0.3, max_tokens: int = 5000, verbosity: str = "low"
+        temperature: float = 0.3,
+        max_tokens: int = 5000,
+        verbosity: str = "low",
+        streaming: bool = True,
     ):
         """Get configured vision model - supports both GPT and Gemini"""
         if StudyGuruModels._is_gemini_model():
@@ -617,7 +623,7 @@ class StudyGuruModels:
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
-                request_timeout=30,
+                request_timeout=120,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
@@ -629,7 +635,8 @@ class StudyGuruModels:
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
-                    request_timeout=30,
+                    request_timeout=120,
+                    streaming=streaming,
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
             else:
@@ -639,8 +646,9 @@ class StudyGuruModels:
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
-                    request_timeout=30,  # Reduced timeout for faster processing
-                    verbosity="low",  # Low verbosity for faster responses
+                    request_timeout=120,  # Reduced timeout for faster processing
+                    streaming=streaming,
+                    # verbosity="low",  # Low verbosity for faster responses
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
 
@@ -679,7 +687,7 @@ class StudyGuruModels:
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
                     request_timeout=15,  # Fast timeout for guardrails
-                    verbosity=verbosity,  # Control response length and detail
+                    # verbosity=verbosity,  # Control response length and detail
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
 
@@ -695,7 +703,7 @@ class StudyGuruModels:
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
-                request_timeout=60,
+                request_timeout=120,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
             )
         else:
@@ -707,7 +715,7 @@ class StudyGuruModels:
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
-                    request_timeout=60,
+                    request_timeout=120,
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
             else:
@@ -718,7 +726,7 @@ class StudyGuruModels:
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
                     request_timeout=150,  # Increased timeout for complex reasoning with high effort
-                    verbosity=verbosity,  # Medium verbosity for complex reasoning tasks
+                    # verbosity=verbosity,  # Medium verbosity for complex reasoning tasks
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
 
@@ -775,7 +783,7 @@ class StudyGuruModels:
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,  # Very low token limit for cost efficiency
                     request_timeout=10,  # Fast timeout for quick response
-                    verbosity=verbosity,  # Control response length and detail
+                    # verbosity=verbosity,  # Control response length and detail
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
 
@@ -815,7 +823,7 @@ class StudyGuruModels:
                     temperature=temperature,
                     google_api_key=settings.GOOGLE_API_KEY,
                     max_output_tokens=max_tokens,
-                    request_timeout=30,
+                    request_timeout=120,
                     cache=cache_manager.get_response_cache(),
                     cache_context=cached_content,  # Enable context caching
                 )
@@ -835,7 +843,7 @@ class StudyGuruModels:
                     temperature=temperature,
                     google_api_key=settings.GOOGLE_API_KEY,
                     max_output_tokens=max_tokens,
-                    request_timeout=60,
+                    request_timeout=120,
                     cache=cache_manager.get_response_cache(),
                     cache_context=cached_content,  # Enable context caching
                 )

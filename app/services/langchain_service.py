@@ -646,8 +646,8 @@ class LangChainService:
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
                     temperature=0.1,  # Lower temperature for faster, more deterministic responses
                     max_tokens=max_tokens,
-                    reasoning_effort="low",  # Minimal reasoning for speed
-                    verbosity="low",  # Minimal verbosity for speed
+                    # reasoning_effort="low",  # Minimal reasoning for speed
+                    # verbosity="low",  # Minimal verbosity for speed
                 )
                 chain = prompt | optimized_llm
                 print(

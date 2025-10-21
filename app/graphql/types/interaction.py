@@ -19,6 +19,8 @@ class ConversationType:
     status: str
     is_hidden: Optional[bool] = None
     error_message: Optional[str] = None
+    is_liked: Optional[bool] = None
+    liked_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     files: Optional[List[MediaType]] = None
@@ -36,6 +38,12 @@ class InteractionType:
     updated_at: Optional[datetime] = None
     file: Optional[MediaType] = None
     conversations: Optional[List[ConversationType]] = None
+
+
+@strawberry.input
+class LikeDislikeInput:
+    conversation_id: str
+    is_liked: bool  # True for like, False for dislike
 
 
 @strawberry.type

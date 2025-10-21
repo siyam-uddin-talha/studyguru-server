@@ -24,6 +24,7 @@ from app.graphql.types.interaction import (
     GetShareStatsInput,
     ShareInteractionResponse,
     ShareStatsResponse,
+    LikeDislikeInput,
 )
 from app.models.interaction import Interaction, InteractionShare
 from app.models.media import Media
@@ -37,6 +38,33 @@ from app.helpers.user import get_current_user_from_context
 from app.helpers.subscription import award_share_visit_reward
 from app.constants.constant import CONSTANTS
 from app.graphql.types.common import DefaultResponse
+
+
+@strawberry.type
+class BackgroundTaskStatus:
+    task_id: str
+    task_type: str
+    status: str
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error_message: Optional[str] = None
+    retry_count: int = 0
+
+
+@strawberry.type
+class BackgroundMessageTaskStatus:
+    task_id: str
+    user_id: str
+    interaction_id: Optional[str]
+    message: str
+    status: str
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error_message: Optional[str] = None
+    retry_count: int = 0
+    streaming_content: str = ""
 
 
 @strawberry.type
@@ -226,6 +254,8 @@ class InteractionQuery:
                     status=conv.status,
                     is_hidden=conv.is_hidden,
                     error_message=conv.error_message,
+                    is_liked=conv.is_liked,
+                    liked_at=conv.liked_at,
                     created_at=conv.created_at,
                     updated_at=conv.updated_at,
                     files=media_files if media_files else None,
@@ -297,6 +327,8 @@ class InteractionQuery:
                         status=conv.status,
                         is_hidden=conv.is_hidden,
                         error_message=conv.error_message,
+                        is_liked=conv.is_liked,
+                        liked_at=conv.liked_at,
                         created_at=conv.created_at,
                         updated_at=conv.updated_at,
                         files=media_files if media_files else None,
@@ -333,6 +365,169 @@ class InteractionQuery:
                 conversations=conversation_types if conversation_types else None,
             ),
         )
+
+    @strawberry.field
+    async def background_task_status(
+        self, info, task_id: str
+    ) -> Optional[BackgroundTaskStatus]:
+        """Get the status of a background task"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return None
+
+        from app.services.background_task_service import background_task_service
+
+        task = background_task_service.get_task_status(task_id)
+        if not task or task.user_id != current_user.id:
+            return None
+
+        return BackgroundTaskStatus(
+            task_id=task.id,
+            task_type=task.task_type,
+            status=task.status.value,
+            created_at=task.created_at.isoformat(),
+            started_at=task.started_at.isoformat() if task.started_at else None,
+            completed_at=task.completed_at.isoformat() if task.completed_at else None,
+            error_message=task.error_message,
+            retry_count=task.retry_count,
+        )
+
+    @strawberry.field
+    async def user_background_tasks(self, info) -> List[BackgroundTaskStatus]:
+        """Get all background tasks for the current user"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return []
+
+        from app.services.background_task_service import background_task_service
+
+        user_tasks = background_task_service.get_user_tasks(current_user.id)
+
+        return [
+            BackgroundTaskStatus(
+                task_id=task.id,
+                task_type=task.task_type,
+                status=task.status.value,
+                created_at=task.created_at.isoformat(),
+                started_at=task.started_at.isoformat() if task.started_at else None,
+                completed_at=(
+                    task.completed_at.isoformat() if task.completed_at else None
+                ),
+                error_message=task.error_message,
+                retry_count=task.retry_count,
+            )
+            for task in user_tasks
+        ]
+
+    @strawberry.field
+    async def background_message_task_status(
+        self, info, task_id: str
+    ) -> Optional[BackgroundMessageTaskStatus]:
+        """Get the status of a background message task"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return None
+
+        from app.services.background_message_service import background_message_service
+
+        task = background_message_service.get_task_status(task_id)
+        if not task or task.user_id != current_user.id:
+            return None
+
+        return BackgroundMessageTaskStatus(
+            task_id=task.id,
+            user_id=task.user_id,
+            interaction_id=task.interaction_id,
+            message=task.message,
+            status=task.status.value,
+            created_at=task.created_at.isoformat(),
+            started_at=task.started_at.isoformat() if task.started_at else None,
+            completed_at=task.completed_at.isoformat() if task.completed_at else None,
+            error_message=task.error_message,
+            retry_count=task.retry_count,
+            streaming_content=task.streaming_content,
+        )
+
+    @strawberry.field
+    async def user_background_message_tasks(
+        self, info
+    ) -> List[BackgroundMessageTaskStatus]:
+        """Get all background message tasks for the current user"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return []
+
+        from app.services.background_message_service import background_message_service
+
+        user_tasks = background_message_service.get_user_tasks(current_user.id)
+
+        return [
+            BackgroundMessageTaskStatus(
+                task_id=task.id,
+                user_id=task.user_id,
+                interaction_id=task.interaction_id,
+                message=task.message,
+                status=task.status.value,
+                created_at=task.created_at.isoformat(),
+                started_at=task.started_at.isoformat() if task.started_at else None,
+                completed_at=(
+                    task.completed_at.isoformat() if task.completed_at else None
+                ),
+                error_message=task.error_message,
+                retry_count=task.retry_count,
+                streaming_content=task.streaming_content,
+            )
+            for task in user_tasks
+        ]
+
+    @strawberry.field
+    async def interaction_background_message_tasks(
+        self, info, interaction_id: str
+    ) -> List[BackgroundMessageTaskStatus]:
+        """Get all background message tasks for a specific interaction"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return []
+
+        from app.services.background_message_service import background_message_service
+
+        interaction_tasks = background_message_service.get_interaction_tasks(
+            interaction_id
+        )
+
+        # Filter tasks that belong to the current user
+        user_tasks = [
+            task for task in interaction_tasks if task.user_id == current_user.id
+        ]
+
+        return [
+            BackgroundMessageTaskStatus(
+                task_id=task.id,
+                user_id=task.user_id,
+                interaction_id=task.interaction_id,
+                message=task.message,
+                status=task.status.value,
+                created_at=task.created_at.isoformat(),
+                started_at=task.started_at.isoformat() if task.started_at else None,
+                completed_at=(
+                    task.completed_at.isoformat() if task.completed_at else None
+                ),
+                error_message=task.error_message,
+                retry_count=task.retry_count,
+                streaming_content=task.streaming_content,
+            )
+            for task in user_tasks
+        ]
 
 
 @strawberry.type
@@ -653,6 +848,7 @@ class InteractionMutation:
     ) -> DefaultResponse:
         """
         Delete an interaction and all associated data (conversations, media files, embeddings)
+        Now runs in background to avoid blocking other API requests
         """
         context = info.context
         current_user = await get_current_user_from_context(context)
@@ -663,15 +859,9 @@ class InteractionMutation:
         db: AsyncSession = context.db
 
         try:
-            # Get the interaction with all related data
+            # First, verify the interaction exists and belongs to the user
             result = await db.execute(
-                select(Interaction)
-                .options(
-                    selectinload(Interaction.conversations).selectinload(
-                        Conversation.files
-                    )
-                )
-                .where(
+                select(Interaction).where(
                     Interaction.id == input.interaction_id,
                     Interaction.user_id == current_user.id,
                 )
@@ -681,109 +871,34 @@ class InteractionMutation:
             if not interaction:
                 return DefaultResponse(success=False, message="Interaction not found")
 
-            # Collect all media files to delete from S3
-            media_files_to_delete = set()
-
-            # Get media files from all conversations
-            for conversation in interaction.conversations:
-                if conversation.files:
-                    for media_file in conversation.files:
-                        media_files_to_delete.add(media_file.s3_key)
-
-            # Delete media files from S3
-            for s3_key in media_files_to_delete:
-                try:
-                    await FileService.delete_file_from_s3(s3_key)
-                except Exception as e:
-                    print(f"⚠️  Failed to delete S3 file {s3_key}: {e}")
-                    # Continue even if S3 deletion fails
-
-            # Delete from vector database if configured
-            try:
-                from app.services.langchain_service import langchain_service
-
-                if langchain_service.vector_store:
-                    # Delete all embeddings for this interaction
-                    await langchain_service.delete_embeddings_by_interaction(
-                        input.interaction_id
-                    )
-            except Exception as e:
-                print(f"⚠️  Failed to delete vector embeddings: {e}")
-                # Continue even if vector deletion fails
-
-            # Delete context-related records first to avoid foreign key constraint issues
-            from app.models.context import (
-                ContextUsageLog,
-                ConversationContext,
-                DocumentContext,
+            # Submit the deletion task to background processing
+            from app.services.background_task_service import (
+                background_task_service,
+                TaskPriority,
             )
-            from app.models.interaction import InteractionShare, InteractionShareVisitor
 
-            # Delete context usage logs
-            context_usage_logs = await db.execute(
-                select(ContextUsageLog).where(
-                    ContextUsageLog.interaction_id == input.interaction_id
-                )
+            task_id = await background_task_service.submit_task(
+                task_type="delete_interaction",
+                user_id=current_user.id,
+                payload={
+                    "interaction_id": input.interaction_id,
+                    "interaction_title": interaction.title or "Untitled",
+                },
+                priority=TaskPriority.HIGH,  # High priority for user-initiated deletions
             )
-            for log in context_usage_logs.scalars():
-                await db.delete(log)
-
-            # Delete conversation contexts
-            conversation_contexts = await db.execute(
-                select(ConversationContext).where(
-                    ConversationContext.interaction_id == input.interaction_id
-                )
-            )
-            for context in conversation_contexts.scalars():
-                await db.delete(context)
-
-            # Delete document contexts
-            document_contexts = await db.execute(
-                select(DocumentContext).where(
-                    DocumentContext.interaction_id == input.interaction_id
-                )
-            )
-            for doc_context in document_contexts.scalars():
-                await db.delete(doc_context)
-
-            # Delete interaction share visitors first (they reference interaction_share)
-            interaction_shares = await db.execute(
-                select(InteractionShare).where(
-                    InteractionShare.original_interaction_id == input.interaction_id
-                )
-            )
-            for share in interaction_shares.scalars():
-                # Delete visitors for this share
-                visitors = await db.execute(
-                    select(InteractionShareVisitor).where(
-                        InteractionShareVisitor.interaction_share_id == share.id
-                    )
-                )
-                for visitor in visitors.scalars():
-                    await db.delete(visitor)
-                # Delete the share itself
-                await db.delete(share)
-
-            # Delete conversations
-            for conversation in interaction.conversations:
-                await db.delete(conversation)
-
-            # Delete the interaction
-            await db.delete(interaction)
-            await db.commit()
 
             return DefaultResponse(
                 success=True,
-                message=f"Conversation '{interaction.title or 'Untitled'}' has been permanently deleted",
+                message=f"Conversation '{interaction.title or 'Untitled'}' deletion has been started. This will be processed in the background.",
             )
 
         except Exception as e:
-            await db.rollback()
             import traceback
 
             traceback.print_exc()
             return DefaultResponse(
-                success=False, message=f"Failed to delete conversation: {str(e)}"
+                success=False,
+                message=f"Failed to initiate conversation deletion: {str(e)}",
             )
 
     @strawberry.mutation
@@ -794,6 +909,7 @@ class InteractionMutation:
     ) -> DefaultResponse:
         """
         Delete multiple interactions and all associated data (conversations, media files, embeddings)
+        Now runs in background to avoid blocking other API requests
         """
         context = info.context
         current_user = await get_current_user_from_context(context)
@@ -807,127 +923,227 @@ class InteractionMutation:
         db: AsyncSession = context.db
 
         try:
-            # Import context models
-            from app.models.context import (
-                ContextUsageLog,
-                ConversationContext,
-                DocumentContext,
-            )
-            from app.models.interaction import InteractionShare, InteractionShareVisitor
-
-            deleted_count = 0
-            failed_deletions = []
-
+            # Verify that all interactions exist and belong to the user
+            valid_interaction_ids = []
             for interaction_id in input.interaction_ids:
-                try:
-                    # Get the interaction with all related data
-                    result = await db.execute(
-                        select(Interaction)
-                        .options(
-                            selectinload(Interaction.conversations).selectinload(
-                                Conversation.files
-                            )
-                        )
-                        .where(
-                            Interaction.id == interaction_id,
-                            Interaction.user_id == current_user.id,
-                        )
+                result = await db.execute(
+                    select(Interaction).where(
+                        Interaction.id == interaction_id,
+                        Interaction.user_id == current_user.id,
                     )
-                    interaction = result.scalar_one_or_none()
+                )
+                interaction = result.scalar_one_or_none()
+                if interaction:
+                    valid_interaction_ids.append(interaction_id)
 
-                    if not interaction:
-                        failed_deletions.append(interaction_id)
-                        continue
-
-                    # Delete context usage logs
-                    context_logs = await db.execute(
-                        select(ContextUsageLog).where(
-                            ContextUsageLog.interaction_id == interaction_id
-                        )
-                    )
-                    for log in context_logs.scalars():
-                        await db.delete(log)
-
-                    # Delete media files associated with conversations
-                    for conversation in interaction.conversations:
-                        for file in conversation.files:
-                            # Delete from S3 (if needed)
-                            # Note: You might want to add S3 deletion logic here
-                            await db.delete(file)
-
-                    # Delete conversation contexts
-                    conversation_contexts = await db.execute(
-                        select(ConversationContext).where(
-                            ConversationContext.interaction_id == interaction_id
-                        )
-                    )
-                    for context in conversation_contexts.scalars():
-                        await db.delete(context)
-
-                    # Delete document contexts
-                    document_contexts = await db.execute(
-                        select(DocumentContext).where(
-                            DocumentContext.interaction_id == interaction_id
-                        )
-                    )
-                    for doc_context in document_contexts.scalars():
-                        await db.delete(doc_context)
-
-                    # Delete interaction share visitors first (they reference interaction_share)
-                    interaction_shares = await db.execute(
-                        select(InteractionShare).where(
-                            InteractionShare.original_interaction_id == interaction_id
-                        )
-                    )
-                    for share in interaction_shares.scalars():
-                        # Delete visitors for this share
-                        visitors = await db.execute(
-                            select(InteractionShareVisitor).where(
-                                InteractionShareVisitor.interaction_share_id == share.id
-                            )
-                        )
-                        for visitor in visitors.scalars():
-                            await db.delete(visitor)
-                        # Delete the share itself
-                        await db.delete(share)
-
-                    # Delete conversations
-                    for conversation in interaction.conversations:
-                        await db.delete(conversation)
-
-                    # Delete the interaction
-                    await db.delete(interaction)
-                    deleted_count += 1
-
-                except Exception as e:
-                    failed_deletions.append(interaction_id)
-                    continue
-
-            await db.commit()
-
-            if deleted_count == 0:
+            if not valid_interaction_ids:
                 return DefaultResponse(
                     success=False,
-                    message="No interactions were deleted. Please check if you have permission to delete these conversations.",
-                )
-            elif len(failed_deletions) > 0:
-                return DefaultResponse(
-                    success=True,
-                    message=f"Successfully deleted {deleted_count} conversation(s). {len(failed_deletions)} conversation(s) could not be deleted.",
-                )
-            else:
-                return DefaultResponse(
-                    success=True,
-                    message=f"Successfully deleted {deleted_count} conversation(s)",
+                    message="No valid interactions found to delete. Please check if you have permission to delete these conversations.",
                 )
 
+            # Submit the bulk deletion task to background processing
+            from app.services.background_task_service import (
+                background_task_service,
+                TaskPriority,
+            )
+
+            task_id = await background_task_service.submit_task(
+                task_type="delete_interactions",
+                user_id=current_user.id,
+                payload={"interaction_ids": valid_interaction_ids},
+                priority=TaskPriority.HIGH,  # High priority for user-initiated deletions
+            )
+
+            return DefaultResponse(
+                success=True,
+                message=f"Bulk deletion of {len(valid_interaction_ids)} conversation(s) has been started. This will be processed in the background.",
+            )
+
         except Exception as e:
-            await db.rollback()
             import traceback
 
             traceback.print_exc()
             return DefaultResponse(
-                success=False, message=f"Failed to delete conversations: {str(e)}"
+                success=False,
+                message=f"Failed to initiate bulk conversation deletion: {str(e)}",
+            )
+
+    @strawberry.mutation
+    async def cancel_background_task(self, info, task_id: str) -> DefaultResponse:
+        """Cancel a background task"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        try:
+            from app.services.background_task_service import background_task_service
+
+            # Check if task exists and belongs to user
+            task = background_task_service.get_task_status(task_id)
+            if not task or task.user_id != current_user.id:
+                return DefaultResponse(
+                    success=False, message="Task not found or access denied"
+                )
+
+            # Cancel the task
+            success = await background_task_service.cancel_task(task_id)
+
+            if success:
+                return DefaultResponse(
+                    success=True, message="Background task has been cancelled"
+                )
+            else:
+                return DefaultResponse(
+                    success=False, message="Failed to cancel background task"
+                )
+
+        except Exception as e:
+            return DefaultResponse(
+                success=False, message=f"Failed to cancel background task: {str(e)}"
+            )
+
+    @strawberry.mutation
+    async def submit_background_message(
+        self,
+        info,
+        message: str,
+        interaction_id: Optional[str] = None,
+        media_files: Optional[List[str]] = None,
+        max_tokens: Optional[int] = None,
+    ) -> DefaultResponse:
+        """Submit a message for background processing"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        if not message.strip():
+            return DefaultResponse(success=False, message="Message cannot be empty")
+
+        try:
+            from app.services.background_message_service import (
+                background_message_service,
+                MessageTaskPriority,
+            )
+
+            # Convert media files to the expected format
+            media_files_list = []
+            if media_files:
+                for media_id in media_files:
+                    media_files_list.append({"id": media_id})
+
+            # Set default max tokens if not provided
+            if max_tokens is None:
+                max_tokens = 2000  # Default value
+
+            task_id = await background_message_service.submit_message_task(
+                user_id=current_user.id,
+                interaction_id=interaction_id,
+                message=message,
+                media_files=media_files_list,
+                max_tokens=max_tokens,
+                priority=MessageTaskPriority.HIGH,  # High priority for user-initiated messages
+            )
+
+            return DefaultResponse(
+                success=True,
+                message=f"Message submitted for background processing. Task ID: {task_id}",
+            )
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            return DefaultResponse(
+                success=False,
+                message=f"Failed to submit message for processing: {str(e)}",
+            )
+
+    @strawberry.mutation
+    async def cancel_background_message_task(
+        self, info, task_id: str
+    ) -> DefaultResponse:
+        """Cancel a background message task"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        try:
+            from app.services.background_message_service import (
+                background_message_service,
+            )
+
+            # Check if task exists and belongs to user
+            task = background_message_service.get_task_status(task_id)
+            if not task or task.user_id != current_user.id:
+                return DefaultResponse(
+                    success=False, message="Task not found or access denied"
+                )
+
+            # Cancel the task
+            success = await background_message_service.cancel_task(task_id)
+
+            if success:
+                return DefaultResponse(
+                    success=True, message="Background message task has been cancelled"
+                )
+            else:
+                return DefaultResponse(
+                    success=False, message="Failed to cancel background message task"
+                )
+
+        except Exception as e:
+            return DefaultResponse(
+                success=False,
+                message=f"Failed to cancel background message task: {str(e)}",
+            )
+
+    @strawberry.mutation
+    async def retry_background_message_task(
+        self, info, task_id: str
+    ) -> DefaultResponse:
+        """Retry a failed background message task"""
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        try:
+            from app.services.background_message_service import (
+                background_message_service,
+            )
+
+            # Check if task exists and belongs to user
+            task = background_message_service.get_task_status(task_id)
+            if not task or task.user_id != current_user.id:
+                return DefaultResponse(
+                    success=False, message="Task not found or access denied"
+                )
+
+            # Retry the task
+            success = await background_message_service.retry_task(task_id)
+
+            if success:
+                return DefaultResponse(
+                    success=True,
+                    message="Background message task has been queued for retry",
+                )
+            else:
+                return DefaultResponse(
+                    success=False, message="Failed to retry background message task"
+                )
+
+        except Exception as e:
+            return DefaultResponse(
+                success=False,
+                message=f"Failed to retry background message task: {str(e)}",
             )
 
     @strawberry.mutation
@@ -1131,6 +1347,8 @@ class InteractionMutation:
                     points_cost=conv.points_cost or 0,
                     status=conv.status,
                     is_hidden=conv.is_hidden,
+                    is_liked=conv.is_liked,
+                    liked_at=conv.liked_at,
                     error_message=conv.error_message,
                     created_at=conv.created_at,
                     updated_at=conv.updated_at,
@@ -1258,4 +1476,63 @@ class InteractionMutation:
             return ShareStatsResponse(
                 success=False,
                 message=f"Failed to retrieve share statistics: {str(e)}",
+            )
+
+    @strawberry.mutation
+    async def like_dislike_message(
+        self,
+        info,
+        input: LikeDislikeInput,
+    ) -> DefaultResponse:
+        """
+        Like or dislike a conversation message
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return DefaultResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        try:
+            # Get the conversation
+            result = await db.execute(
+                select(Conversation).where(Conversation.id == input.conversation_id)
+            )
+            conversation = result.scalar_one_or_none()
+
+            if not conversation:
+                return DefaultResponse(success=False, message="Message not found")
+
+            # Verify the user owns this conversation through the interaction
+            interaction_result = await db.execute(
+                select(Interaction).where(
+                    Interaction.id == conversation.interaction_id,
+                    Interaction.user_id == current_user.id,
+                )
+            )
+            interaction = interaction_result.scalar_one_or_none()
+
+            if not interaction:
+                return DefaultResponse(
+                    success=False,
+                    message="You don't have permission to rate this message",
+                )
+
+            # Update the like/dislike status
+            conversation.is_liked = input.is_liked
+            conversation.liked_at = func.now()
+
+            await db.commit()
+
+            action = "liked" if input.is_liked else "disliked"
+            return DefaultResponse(
+                success=True, message=f"Message {action} successfully"
+            )
+
+        except Exception as e:
+            await db.rollback()
+            return DefaultResponse(
+                success=False, message=f"Failed to rate message: {str(e)}"
             )

@@ -219,15 +219,11 @@ def analyze_file_with_gpt5(file_url: str, model_name: str = "gpt-5"):
 
     # Prepare model
     llm = ChatOpenAI(
-        model="gpt-4o",  # GPT-5 with enhanced vision capabilities
+        model="gpt-5",  # GPT-5 with enhanced vision capabilities
         temperature=0.3,
         max_tokens=5000,
         request_timeout=90,  # Increased timeout for GPT-5 vision processing
-        model_kwargs={
-            "response_format": {
-                "type": "json_object"
-            },  # Force JSON output for document analysis
-        },
+        streaming=True,
     )
 
     # Construct messages depending on mode

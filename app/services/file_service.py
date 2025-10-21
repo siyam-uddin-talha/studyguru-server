@@ -134,11 +134,11 @@ class FileService:
             output = io.BytesIO()
 
             # Determine optimal quality based on file size
-            quality = 95
+            quality = 99
             if len(image_content) > 5 * 1024 * 1024:  # > 5MB
-                quality = 90
-            elif len(image_content) > 2 * 1024 * 1024:  # > 2MB
                 quality = 95
+            elif len(image_content) > 2 * 1024 * 1024:  # > 2MB
+                quality = 99
 
             image.save(output, format="JPEG", quality=quality, optimize=True)
             compressed_content = output.getvalue()
