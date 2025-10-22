@@ -82,7 +82,7 @@ class VectorOptimizationService:
         self.embeddings = langchain_service.embeddings
         self.collection_name = settings.ZILLIZ_COLLECTION
         self._query_cache = {}
-        self._cache_ttl = 300  # 5 minutes
+        self._cache_ttl = 600  # 10 minutes (increased for better performance)
 
     async def hybrid_search(self, search_query: SearchQuery) -> List[SearchResult]:
         """
@@ -181,7 +181,7 @@ class VectorOptimizationService:
                     if variation not in expanded_queries:
                         expanded_queries.append(variation)
 
-            return expanded_queries[:5]  # Limit to 5 expanded queries
+            return expanded_queries[:3]  # Limit to 3 for faster performance
 
         except Exception as e:
             print(f"⚠️ Query expansion error: {e}")

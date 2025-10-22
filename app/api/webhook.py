@@ -21,7 +21,7 @@ from app.helpers.auth import get_current_user
 from app.models.user import User
 from app.models.interaction import Interaction
 from app.models.subscription import PointTransaction
-from app.services.openai_service import OpenAIService
+from app.services.langchain_service import langchain_service
 from app.services.file_service import FileService
 
 # Initialize Paddle
@@ -31,6 +31,7 @@ if paddle:
 
 # Routers
 webhook_router = APIRouter()
+
 
 @webhook_router.post("/paddle")
 async def paddle_webhook(request: Request, db: AsyncSession = Depends(get_db)):
@@ -79,21 +80,25 @@ async def paddle_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     pass
     # Temporarily disabled - function body commented out
 
+
 # Paddle webhook handlers
 async def handle_subscription_created(data: dict, db: AsyncSession):
     """Handle new subscription creation"""
     # Implementation for subscription creation
     pass
 
+
 async def handle_subscription_updated(data: dict, db: AsyncSession):
     """Handle subscription updates"""
     # Implementation for subscription updates
     pass
 
+
 async def handle_subscription_cancelled(data: dict, db: AsyncSession):
     """Handle subscription cancellation"""
     # Implementation for subscription cancellation
     pass
+
 
 async def handle_transaction_completed(data: dict, db: AsyncSession):
     """Handle completed transactions (points purchase)"""

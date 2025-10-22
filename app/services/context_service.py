@@ -29,7 +29,7 @@ class ContextRetrievalService:
     """Enhanced context retrieval service with multi-level strategy"""
 
     def __init__(self):
-        self.cache_ttl = 600  # 10 minutes
+        self.cache_ttl = 900  # 15 minutes (increased for better performance)
         self.max_context_length = (
             4000  # Maximum context length to prevent token overflow
         )

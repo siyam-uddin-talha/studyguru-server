@@ -31,7 +31,7 @@ from app.models.interaction import Interaction, Conversation, ConversationRole
 from app.models.media import Media
 from app.models.subscription import PointTransaction
 from app.services.file_service import FileService
-from app.services.openai_service import OpenAIService
+from app.services.langchain_service import langchain_service
 from pydantic import BaseModel, Field
 
 

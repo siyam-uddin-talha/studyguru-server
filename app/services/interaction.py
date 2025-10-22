@@ -1436,69 +1436,71 @@ async def _extract_interaction_metadata_fast(
 ):
     """Fast metadata extraction with dedicated title generation using langchain_service"""
     try:
-        # Since title and summary_title are no longer in the prompt, always use AI generation
+        # OPTIMIZATION: Skip title generation if we already have a good title
         # Check if we need to update the title
         needs_title_update = (
             not interaction.title
             or not interaction.summary_title
-            or interaction.title in ["Study Session", "New Interaction"]
+            or interaction.title in ["Study Session", "New Interaction", "MCQ Generation"]
             or len(interaction.title) < 5
         )
+        
+        # SKIP if we already have a good title (saves 200-500ms)
+        if not needs_title_update:
+            print(f"✅ Skipping title generation - already have good title: '{interaction.title}'")
+            return
 
-        if needs_title_update:
-            print(
-                f"🔍 Title update needed. Current title: '{interaction.title}', summary_title: '{interaction.summary_title}'"
-            )
+        print(
+            f"🔍 Title update needed. Current title: '{interaction.title}', summary_title: '{interaction.summary_title}'"
+        )
 
-            # Handle different content types for response preview
-            if isinstance(content_text, dict):
-                # For dictionary responses (like MCQ), convert to string for preview
-                response_preview = str(content_text)[:300]
-            elif isinstance(content_text, str):
-                response_preview = content_text[:300]
-            else:
-                response_preview = str(content_text)[:300]
-
-            print(
-                f"🔍 Calling title generation with message: '{original_message}', response_preview: '{response_preview}'"
-            )
-
-            # Use AI generation for title and summary
-            try:
-                title, summary_title = (
-                    await langchain_service.generate_interaction_title(
-                        message=original_message,
-                        response_preview=response_preview,
-                    )
-                )
-                print(
-                    f"🔍 Generated title: '{title}', summary_title: '{summary_title}'"
-                )
-
-            except Exception as ai_title_error:
-                print(f"⚠️ AI title generation failed: {ai_title_error}")
-                # Fallback to simple title generation
-                if original_message:
-                    title = original_message[:40].strip()
-                    summary_title = f"Help with {title.lower()}"
-                else:
-                    title = "Study Session"
-                    summary_title = "Educational assistance"
-
-            # Update interaction with generated titles
-            if title:
-                interaction.title = title
-                print(f"✅ Set interaction title: '{title}'")
-            else:
-                print(f"⚠️ No title generated")
-
-            if summary_title:
-                interaction.summary_title = summary_title
-                print(f"✅ Set interaction summary_title: '{summary_title}'")
-            else:
-                print(f"⚠️ No summary title generated")
+        # Handle different content types for response preview
+        if isinstance(content_text, dict):
+            # For dictionary responses (like MCQ), convert to string for preview
+            response_preview = str(content_text)[:300]
+        elif isinstance(content_text, str):
+            response_preview = content_text[:300]
         else:
-            print(f"✅ Title and summary already exist, skipping generation")
+            response_preview = str(content_text)[:300]
+
+        print(
+            f"🔍 Calling title generation with message: '{original_message}', response_preview: '{response_preview}'"
+        )
+
+        # Use AI generation for title and summary
+        try:
+            title, summary_title = (
+                await langchain_service.generate_interaction_title(
+                    message=original_message,
+                    response_preview=response_preview,
+                )
+            )
+            print(
+                f"🔍 Generated title: '{title}', summary_title: '{summary_title}'"
+            )
+
+        except Exception as ai_title_error:
+            print(f"⚠️ AI title generation failed: {ai_title_error}")
+            # Fallback to simple title generation
+            if original_message:
+                title = original_message[:40].strip()
+                summary_title = f"Help with {title.lower()}"
+            else:
+                title = "Study Session"
+                summary_title = "Educational assistance"
+
+        # Update interaction with generated titles
+        if title:
+            interaction.title = title
+            print(f"✅ Set interaction title: '{title}'")
+        else:
+            print(f"⚠️ No title generated")
+
+        if summary_title:
+            interaction.summary_title = summary_title
+            print(f"✅ Set interaction summary_title: '{summary_title}'")
+        else:
+            print(f"⚠️ No summary title generated")
 
     except Exception as e:
         print(f"Metadata extraction error: {e}")
