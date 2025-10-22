@@ -14,6 +14,14 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
+# Import native Google Search tool
+try:
+    from google.genai.types import Tool, GoogleSearch
+except ImportError:
+
+    Tool = None
+    GoogleSearch = None
+
 from app.config.cache_manager import cache_manager
 from app.core.config import settings
 
@@ -299,6 +307,28 @@ Valid JSON only:
         ]
     )
 
+    WEB_SEARCH_CONVERSATION = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """StudyGuru AI - Educational assistant with web search capabilities.
+
+You have access to Google Search to find current information, verify facts, and provide up-to-date educational content.
+
+FORMAT: ### headers, number questions (1., 2.), options (A., B., C., D.) if exist else direct solution, Answer: [solution] (no bold), Explanation: [text] (no bold), • for lists, plain text math (e.g., "x squared"), clear paragraphs.
+
+When using web search:
+- Search for current information when needed
+- Verify facts and provide accurate, up-to-date information
+- Cite sources when referencing web search results
+- Be encouraging, professional, focused on learning
+
+Use web search to enhance your educational responses with current, accurate information.""",
+            ),
+            ("human", "{question}"),
+        ]
+    )
+
 
 class StudyGuruModels:
     """Model configurations - supports GPT and Gemini"""
@@ -321,11 +351,18 @@ class StudyGuruModels:
         reasoning_effort="low",
         verbosity="low",
         streaming=True,
+        web_search=False,
     ):
-        """Get chat model"""
+        """Get chat model with optional web search capability"""
         cache = StudyGuruModels._get_cache()
 
         if StudyGuruModels._is_gemini_model():
+            # Prepare tools list for web search
+            tools = []
+            if web_search and Tool is not None and GoogleSearch is not None:
+                grounding_tool = Tool(google_search=GoogleSearch())
+                tools = [grounding_tool]
+
             return ChatGoogleGenerativeAI(
                 model="gemini-2.5-pro",
                 temperature=temperature,
@@ -333,6 +370,7 @@ class StudyGuruModels:
                 max_output_tokens=max_tokens,
                 request_timeout=120,
                 cache=cache,
+                tools=tools,  # Include web search tool if enabled
             )
 
         model_name = "gpt-4o" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5"
@@ -352,9 +390,16 @@ class StudyGuruModels:
         max_tokens: int = 5000,
         verbosity: str = "low",
         streaming: bool = True,
+        web_search: bool = False,
     ):
-        """Get configured vision model - supports both GPT and Gemini"""
+        """Get configured vision model with optional web search capability - supports both GPT and Gemini"""
         if StudyGuruModels._is_gemini_model():
+            # Prepare tools list for web search
+            tools = []
+            if web_search and Tool is not None and GoogleSearch is not None:
+                grounding_tool = Tool(google_search=GoogleSearch())
+                tools = [grounding_tool]
+
             # Gemini 2.5 Pro with vision capabilities
             return ChatGoogleGenerativeAI(
                 model="gemini-2.5-pro",  # Gemini with vision support
@@ -363,6 +408,7 @@ class StudyGuruModels:
                 max_output_tokens=max_tokens,
                 request_timeout=120,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
+                tools=tools,  # Include web search tool if enabled
             )
         else:
             # GPT models
@@ -521,6 +567,31 @@ class StudyGuruModels:
                     # verbosity=verbosity,  # Control response length and detail
                     cache=cache_manager.get_response_cache(),  # Enable response caching
                 )
+
+    @staticmethod
+    def get_web_search_model(
+        temperature: float = 0.2, max_tokens: int = 5000, streaming: bool = True
+    ):
+        """Get configured model with Google Search tool integration - Gemini only"""
+        if not StudyGuruModels._is_gemini_model():
+            raise ValueError(
+                "Web search functionality is only available with Gemini models"
+            )
+
+        # Define the native grounding tool
+        grounding_tool = Tool(google_search=GoogleSearch())
+
+        # Initialize the model and pass it the tool
+        return ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
+            temperature=temperature,
+            google_api_key=settings.GOOGLE_API_KEY,
+            max_output_tokens=max_tokens,
+            request_timeout=120,
+            cache=cache_manager.get_response_cache(),
+            tools=[grounding_tool],  # This enables native "AUTO WEBSEARCH"
+            streaming=streaming,
+        )
 
     @staticmethod
     def get_model_with_context_cache(
@@ -734,6 +805,13 @@ class StudyGuruChains:
         )
         parser = MarkdownJsonOutputParser()  # Use robust parser for MCQ generation
         return StudyGuruPrompts.MCQ_GENERATION | model | parser
+
+    @staticmethod
+    def get_web_search_chain():
+        """Get web search conversation chain with Google Search tool integration"""
+        model = StudyGuruModels.get_web_search_model()
+        parser = StrOutputParser()
+        return StudyGuruPrompts.WEB_SEARCH_CONVERSATION | model | parser
 
 
 class StudyGuruConfig:

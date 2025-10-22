@@ -32,6 +32,67 @@ from app.config.langchain_config import StudyGuruConfig
 interaction_router = APIRouter()
 
 
+# Helper function to send thinking status updates
+async def send_thinking_status(
+    websocket: WebSocket,
+    status_type: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+):
+    """Send thinking status update to WebSocket client"""
+    try:
+        status_data = {
+            "type": "thinking",
+            "status_type": status_type,
+            "message": message,
+            "timestamp": asyncio.get_event_loop().time(),
+        }
+        if details:
+            status_data["details"] = details
+
+        await websocket.send_text(json.dumps(status_data))
+        print(f"🧠 Sent thinking status: {status_type} - {message}")
+    except Exception as e:
+        print(f"⚠️ Failed to send thinking status: {e}")
+
+
+# Thinking status types and messages
+THINKING_STATUSES = {
+    "analyzing": {
+        "message": "Analyzing your question...",
+        "details": {"stage": "input_analysis"},
+    },
+    "searching_context": {
+        "message": "Searching through your previous conversations for context...",
+        "details": {"stage": "context_retrieval"},
+    },
+    "checking_guardrails": {
+        "message": "Checking content safety...",
+        "details": {"stage": "safety_check"},
+    },
+    "preparing_response": {
+        "message": "Preparing my response...",
+        "details": {"stage": "response_preparation"},
+    },
+    "searching_web": {
+        "message": "Searching the web for current information...",
+        "details": {"stage": "web_search"},
+    },
+    "generating": {
+        "message": "Generating response...",
+        "details": {"stage": "ai_generation"},
+    },
+    "processing_media": {
+        "message": "Processing your uploaded files...",
+        "details": {"stage": "media_processing"},
+    },
+    "saving": {
+        "message": "Saving our conversation...",
+        "details": {"stage": "database_save"},
+    },
+}
+
+
 # Pydantic models for request/response
 class StreamConversationRequest(BaseModel):
     interaction_id: Optional[str] = None
@@ -75,6 +136,34 @@ async def get_user_from_token(
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
+
+
+@interaction_router.get("/test-thinking-status")
+async def test_thinking_status():
+    """Test endpoint to verify thinking status functionality"""
+    return {
+        "status": "success",
+        "message": "Thinking status system is active",
+        "available_statuses": list(THINKING_STATUSES.keys()),
+        "timestamp": asyncio.get_event_loop().time(),
+    }
+
+
+@interaction_router.get("/debug-jwt")
+async def debug_jwt():
+    """Debug endpoint to check JWT configuration"""
+    from app.core.config import settings
+
+    return {
+        "status": "success",
+        "jwt_secret_key_length": len(settings.JWT_SECRET_KEY),
+        "jwt_secret_key_preview": (
+            settings.JWT_SECRET_KEY[:10] + "..."
+            if len(settings.JWT_SECRET_KEY) > 10
+            else settings.JWT_SECRET_KEY
+        ),
+        "timestamp": asyncio.get_event_loop().time(),
+    }
 
 
 @interaction_router.websocket("/stream-conversation")
@@ -144,6 +233,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     await websocket.close()
                     return
 
+            # Send initial thinking status
+            print("🧠 Sending initial thinking status...")
+            await send_thinking_status(
+                websocket, "analyzing", THINKING_STATUSES["analyzing"]["message"]
+            )
+            print("🧠 Initial thinking status sent")
+
             # Handle interaction setup (same logic as do_conversation)
             interaction = None
             is_fresh_interaction = False
@@ -209,6 +305,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
             # Process media files if present (optimized with single query)
             media_objects = []
             if media_files:
+                # Send thinking status for media processing
+                await send_thinking_status(
+                    websocket,
+                    "processing_media",
+                    THINKING_STATUSES["processing_media"]["message"],
+                )
+
                 # Extract all media IDs
                 media_ids = [
                     media_file.get("id")
@@ -241,6 +344,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
 
             # Check guardrails (same as do_conversation)
             try:
+                # Send thinking status for guardrail check
+                await send_thinking_status(
+                    websocket,
+                    "checking_guardrails",
+                    THINKING_STATUSES["checking_guardrails"]["message"],
+                )
+
                 # Extract media URLs for guardrail checking
                 media_urls = []
                 if media_files:
@@ -276,6 +386,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
             context_text = ""
 
             try:
+                # Send thinking status for context search
+                await send_thinking_status(
+                    websocket,
+                    "searching_context",
+                    THINKING_STATUSES["searching_context"]["message"],
+                )
+
                 # Get conversation context using similarity search
                 if interaction_id:
                     # Search within the same interaction for context
@@ -313,24 +430,79 @@ async def websocket_stream_conversation(websocket: WebSocket):
             full_response = ""
             print(f"🚀 Starting WebSocket streaming response generation...")
 
+            # Send thinking status for response preparation
+            await send_thinking_status(
+                websocket,
+                "preparing_response",
+                THINKING_STATUSES["preparing_response"]["message"],
+            )
+
+            # Add a minimal delay to ensure status is sent
+            await asyncio.sleep(0.1)
+
+            # Check if the question might benefit from web search
+            web_search_keywords = [
+                "latest",
+                "current",
+                "recent",
+                "2024",
+                "2025",
+                "news",
+                "update",
+                "today",
+                "now",
+            ]
+            might_need_web_search = any(
+                keyword in (message or "").lower() for keyword in web_search_keywords
+            )
+
+            if might_need_web_search:
+                await send_thinking_status(
+                    websocket,
+                    "searching_web",
+                    THINKING_STATUSES["searching_web"]["message"],
+                )
+                await asyncio.sleep(0.1)  # Brief pause to show web search status
+
+            # Send thinking status for AI generation
+            await send_thinking_status(
+                websocket, "generating", THINKING_STATUSES["generating"]["message"]
+            )
+
             # Use LangChain streaming for real AI responses
             async for (
-                chunk
+                chunk_data
             ) in langchain_service.generate_conversation_response_streaming(
                 message=message,
                 context=context_text,
                 image_urls=media_urls,
                 max_tokens=max_tokens,
             ):
-                full_response += chunk
+                # Handle both old string format and new dict format for backward compatibility
+                if isinstance(chunk_data, str):
+                    chunk_content = chunk_data
+                    chunk_timestamp = asyncio.get_event_loop().time()
+                    chunk_elapsed = 0
+                    chunk_number = 0
+                else:
+                    chunk_content = chunk_data.get("content", "")
+                    chunk_timestamp = chunk_data.get(
+                        "timestamp", asyncio.get_event_loop().time()
+                    )
+                    chunk_elapsed = chunk_data.get("elapsed_time", 0)
+                    chunk_number = chunk_data.get("chunk_number", 0)
 
-                # Send each chunk
+                full_response += chunk_content
+
+                # Send each chunk with enhanced timing information
                 await websocket.send_text(
                     json.dumps(
                         {
                             "type": "token",
-                            "content": chunk,
-                            "timestamp": asyncio.get_event_loop().time(),
+                            "content": chunk_content,
+                            "timestamp": chunk_timestamp,
+                            "elapsed_time": chunk_elapsed,
+                            "chunk_number": chunk_number,
                         }
                     )
                 )
@@ -341,6 +513,11 @@ async def websocket_stream_conversation(websocket: WebSocket):
 
             # Now save the AI response to database and handle background operations
             try:
+                # Send thinking status for saving
+                await send_thinking_status(
+                    websocket, "saving", THINKING_STATUSES["saving"]["message"]
+                )
+
                 # Process AI content
                 from app.services.interaction import _process_ai_content_fast
 
@@ -391,6 +568,17 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 await db.commit()
                 print(f"✅ AI response saved to database successfully")
 
+                # Send completion status (internal only, not shown to user)
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "completed",
+                            "message": "Response completed successfully!",
+                            "timestamp": asyncio.get_event_loop().time(),
+                        }
+                    )
+                )
+
                 # Start background operations (embeddings, semantic summary, etc.)
                 try:
                     from app.services.interaction import _background_operations_enhanced
@@ -417,7 +605,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
             await websocket.send_text(
                 json.dumps(
                     {
-                        "type": "complete",
+                        "type": "completed",
                         "content": full_response,
                         "tokens_used": 0,  # We don't have exact token count from streaming
                         "points_cost": 1,  # Default cost
