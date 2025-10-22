@@ -551,16 +551,13 @@ class LangChainService:
                 system_prompt = StudyGuruConfig.PROMPTS.DOCUMENT_ANALYSIS.messages[
                     0
                 ].prompt.template
-                print(
-                    "🔍 Using DOCUMENT_ANALYSIS prompt for pure document analysis (streaming)"
-                )
+
             elif interaction_title and interaction_summary:
                 # Use the optimized conversation prompt from config
                 system_prompt = (
                     StudyGuruConfig.PROMPTS.CONVERSATION_WITH_CONTEXT.messages[
                         0
                     ].prompt.template.format(
-                        interaction_title=interaction_title,
                         interaction_summary=interaction_summary,
                     )
                 )
@@ -656,11 +653,10 @@ class LangChainService:
 
             # Stream response using direct model streaming
             full_response = ""
-            print(f"🤖 Starting LangChain streaming...")
 
             # Use the model's streaming capability directly
             if hasattr(optimized_llm, "astream"):
-                print(f"🤖 Using direct model streaming (astream)")
+
                 # Try direct streaming from the model
                 messages = prompt.format_messages()
                 async for chunk in optimized_llm.astream(
@@ -668,18 +664,18 @@ class LangChainService:
                     config={"callbacks": [callback_handler]},
                 ):
                     if hasattr(chunk, "content") and chunk.content:
-                        print(f"🤖 Direct streaming chunk: '{chunk.content}'")
+
                         full_response += chunk.content
                         yield chunk.content
             else:
-                print(f"🤖 Using chain streaming (fallback)")
+
                 # Fallback: Use chain streaming with proper configuration
                 async for chunk in chain.astream(
                     {},
                     config={"callbacks": [callback_handler], "stream_mode": "values"},
                 ):
                     if hasattr(chunk, "content") and chunk.content:
-                        print(f"🤖 Chain streaming chunk: '{chunk.content}'")
+
                         full_response += chunk.content
                         yield chunk.content
 
@@ -742,9 +738,7 @@ class LangChainService:
             return results
 
         except Exception as e:
-            print(
-                f"⚠️ Enhanced similarity search failed, falling back to basic search: {e}"
-            )
+
             # Fallback to basic search
             return await self._basic_similarity_search(query, user_id, top_k)
 
@@ -1253,9 +1247,6 @@ class LangChainService:
 
                         await asyncio.sleep(0.5)  # Brief delay before retry
 
-            print(f"🔍 Final result from title generation: {result}")
-            print("=" * 100)
-
             # Extract title and summary with robust validation
             if result and isinstance(result, dict):
                 title = result.get("title", "")[:50] if result.get("title") else None
@@ -1268,8 +1259,6 @@ class LangChainService:
                 title = None
                 summary_title = None
 
-            print(f"📝 Extracted title: '{title}', summary: '{summary_title}'")
-
             return title, summary_title
 
         except Exception as e:
@@ -1278,27 +1267,23 @@ class LangChainService:
                 import traceback
 
                 traceback.print_exc()
-            else:
-                print(
-                    f"⚠️ Title generation JSON error (using fallback): {str(e)[:100]}..."
-                )
 
             # Fallback: create simple title from message
             if message:
                 simple_title = message[:40].strip()
                 fallback_result = (simple_title, f"Help with {simple_title.lower()}")
-                print(f"✅ Using fallback title: '{simple_title}'")
+
                 return fallback_result
             elif response_preview:
                 # Try to create title from response if no message
                 simple_title = response_preview[:40].strip()
                 fallback_result = (simple_title, "Educational assistance")
-                print(f"✅ Using fallback title from response: '{simple_title}'")
+
                 return fallback_result
             else:
                 # Last resort fallback
                 fallback_result = ("Study Session", "Educational assistance")
-                print("✅ Using ultimate fallback title")
+
                 return fallback_result
 
     async def summarize_conversation(
