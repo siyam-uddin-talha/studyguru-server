@@ -397,7 +397,10 @@ async def websocket_stream_conversation(websocket: WebSocket):
 
                     # Get conversation context using similarity search
                     if interaction_id:
-                        # Search within the same interaction for context
+                        # Search within the same interaction for context only
+                        print(
+                            f"🔍 Searching context within interaction: {interaction.id}"
+                        )
                         search_results = (
                             await langchain_service.similarity_search_by_interaction(
                                 query=message or "",
@@ -407,12 +410,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
                             )
                         )
                     else:
-                        # Search across all user conversations for context
-                        search_results = await langchain_service.similarity_search(
-                            query=message or "",
-                            user_id=str(current_user.id),
-                            top_k=5,
+                        # This should not happen for existing interactions
+                        # If we reach here, it means interaction_id was None but is_fresh_interaction is False
+                        # This is an edge case - skip context search to be safe
+                        print(
+                            f"⚠️ Edge case: No interaction_id but not fresh interaction - skipping context search"
                         )
+                        search_results = []
 
                     # Build context from search results
                     if search_results:

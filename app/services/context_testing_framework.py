@@ -168,7 +168,9 @@ class ContextTestingFramework:
             interaction_id=test_data.get("interaction_id"),
             message=test_data["message"],
             include_cross_interaction=test_data.get("include_cross_interaction", True),
-            max_context_length=test_data.get("max_context_length", 4000),
+            max_context_length=test_data.get(
+                "max_context_length", 10000
+            ),  # Increased from 4000
         )
 
         return {
@@ -504,7 +506,7 @@ class ContextTestingFramework:
                     "interaction_id": interaction_id,
                     "message": "What is photosynthesis?",
                     "include_cross_interaction": True,
-                    "max_context_length": 4000,
+                    "max_context_length": 10000,  # Increased from 4000
                 },
             )
         )

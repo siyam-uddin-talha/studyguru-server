@@ -760,46 +760,79 @@ class StudyGuruChains:
     @staticmethod
     def get_title_generation_chain():
         """Get title generation chain (cost-optimized) with robust error handling"""
-        # Use GPT-4o-mini for better JSON stability instead of GPT-5-mini
-        # GPT-5 models have issues with response_format parameter
-        model = ChatOpenAI(
-            model="gpt-4o-mini",  # More reliable for JSON output
-            temperature=0.3,
-            openai_api_key=settings.OPENAI_API_KEY,
-            max_tokens=300,  # Increased to ensure complete JSON response
-            request_timeout=20,  # Increased timeout
-            # model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Flash for cost efficiency
+            model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",  # Fast and cost-effective model
+                temperature=0.3,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=300,  # Increased to ensure complete JSON response
+                request_timeout=20,  # Increased timeout
+                cache=cache_manager.get_response_cache(),  # Enable response caching
+            )
+        else:
+            # Use GPT-4o-mini for better JSON stability instead of GPT-5-mini
+            # GPT-5 models have issues with response_format parameter
+            model = ChatOpenAI(
+                model="gpt-4o-mini",  # More reliable for JSON output
+                temperature=0.3,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=300,  # Increased to ensure complete JSON response
+                request_timeout=20,  # Increased timeout
+                # model_kwargs={"response_format": {"type": "json_object"}},
+            )
         parser = MarkdownJsonOutputParser()  # Use robust parser for title generation
         return StudyGuruPrompts.TITLE_GENERATION | model | parser
 
     @staticmethod
     def get_conversation_summarization_chain():
         """Get conversation summarization chain with increased token limits"""
-        # Use GPT-4o-mini for better stability and disable reasoning to reserve tokens for output
-        model = ChatOpenAI(
-            model="gpt-4o-mini",  # More reliable for JSON output
-            temperature=0.2,
-            openai_api_key=settings.OPENAI_API_KEY,
-            max_tokens=2000,  # Aggressively increased to handle reasoning + output
-            request_timeout=45,  # Increased timeout for longer processing
-            # model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Flash for cost efficiency
+            model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",  # Fast and cost-effective model
+                temperature=0.2,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=2000,  # Aggressively increased to handle reasoning + output
+                request_timeout=45,  # Increased timeout for longer processing
+                cache=cache_manager.get_response_cache(),  # Enable response caching
+            )
+        else:
+            # Use GPT-4o-mini for better stability and disable reasoning to reserve tokens for output
+            model = ChatOpenAI(
+                model="gpt-4o-mini",  # More reliable for JSON output
+                temperature=0.2,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=2000,  # Aggressively increased to handle reasoning + output
+                request_timeout=45,  # Increased timeout for longer processing
+                # model_kwargs={"response_format": {"type": "json_object"}},
+            )
         parser = MarkdownJsonOutputParser()
         return StudyGuruPrompts.CONVERSATION_SUMMARIZATION | model | parser
 
     @staticmethod
     def get_interaction_summary_update_chain():
         """Get interaction summary update chain with increased token limits"""
-        # Use GPT-4o-mini for better stability and increased token limits
-        model = ChatOpenAI(
-            model="gpt-4o-mini",  # More reliable for JSON output
-            temperature=0.2,
-            openai_api_key=settings.OPENAI_API_KEY,
-            max_tokens=1500,  # Aggressively increased to handle longer updates
-            request_timeout=45,  # Increased timeout
-            # model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        if StudyGuruModels._is_gemini_model():
+            # Gemini 2.5 Flash for cost efficiency
+            model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",  # Fast and cost-effective model
+                temperature=0.2,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=1500,  # Aggressively increased to handle longer updates
+                request_timeout=45,  # Increased timeout
+                cache=cache_manager.get_response_cache(),  # Enable response caching
+            )
+        else:
+            # Use GPT-4o-mini for better stability and increased token limits
+            model = ChatOpenAI(
+                model="gpt-4o-mini",  # More reliable for JSON output
+                temperature=0.2,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=1500,  # Aggressively increased to handle longer updates
+                request_timeout=45,  # Increased timeout
+                # model_kwargs={"response_format": {"type": "json_object"}},
+            )
         parser = MarkdownJsonOutputParser()
         return StudyGuruPrompts.INTERACTION_SUMMARY_UPDATE | model | parser
 
@@ -838,7 +871,9 @@ class StudyGuruConfig:
     # Token system configuration
     BASE_TOKENS = 5000  # Base tokens for text-only prompts
     TOKENS_PER_FILE = 5000  # Additional tokens per file
-    MAX_TOKENS_LIMIT = 20000  # Maximum token limit to prevent excessive usage
+    MAX_TOKENS_LIMIT = (
+        30000  # Maximum token limit to prevent excessive usage (increased from 20000)
+    )
 
     # Default settings
     DEFAULT_MAX_TOKENS = 5000

@@ -30,9 +30,7 @@ class ContextRetrievalService:
 
     def __init__(self):
         self.cache_ttl = 900  # 15 minutes (increased for better performance)
-        self.max_context_length = (
-            4000  # Maximum context length to prevent token overflow
-        )
+        self.max_context_length = 10000  # Maximum context length to prevent token overflow (increased from 4000)
 
     async def get_comprehensive_context(
         self,

@@ -218,7 +218,7 @@ async def process_conversation_message(
                         interaction_id=str(interaction.id) if interaction else None,
                         message=message or "",
                         include_cross_interaction=True,
-                        max_context_length=4000,
+                        max_context_length=10000,  # Increased from 4000 to 10000
                     )
 
                     context_text = context_result.get("context", "")

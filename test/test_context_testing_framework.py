@@ -38,7 +38,7 @@ async def test_framework_basic_functionality():
                 "interaction_id": "test_interaction_456",
                 "message": "What is photosynthesis?",
                 "include_cross_interaction": True,
-                "max_context_length": 4000,
+                "max_context_length": 10000,  # Increased from 4000
             },
         )
 
@@ -306,7 +306,7 @@ async def test_error_handling():
                 "interaction_id": "test_interaction_456",
                 "message": "What is photosynthesis?",
                 "include_cross_interaction": True,
-                "max_context_length": 4000,
+                "max_context_length": 10000,  # Increased from 4000
             },
             timeout=1,  # Very short timeout
         )
