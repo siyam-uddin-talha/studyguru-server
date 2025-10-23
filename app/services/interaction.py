@@ -1441,13 +1441,16 @@ async def _extract_interaction_metadata_fast(
         needs_title_update = (
             not interaction.title
             or not interaction.summary_title
-            or interaction.title in ["Study Session", "New Interaction", "MCQ Generation"]
+            or interaction.title
+            in ["Study Session", "New Interaction", "MCQ Generation"]
             or len(interaction.title) < 5
         )
-        
+
         # SKIP if we already have a good title (saves 200-500ms)
         if not needs_title_update:
-            print(f"✅ Skipping title generation - already have good title: '{interaction.title}'")
+            print(
+                f"✅ Skipping title generation - already have good title: '{interaction.title}'"
+            )
             return
 
         print(
@@ -1467,27 +1470,37 @@ async def _extract_interaction_metadata_fast(
             f"🔍 Calling title generation with message: '{original_message}', response_preview: '{response_preview}'"
         )
 
-        # Use AI generation for title and summary
-        try:
-            title, summary_title = (
-                await langchain_service.generate_interaction_title(
-                    message=original_message,
-                    response_preview=response_preview,
-                )
-            )
-            print(
-                f"🔍 Generated title: '{title}', summary_title: '{summary_title}'"
-            )
+        # Check if this is a simple greeting or casual message
+        from app.constants import SIMPLE_GREETINGS
 
-        except Exception as ai_title_error:
-            print(f"⚠️ AI title generation failed: {ai_title_error}")
-            # Fallback to simple title generation
-            if original_message:
-                title = original_message[:40].strip()
-                summary_title = f"Help with {title.lower()}"
-            else:
-                title = "Study Session"
-                summary_title = "Educational assistance"
+        is_simple_greeting = (
+            original_message and original_message.lower().strip() in SIMPLE_GREETINGS
+        )
+
+        if is_simple_greeting:
+            # For simple greetings, use a generic but appropriate title
+            title = "Chat with StudyGuru"
+            summary_title = "General conversation and assistance"
+
+        else:
+            # Use AI generation for more substantive messages
+            try:
+                title, summary_title = (
+                    await langchain_service.generate_interaction_title(
+                        message=original_message,
+                        response_preview=response_preview,
+                    )
+                )
+
+            except Exception as ai_title_error:
+                print(f"⚠️ AI title generation failed: {ai_title_error}")
+                # Fallback to simple title generation
+                if original_message:
+                    title = original_message[:40].strip()
+                    summary_title = f"Help with {title.lower()}"
+                else:
+                    title = "Study Session"
+                    summary_title = "Educational assistance"
 
         # Update interaction with generated titles
         if title:

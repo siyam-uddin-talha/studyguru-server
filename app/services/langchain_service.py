@@ -280,6 +280,21 @@ class LangChainService:
     ) -> GuardrailOutput:
         """Check content against guardrails using LangChain - optimized for speed"""
         try:
+            # Quick check for simple greetings - always allow these
+            if message and not image_urls:
+                from app.constants import SIMPLE_GREETINGS
+
+                message_lower = message.lower().strip()
+                if message_lower in SIMPLE_GREETINGS:
+                    print(
+                        f"🛡️ GUARDRAIL: Simple greeting detected - allowing: '{message}'"
+                    )
+                    return GuardrailOutput(
+                        is_violation=False,
+                        violation_type=None,
+                        reasoning="Simple greeting - appropriate for conversation starter",
+                    )
+
             # Create callback handler
             callback_handler = StudyGuruCallbackHandler()
 
@@ -468,9 +483,20 @@ class LangChainService:
                     )
 
             if message:
-                user_content.append(
-                    {"type": "text", "text": f"**CURRENT USER QUESTION:** {message}"}
-                )
+                # Check if this is a simple greeting - don't add prefix for simple messages
+                from app.constants import ALLOWED_SIMPLE_MESSAGES
+
+                if message.lower().strip() in ALLOWED_SIMPLE_MESSAGES:
+                    # For simple greetings, just use the message directly
+                    user_content.append({"type": "text", "text": message})
+                else:
+                    # For substantive questions, add the prefix
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": f"**CURRENT USER QUESTION:** {message}",
+                        }
+                    )
             elif image_urls:
                 if is_document_analysis_only:
                     # Use the proper document analysis format
@@ -489,8 +515,6 @@ class LangChainService:
                         {"type": "image_url", "image_url": {"url": url}}
                     )
 
-            print(f"🔍 User content: {user_content}")
-            print(f"🔍 System prompt: {system_prompt}")
             # Create prompt
             prompt = ChatPromptTemplate.from_messages(
                 [
@@ -601,9 +625,20 @@ class LangChainService:
                     )
 
             if message:
-                user_content.append(
-                    {"type": "text", "text": f"**CURRENT USER QUESTION:** {message}"}
-                )
+                # Check if this is a simple greeting - don't add prefix for simple messages
+                from app.constants import ALLOWED_SIMPLE_MESSAGES
+
+                if message.lower().strip() in ALLOWED_SIMPLE_MESSAGES:
+                    # For simple greetings, just use the message directly
+                    user_content.append({"type": "text", "text": message})
+                else:
+                    # For substantive questions, add the prefix
+                    user_content.append(
+                        {
+                            "type": "text",
+                            "text": f"**CURRENT USER QUESTION:** {message}",
+                        }
+                    )
             elif image_urls:
                 if is_document_analysis_only:
                     # Use the proper document analysis format
@@ -637,6 +672,7 @@ class LangChainService:
                     temperature=0.3, max_tokens=max_tokens
                 )
                 chain = prompt | optimized_llm
+
                 print("🔍 Using vision model for document analysis (streaming)")
             else:
                 # Use chat model for regular conversations with speed optimizations

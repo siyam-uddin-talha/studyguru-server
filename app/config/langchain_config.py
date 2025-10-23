@@ -164,10 +164,11 @@ Return valid JSON only.""",
                 """Check if content is educational.
 
 ACCEPT: Textbooks, worksheets, math, notes, quizzes, exams, homework, diagrams, equations, scientific content. Educational content with faces = ACCEPT. Empty/minimal = ACCEPT.
+Simple greetings,  Conversation starters (eg: hi, how are you) = ACCEPT.
 REJECT: Selfies, social media, inappropriate material, personal photos.
 
 JSON only:
-Accept: {{"is_violation": false, "violation_type": null, "reasoning": "Educational: [brief]"}}
+Accept: {{"is_violation": false, "violation_type": null, "reasoning": "[brief]"}}
 Reject: {{"is_violation": true, "violation_type": "non_educational_content", "reasoning": "[why]"}}""",
             ),
             ("human", "{content}"),
@@ -209,11 +210,16 @@ Be encouraging, professional, focused on learning.""",
         [
             (
                 "system",
-                """Generate titles for educational content.
+                """Generate appropriate titles for conversations.
 
-Rules: Short title (max 50 chars), summary (max 100 chars), simple language, no special chars, focus on subject.
+Rules: 
+- Short title (max 50 chars), summary (max 100 chars)
+- Simple language, no special chars
+- For greetings/casual messages: use "Chat with StudyGuru" or similar
+- For educational questions: focus on the subject/topic
+- For general questions: use the main topic discussed
 
-JSON: {{"title": "short topic", "summary_title": "help provided"}}""",
+JSON: {{"title": "conversation title", "summary_title": "brief description"}}""",
             ),
             ("human", "User: {message}\nResponse: {response_preview}"),
         ]

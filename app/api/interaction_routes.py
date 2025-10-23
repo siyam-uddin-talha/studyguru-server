@@ -86,10 +86,10 @@ THINKING_STATUSES = {
         "message": "Processing your uploaded files...",
         "details": {"stage": "media_processing"},
     },
-    "saving": {
-        "message": "Saving our conversation...",
-        "details": {"stage": "database_save"},
-    },
+    # "saving": {
+    #     "message": "Saving our conversation...",
+    #     "details": {"stage": "database_save"},
+    # },
 }
 
 
@@ -385,46 +385,50 @@ async def websocket_stream_conversation(websocket: WebSocket):
             # Get context for the conversation (RAG functionality)
             context_text = ""
 
-            try:
-                # Send thinking status for context search
-                await send_thinking_status(
-                    websocket,
-                    "searching_context",
-                    THINKING_STATUSES["searching_context"]["message"],
-                )
+            # Only search for context if this is NOT a fresh interaction
+            if not is_fresh_interaction:
+                try:
+                    # Send thinking status for context search
+                    await send_thinking_status(
+                        websocket,
+                        "searching_context",
+                        THINKING_STATUSES["searching_context"]["message"],
+                    )
 
-                # Get conversation context using similarity search
-                if interaction_id:
-                    # Search within the same interaction for context
-                    search_results = (
-                        await langchain_service.similarity_search_by_interaction(
+                    # Get conversation context using similarity search
+                    if interaction_id:
+                        # Search within the same interaction for context
+                        search_results = (
+                            await langchain_service.similarity_search_by_interaction(
+                                query=message or "",
+                                user_id=str(current_user.id),
+                                interaction_id=str(interaction.id),
+                                top_k=3,
+                            )
+                        )
+                    else:
+                        # Search across all user conversations for context
+                        search_results = await langchain_service.similarity_search(
                             query=message or "",
                             user_id=str(current_user.id),
-                            interaction_id=str(interaction.id),
-                            top_k=3,
+                            top_k=5,
                         )
-                    )
-                else:
-                    # Search across all user conversations for context
-                    search_results = await langchain_service.similarity_search(
-                        query=message or "",
-                        user_id=str(current_user.id),
-                        top_k=5,
-                    )
 
-                # Build context from search results
-                if search_results:
-                    context_parts = []
-                    for result in search_results:
-                        context_parts.append(
-                            f"**{result.get('title', 'Previous Discussion')}:**\n{result.get('content', '')}"
-                        )
-                    context_text = "\n\n".join(context_parts)
-                    print(f"🔍 Context length: {len(context_text)} characters")
+                    # Build context from search results
+                    if search_results:
+                        context_parts = []
+                        for result in search_results:
+                            context_parts.append(
+                                f"**{result.get('title', 'Previous Discussion')}:**\n{result.get('content', '')}"
+                            )
+                        context_text = "\n\n".join(context_parts)
+                        print(f"🔍 Context length: {len(context_text)} characters")
 
-            except Exception as context_error:
-                print(f"⚠️ Context retrieval failed: {context_error}")
-                # Continue without context - streaming will still work
+                except Exception as context_error:
+                    print(f"⚠️ Context retrieval failed: {context_error}")
+                    # Continue without context - streaming will still work
+            else:
+                print(f"🆕 Fresh interaction detected - skipping context search")
 
             # Generate streaming response using LangChain
             full_response = ""
@@ -514,9 +518,9 @@ async def websocket_stream_conversation(websocket: WebSocket):
             # Now save the AI response to database and handle background operations
             try:
                 # Send thinking status for saving
-                await send_thinking_status(
-                    websocket, "saving", THINKING_STATUSES["saving"]["message"]
-                )
+                # await send_thinking_status(
+                #     websocket, "saving", THINKING_STATUSES["saving"]["message"]
+                # )
 
                 # Process AI content
                 from app.services.interaction import _process_ai_content_fast
