@@ -25,6 +25,7 @@ from app.models.interaction import Interaction, Conversation, ConversationRole
 from app.models.media import Media
 from app.services.interaction import process_conversation_message
 from app.services.langchain_service import langchain_service
+from app.services.langgraph_integration_service import langgraph_integration_service
 from app.config.langchain_config import StudyGuruConfig
 
 
@@ -360,7 +361,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
 
                 # Check guardrails
                 guardrail_result = await langchain_service.check_guardrails(
-                    message=message or "", image_urls=media_urls
+                    message=message or "", media_urls=media_urls
                 )
 
                 if guardrail_result.is_violation:
@@ -477,36 +478,60 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 websocket, "generating", THINKING_STATUSES["generating"]["message"]
             )
 
-            # Use LangChain streaming for real AI responses
+            # Use LangGraph integration for intelligent workflow orchestration
             async for (
                 chunk_data
-            ) in langchain_service.generate_conversation_response_streaming(
+            ) in langgraph_integration_service.stream_workflow_with_thinking(
+                user=current_user,
+                interaction=interaction,
                 message=message,
-                context=context_text,
-                image_urls=media_urls,
-                max_tokens=max_tokens,
+                media_files=media_files,
+                websocket=websocket,
             ):
-                # Handle both old string format and new dict format for backward compatibility
+                # Handle LangGraph workflow response format
                 if isinstance(chunk_data, str):
                     chunk_content = chunk_data
                     chunk_timestamp = asyncio.get_event_loop().time()
                     chunk_elapsed = 0
                     chunk_number = 0
-                else:
+                    chunk_type = "token"
+                elif isinstance(chunk_data, dict):
                     chunk_content = chunk_data.get("content", "")
                     chunk_timestamp = chunk_data.get(
                         "timestamp", asyncio.get_event_loop().time()
                     )
                     chunk_elapsed = chunk_data.get("elapsed_time", 0)
                     chunk_number = chunk_data.get("chunk_number", 0)
+                    chunk_type = chunk_data.get("type", "token")
 
-                full_response += chunk_content
+                    # Handle thinking steps
+                    if chunk_type == "thinking":
+                        thinking_steps = chunk_data.get("thinking_steps", [])
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "thinking",
+                                    "content": chunk_content,
+                                    "thinking_steps": thinking_steps,
+                                    "timestamp": chunk_timestamp,
+                                }
+                            )
+                        )
+                        continue
+                else:
+                    continue
+
+                # Only add non-error content to full_response for title generation
+                if not chunk_content.startswith(
+                    "Workflow execution failed"
+                ) and not chunk_content.startswith("Failed to generate"):
+                    full_response += chunk_content
 
                 # Send each chunk with enhanced timing information
                 await websocket.send_text(
                     json.dumps(
                         {
-                            "type": "token",
+                            "type": chunk_type,
                             "content": chunk_content,
                             "timestamp": chunk_timestamp,
                             "elapsed_time": chunk_elapsed,
@@ -518,6 +543,11 @@ async def websocket_stream_conversation(websocket: WebSocket):
             print(
                 f"✅ WebSocket streaming completed. Full response length: {len(full_response)}"
             )
+
+            # Check if we have meaningful content for title generation
+            if not full_response or full_response.strip() == "":
+                print("⚠️ No meaningful content received, skipping title generation")
+                full_response = "No response generated"
 
             # Now save the AI response to database and handle background operations
             try:

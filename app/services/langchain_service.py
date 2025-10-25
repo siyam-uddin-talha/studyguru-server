@@ -276,12 +276,12 @@ class LangChainService:
             }
 
     async def check_guardrails(
-        self, message: str, image_urls: Optional[List[str]] = None
+        self, message: str, media_urls: Optional[List[str]] = None
     ) -> GuardrailOutput:
         """Check content against guardrails using LangChain - optimized for speed"""
         try:
             # Quick check for simple greetings - always allow these
-            if message and not image_urls:
+            if message and not media_urls:
                 from app.constants import SIMPLE_GREETINGS
 
                 message_lower = message.lower().strip()
@@ -305,10 +305,10 @@ class LangChainService:
             chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
 
             # Build content - analyze images if they exist for better accuracy
-            if image_urls:
+            if media_urls:
                 # For images, use vision model to properly analyze educational content
                 print(
-                    f"🛡️ GUARDRAIL: Analyzing {len(image_urls)} image(s) for educational content"
+                    f"🛡️ GUARDRAIL: Analyzing {len(media_urls)} image(s) for educational content"
                 )
 
                 # Use vision model for image analysis
@@ -317,7 +317,7 @@ class LangChainService:
                 )
 
                 # Build multimodal content for vision model
-                multimodal_content = self._build_multimodal_content(message, image_urls)
+                multimodal_content = self._build_multimodal_content(message, media_urls)
 
                 # Run guardrail check with vision model
                 result = await vision_chain.ainvoke(
@@ -350,7 +350,7 @@ class LangChainService:
             )
 
     def _build_multimodal_content(
-        self, message: str, image_urls: Optional[List[str]] = None
+        self, message: str, media_urls: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """Build multimodal content for LangChain messages"""
         content = []
@@ -358,14 +358,32 @@ class LangChainService:
         if message:
             content.append({"type": "text", "text": f"User message: {message}"})
 
-        if image_urls:
-            for url in image_urls:
-                content.append({"type": "image_url", "image_url": {"url": url}})
+        if media_urls:
+            for url in media_urls:
+                content.append(self._create_media_content(url))
 
         if not content:
             content.append({"type": "text", "text": "No content provided"})
 
         return content
+
+    def _create_media_content(self, url: str) -> Dict[str, Any]:
+        """Create appropriate content structure based on media type"""
+        # Extract file extension from URL
+        file_extension = url.lower().split(".")[-1] if "." in url else ""
+
+        # Define media type mappings
+        image_extensions = {"jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"}
+        document_extensions = {"pdf", "doc", "docx", "txt", "rtf"}
+
+        if file_extension in image_extensions:
+            return {"type": "image_url", "image_url": {"url": url}}
+        elif file_extension in document_extensions:
+            # For documents, we'll use text type with a note about the document
+            return {"type": "text", "text": f"Please analyze this document: {url}"}
+        else:
+            # Default to image_url for unknown types (backward compatibility)
+            return {"type": "image_url", "image_url": {"url": url}}
 
     def _is_simple_question(self, message: str) -> bool:
         """Check if a question is simple and doesn't need extensive context processing"""
@@ -413,7 +431,7 @@ class LangChainService:
         self,
         message: str,
         context: str = "",
-        image_urls: Optional[List[str]] = None,
+        media_urls: Optional[List[str]] = None,
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
         max_tokens: int = 5000,  # Updated default max_tokens
@@ -425,7 +443,7 @@ class LangChainService:
 
             # Build system prompt - check if this is a pure document analysis request
             is_document_analysis_only = (
-                not message and image_urls and len(image_urls) > 0
+                not message and media_urls and len(media_urls) > 0
             )
 
             if is_document_analysis_only:
@@ -497,7 +515,7 @@ class LangChainService:
                             "text": f"**CURRENT USER QUESTION:** {message}",
                         }
                     )
-            elif image_urls:
+            elif media_urls:
                 if is_document_analysis_only:
                     # Use the proper document analysis format
                     user_content.append(
@@ -508,12 +526,10 @@ class LangChainService:
                         {"type": "text", "text": "**Document/Image Analysis Request:**"}
                     )
 
-            # Add images
-            if image_urls:
-                for url in image_urls:
-                    user_content.append(
-                        {"type": "image_url", "image_url": {"url": url}}
-                    )
+            # Add media files
+            if media_urls:
+                for url in media_urls:
+                    user_content.append(self._create_media_content(url))
 
             # Create prompt
             prompt = ChatPromptTemplate.from_messages(
@@ -555,7 +571,7 @@ class LangChainService:
         self,
         message: str,
         context: str = "",
-        image_urls: Optional[List[str]] = None,
+        media_urls: Optional[List[str]] = None,
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
         max_tokens: int = 5000,
@@ -567,7 +583,7 @@ class LangChainService:
 
             # Build system prompt (same as non-streaming) - check if this is a pure document analysis request
             is_document_analysis_only = (
-                not message and image_urls and len(image_urls) > 0
+                not message and media_urls and len(media_urls) > 0
             )
 
             if is_document_analysis_only:
@@ -639,7 +655,7 @@ class LangChainService:
                             "text": f"**CURRENT USER QUESTION:** {message}",
                         }
                     )
-            elif image_urls:
+            elif media_urls:
                 if is_document_analysis_only:
                     # Use the proper document analysis format
                     user_content.append(
@@ -650,12 +666,10 @@ class LangChainService:
                         {"type": "text", "text": "**Document/Image Analysis Request:**"}
                     )
 
-            # Add images
-            if image_urls:
-                for url in image_urls:
-                    user_content.append(
-                        {"type": "image_url", "image_url": {"url": url}}
-                    )
+            # Add media files
+            if media_urls:
+                for url in media_urls:
+                    user_content.append(self._create_media_content(url))
 
             # Create prompt
             prompt = ChatPromptTemplate.from_messages(

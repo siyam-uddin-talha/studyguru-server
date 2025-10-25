@@ -200,7 +200,7 @@ async def websocket_simple_stream(websocket: WebSocket):
         async for chunk in langchain_service.generate_conversation_response_streaming(
             message=message,
             context="",  # No context for simple questions to reduce overhead
-            image_urls=[],
+            media_urls=[],
             max_tokens=max_tokens,
         ):
             full_response += chunk
@@ -311,7 +311,7 @@ async def websocket_conversation_stream(websocket: WebSocket):
         async for chunk in langchain_service.generate_conversation_response_streaming(
             message=message,
             context="",  # No context for faster responses
-            image_urls=image_urls,
+            media_urls=image_urls,
             max_tokens=max_tokens,
         ):
             full_response += chunk

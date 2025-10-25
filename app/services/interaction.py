@@ -584,7 +584,7 @@ async def process_conversation_message(
                 result = await langchain_service.generate_conversation_response(
                     message=message or "",
                     context=context_text,
-                    image_urls=media_urls,
+                    media_urls=media_urls,
                     interaction_title=interaction.title if interaction else None,
                     interaction_summary=(
                         interaction.semantic_summary.get("updated_summary")

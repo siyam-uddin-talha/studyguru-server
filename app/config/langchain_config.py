@@ -17,10 +17,16 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 # Import native Google Search tool
 try:
     from google.genai.types import Tool, GoogleSearch
-except ImportError:
+    from google import genai
+    from google.genai import types
 
+    GENAI_AVAILABLE = True
+except ImportError:
     Tool = None
     GoogleSearch = None
+    genai = None
+    types = None
+    GENAI_AVAILABLE = False
 
 from app.config.cache_manager import cache_manager
 from app.core.config import settings
@@ -358,8 +364,9 @@ class StudyGuruModels:
         verbosity="low",
         streaming=True,
         web_search=False,
+        thinking_config=None,
     ):
-        """Get chat model with optional web search capability"""
+        """Get chat model with optional web search capability and thinking config"""
         cache = StudyGuruModels._get_cache()
 
         if StudyGuruModels._is_gemini_model():
@@ -369,6 +376,11 @@ class StudyGuruModels:
                 grounding_tool = Tool(google_search=GoogleSearch())
                 tools = [grounding_tool]
 
+            # Apply thinking config if provided
+            model_kwargs = {}
+            if thinking_config and GENAI_AVAILABLE:
+                model_kwargs.update(thinking_config)
+
             return ChatGoogleGenerativeAI(
                 model="gemini-2.5-pro",
                 temperature=temperature,
@@ -377,9 +389,18 @@ class StudyGuruModels:
                 request_timeout=120,
                 cache=cache,
                 tools=tools,  # Include web search tool if enabled
+                **model_kwargs,
             )
 
         model_name = "gpt-4o" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5"
+
+        # Apply thinking config for GPT models
+        model_kwargs = {}
+        if thinking_config:
+            # For GPT models, use reasoning_effort parameter
+            if "reasoning_effort" in thinking_config:
+                model_kwargs["reasoning_effort"] = thinking_config["reasoning_effort"]
+
         return ChatOpenAI(
             model=model_name,
             temperature=temperature,
@@ -388,6 +409,7 @@ class StudyGuruModels:
             request_timeout=120,
             streaming=streaming,
             cache=cache,
+            **model_kwargs,
         )
 
     @staticmethod
@@ -397,14 +419,20 @@ class StudyGuruModels:
         verbosity: str = "low",
         streaming: bool = True,
         web_search: bool = False,
+        thinking_config=None,
     ):
-        """Get configured vision model with optional web search capability - supports both GPT and Gemini"""
+        """Get configured vision model with optional web search capability and thinking config - supports both GPT and Gemini"""
         if StudyGuruModels._is_gemini_model():
             # Prepare tools list for web search
             tools = []
             if web_search and Tool is not None and GoogleSearch is not None:
                 grounding_tool = Tool(google_search=GoogleSearch())
                 tools = [grounding_tool]
+
+            # Apply thinking config if provided
+            model_kwargs = {}
+            if thinking_config and GENAI_AVAILABLE:
+                model_kwargs.update(thinking_config)
 
             # Gemini 2.5 Pro with vision capabilities
             return ChatGoogleGenerativeAI(
@@ -415,8 +443,18 @@ class StudyGuruModels:
                 request_timeout=120,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
                 tools=tools,  # Include web search tool if enabled
+                **model_kwargs,
             )
         else:
+            # Apply thinking config for GPT models
+            model_kwargs = {}
+            if thinking_config:
+                # For GPT models, use reasoning_effort parameter
+                if "reasoning_effort" in thinking_config:
+                    model_kwargs["reasoning_effort"] = thinking_config[
+                        "reasoning_effort"
+                    ]
+
             # GPT models
             if StudyGuruModels.USE_FALLBACK_MODELS:
                 # Fallback to GPT-4o for compatibility
@@ -428,6 +466,7 @@ class StudyGuruModels:
                     request_timeout=120,
                     streaming=streaming,
                     cache=cache_manager.get_response_cache(),  # Enable response caching
+                    **model_kwargs,
                 )
             else:
                 # GPT-5 configuration - optimized for speed
@@ -440,6 +479,7 @@ class StudyGuruModels:
                     streaming=streaming,
                     # verbosity="low",  # Low verbosity for faster responses
                     cache=cache_manager.get_response_cache(),  # Enable response caching
+                    **model_kwargs,
                 )
 
     @staticmethod
