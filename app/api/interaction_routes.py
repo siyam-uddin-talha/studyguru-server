@@ -343,6 +343,21 @@ async def websocket_stream_conversation(websocket: WebSocket):
             db.add(user_conv)
             await db.flush()
 
+            # Associate media files with the conversation using the junction table
+            if media_objects:
+                from app.models.interaction import conversation_files
+
+                media_tasks = [
+                    db.execute(
+                        conversation_files.insert().values(
+                            conversation_id=str(user_conv.id),
+                            media_id=str(media_obj.id),
+                        )
+                    )
+                    for media_obj in media_objects
+                ]
+                await asyncio.gather(*media_tasks, return_exceptions=True)
+
             # Check guardrails (same as do_conversation)
             try:
                 # Send thinking status for guardrail check

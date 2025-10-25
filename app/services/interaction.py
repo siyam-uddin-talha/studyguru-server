@@ -1459,10 +1459,52 @@ async def _extract_interaction_metadata_fast(
 
         # Handle different content types for response preview
         if isinstance(content_text, dict):
-            # For dictionary responses (like MCQ), convert to string for preview
-            response_preview = str(content_text)[:300]
+            # For dictionary responses (like MCQ), extract meaningful content
+            if content_text.get("type") == "mcq" and "_result" in content_text:
+                questions = content_text.get("_result", {}).get("questions", [])
+                if questions:
+                    # Extract first question for preview
+                    first_question = questions[0]
+                    question_text = first_question.get("question", "")
+                    response_preview = f"{question_text[:200]}"
+                else:
+                    response_preview = "MCQ Generation"
+            else:
+                response_preview = str(content_text)[:300]
         elif isinstance(content_text, str):
-            response_preview = content_text[:300]
+            # For string responses, check if it's MCQ JSON
+            if (
+                content_text.strip().startswith("```json")
+                and "mcq" in content_text.lower()
+            ):
+                # Extract first question from MCQ JSON
+                try:
+                    import json
+                    import re
+
+                    # Extract JSON from markdown
+                    json_match = re.search(
+                        r"```json\s*(\{.*?\})\s*```", content_text, re.DOTALL
+                    )
+                    if json_match:
+                        json_str = json_match.group(1)
+                        data = json.loads(json_str)
+                        if data.get("type") == "mcq" and "_result" in data:
+                            questions = data.get("_result", {}).get("questions", [])
+                            if questions:
+                                first_question = questions[0]
+                                question_text = first_question.get("question", "")
+                                response_preview = f" {question_text[:200]}"
+                            else:
+                                response_preview = "MCQ Generation"
+                        else:
+                            response_preview = content_text[:300]
+                    else:
+                        response_preview = content_text[:300]
+                except:
+                    response_preview = content_text[:300]
+            else:
+                response_preview = content_text[:300]
         else:
             response_preview = str(content_text)[:300]
 
@@ -1477,10 +1519,36 @@ async def _extract_interaction_metadata_fast(
             original_message and original_message.lower().strip() in SIMPLE_GREETINGS
         )
 
+        # Check if this is an MCQ response
+        is_mcq_response = response_preview.startswith("MCQ:")
+
         if is_simple_greeting:
             # For simple greetings, use a generic but appropriate title
             title = "Chat with StudyGuru"
             summary_title = "General conversation and assistance"
+
+        elif is_mcq_response:
+            # For MCQ responses, generate a more specific title
+            try:
+                # Extract topic from the question for better title
+                question_text = response_preview.replace("MCQ:", "").strip()
+                if "math" in question_text.lower() or any(
+                    op in question_text for op in ["+", "-", "×", "÷", "="]
+                ):
+                    title = "Math Practice Questions"
+                    summary_title = "Mathematics MCQ exercises"
+                elif "science" in question_text.lower() or any(
+                    word in question_text.lower()
+                    for word in ["biology", "chemistry", "physics"]
+                ):
+                    title = "Science Practice Questions"
+                    summary_title = "Science MCQ exercises"
+                else:
+                    title = "Practice Questions"
+                    summary_title = "Educational MCQ exercises"
+            except:
+                title = "Practice Questions"
+                summary_title = "Educational MCQ exercises"
 
         else:
             # Use AI generation for more substantive messages

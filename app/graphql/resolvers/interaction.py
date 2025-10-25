@@ -87,6 +87,9 @@ class InteractionQuery:
         offset = (page - 1) * size
 
         # Get user's interaction materials - pinned first, then by creation date
+        # Also load document context to get directly associated files
+        from app.models.context import DocumentContext
+
         result = await db.execute(
             select(Interaction)
             .options(
@@ -114,6 +117,8 @@ class InteractionQuery:
             # For now, we'll get the first media file from the first conversation
             # In the future, you might want to return all files or handle multiple files differently
             media = None
+
+            # Get media from conversations
             if interaction.conversations:
                 for conv in interaction.conversations:
                     if conv.files:
