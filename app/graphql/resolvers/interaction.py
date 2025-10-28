@@ -1,7 +1,7 @@
 import strawberry
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, or_
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import selectinload
 
@@ -12,7 +12,6 @@ from app.graphql.types.interaction import (
     InteractionShareType,
     ConversationType,
     MediaType,
-    DoConversationInput,
     DeleteMediaFileInput,
     UpdateInteractionTitleInput,
     CancelGenerationInput,
@@ -71,7 +70,11 @@ class BackgroundMessageTaskStatus:
 class InteractionQuery:
     @strawberry.field
     async def interactions(
-        self, info, page: Optional[int] = 1, size: Optional[int] = 10
+        self,
+        info,
+        page: Optional[int] = 1,
+        size: Optional[int] = 10,
+        query: Optional[str] = None,
     ) -> InteractionListResponse:
         context = info.context
         current_user = await get_current_user_from_context(context)
@@ -90,24 +93,53 @@ class InteractionQuery:
         # Also load document context to get directly associated files
         from app.models.context import DocumentContext
 
-        result = await db.execute(
+        # Build base query
+        base_query = (
             select(Interaction)
             .options(
                 selectinload(Interaction.conversations).selectinload(Conversation.files)
             )
             .where(Interaction.user_id == current_user.id)
-            .order_by(desc(Interaction.is_pinned), desc(Interaction.created_at))
+        )
+
+        # Add search filter if query is provided
+        if query and query.strip():
+            search_term = f"%{query.strip()}%"
+            base_query = base_query.where(
+                or_(
+                    Interaction.title.ilike(search_term),
+                    Interaction.summary_title.ilike(search_term),
+                )
+            )
+
+        # Execute query with ordering and pagination
+        result = await db.execute(
+            base_query.order_by(
+                desc(Interaction.is_pinned), desc(Interaction.created_at)
+            )
             .offset(offset)
             .limit(size)
         )
         interactions = result.scalars().all()
 
-        # Get total count efficiently
-        total_result = await db.scalar(
+        # Get total count efficiently with same search filter
+        count_query = (
             select(func.count())
             .select_from(Interaction)
             .where(Interaction.user_id == current_user.id)
         )
+
+        # Add search filter to count query if query is provided
+        if query and query.strip():
+            search_term = f"%{query.strip()}%"
+            count_query = count_query.where(
+                or_(
+                    Interaction.title.ilike(search_term),
+                    Interaction.summary_title.ilike(search_term),
+                )
+            )
+
+        total_result = await db.scalar(count_query)
         total = total_result or 0
         # print("total", total)
         # Convert to response types
