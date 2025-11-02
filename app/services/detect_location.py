@@ -8,12 +8,14 @@ import geoip2.errors
 from datetime import datetime
 import pytz
 
+
 @dataclass
 class LocationDetails:
     country: str
     country_code: str
     calling_code: str
     city: str
+
 
 class GetLocation:
     def __init__(self, request_headers: Dict[str, str], remote_address: str):
@@ -111,6 +113,58 @@ class GetLocation:
         except Exception as e:
             return self._get_fallback_location()
 
+    async def get_all_location_details(self) -> Optional[Dict]:
+        """
+        Get all location details from ipapi.co service (returns complete JSON response)
+        Handles localhost/private IP addresses by getting public IP first
+
+        Returns:
+            Dictionary with all location data from ipapi.co or None on error
+        """
+        # Ensure IP is not localhost/private before making API call
+        private_ips = ["127.0.0.1", "::1", "localhost"]
+        is_private = (
+            self.ip in private_ips
+            or self.ip.startswith("192.168.")
+            or self.ip.startswith("10.")
+            or self.ip.startswith("172.")
+        )
+
+        # If still localhost/private, try to get public IP
+        if is_private:
+            try:
+                public_ip = self.get_public_ip_address()
+                if public_ip:
+                    self.ip = public_ip
+                else:
+                    # Fallback to a default IP for testing (Google DNS)
+                    self.ip = "8.8.8.8"
+            except Exception as e:
+                self.ip = "8.8.8.8"  # Fallback
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"https://ipapi.co/{self.ip}/json/",
+                    timeout=10.0,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                # Handle API errors
+                if "error" in data:
+                    return None
+
+                return data
+
+        except httpx.RequestError as e:
+            return None
+        except Exception as e:
+            return None
+
     def _get_fallback_location(self) -> LocationDetails:
         """Provide fallback location data for development/errors"""
         return LocationDetails(
@@ -140,6 +194,7 @@ class GetLocation:
             except:
                 return None
 
+
 def get_current_info(ip: str) -> Optional[str]:
     """
     Get country code from IP using geoip2 (requires MaxMind database)
@@ -161,6 +216,7 @@ def get_current_info(ip: str) -> Optional[str]:
         return None
     except Exception as e:
         return None
+
 
 def get_current_info_fallback(ip: str) -> Optional[str]:
     """

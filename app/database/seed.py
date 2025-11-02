@@ -5,8 +5,9 @@ Database seeding script for StudyGuru Pro
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, init_db
 from app.models.subscription import Subscription, SubscriptionPlan
+from app.database.rbac_seed import seed_rbac
 
 
 async def seed_subscriptions():
@@ -62,8 +63,17 @@ async def seed_subscriptions():
 async def main():
     """Run all seeding functions"""
     print("Starting database seeding...")
-    await seed_subscriptions()
-    print("Database seeding completed!")
+
+    # Initialize database connection
+    # await init_db()
+
+    # # Seed subscriptions
+    # await seed_subscriptions()
+
+    # # Seed RBAC system
+    # await seed_rbac()
+
+    print("\n🎉 Database seeding completed!")
 
 
 if __name__ == "__main__":

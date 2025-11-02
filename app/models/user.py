@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Enum,
     Float,
+    JSON,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -15,14 +16,19 @@ from app.core.database import Base
 import enum
 import uuid
 
+
 class AccountProvider(enum.Enum):
     EMAIL = "EMAIL"
     GOOGLE = "GOOGLE"
 
+
 class UserAccountType(enum.Enum):
+    EXICUTIVE = "EXICUTIVE"
     SUPER_ADMIN = "SUPER_ADMIN"
     ADMIN = "ADMIN"
     USER = "USER"
+    SELLER = "SELLER"
+
 
 class User(Base):
     __tablename__ = "user"
@@ -66,6 +72,7 @@ class User(Base):
     country_id = Column(String(191), ForeignKey("country.id"), nullable=True)
     super_admin = Column(Boolean, default=False, nullable=True)
     last_login_at = Column(DateTime, nullable=True)
+    last_login_details = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=True)
     updated_at = Column(
         DateTime, default=func.now(), onupdate=func.now(), nullable=True
@@ -79,3 +86,6 @@ class User(Base):
     interactions = relationship("Interaction", back_populates="user")
     point_transactions = relationship("PointTransaction", back_populates="user")
     billing_logs = relationship("BillingLog", back_populates="user")
+    module_permissions = relationship(
+        "UserModulePermission", back_populates="user", cascade="all, delete-orphan"
+    )

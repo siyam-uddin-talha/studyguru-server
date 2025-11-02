@@ -45,6 +45,7 @@ async def init_db():
                 pivot,
                 interaction,
                 context,
+                rbac,
             )
 
             # Create tables if they don't exist

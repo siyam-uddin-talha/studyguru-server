@@ -47,6 +47,7 @@ dependencies = [
     "langgraph>=1.0.1",
     "langgraph-checkpoint>=3.0.0",
     "redis>=5.0.0",
+    "geoip2>=5.1.0",
 ]
 
 [build-system]

@@ -36,6 +36,7 @@ from app.helpers.email import (
     send_welcome_email,
 )
 from app.constants.constant import CONSTANTS, COIN, RESPONSE_STATUS
+from app.services.detect_location import GetLocation
 
 
 @strawberry.type
@@ -86,6 +87,24 @@ class AuthMutation:
         context = info.context
         db: AsyncSession = context.db
 
+        # Get location details from request
+        def get_request_headers() -> dict:
+            """Convert FastAPI request headers to dict"""
+            return dict(context.request.headers)
+
+        def get_remote_address() -> str:
+            """Get client IP address from request"""
+            forwarded = context.request.headers.get("X-Forwarded-For")
+            if forwarded:
+                return forwarded.split(",")[0].strip()
+            return context.request.client.host if context.request.client else "unknown"
+
+        # Initialize location detector
+        location_detector = GetLocation(
+            request_headers=get_request_headers(), remote_address=get_remote_address()
+        )
+        location_details = await location_detector.get_all_location_details()
+
         if input.provider == "GOOGLE":
             if not input.credential:
                 return AuthType(
@@ -121,6 +140,8 @@ class AuthMutation:
 
             if existing_user:
                 # Login existing user
+                existing_user.last_login_details = location_details
+                await db.commit()
                 token = create_access_token(data={"sub": existing_user.id})
                 account = await create_user_profile(existing_user)
                 return AuthType(
@@ -157,6 +178,10 @@ class AuthMutation:
                 .where(User.id == new_user.id)
             )
             get_new_user = new_user_result.scalar_one_or_none()
+
+            # Store location details
+            get_new_user.last_login_details = location_details
+            await db.commit()
 
             account = await create_user_profile(get_new_user)
             await send_welcome_email(
@@ -266,6 +291,10 @@ class AuthMutation:
             .where(User.id == new_user.id)
         )
         get_new_user = new_user_result.scalar_one_or_none()
+
+        # Store location details
+        get_new_user.last_login_details = location_details
+        await db.commit()
 
         await send_welcome_email(
             get_new_user.email,

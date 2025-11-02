@@ -9,6 +9,7 @@ from .subscription import (
 from .interaction import Interaction
 from .pivot import Country
 from .media import Media
+from .rbac import Module, UserModulePermission
 
 __all__ = [
     "User",
@@ -22,4 +23,6 @@ __all__ = [
     "Interaction",
     "Media",
     "Country",
+    "Module",
+    "UserModulePermission",
 ]
