@@ -21,6 +21,8 @@ from app.api.sse_routes import router as sse_router
 
 from app.core.database import init_db
 from app.workers.scheduler import start_scheduler
+from app.core.rate_limiter import init_rate_limiter, get_rate_limiter
+from app.core.rate_limit_middleware import RateLimitMiddleware
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -37,9 +39,60 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
     start_scheduler()
+
+    # Initialize rate limiter if enabled
+    if settings.ENABLE_RATE_LIMITING:
+        rate_limiter = init_rate_limiter(
+            redis_url=settings.REDIS_URL,
+            default_limit=settings.RATE_LIMIT_DEFAULT,
+            default_window=settings.RATE_LIMIT_WINDOW,
+        )
+
+        # Set route-specific limits
+        rate_limiter.set_route_limit(
+            "/graphql",
+            settings.RATE_LIMIT_GRAPHQL,
+            settings.RATE_LIMIT_GRAPHQL_WINDOW,
+        )
+        rate_limiter.set_route_limit(
+            "/api/stream/*",
+            settings.RATE_LIMIT_STREAMING,
+            settings.RATE_LIMIT_STREAMING_WINDOW,
+        )
+        rate_limiter.set_route_limit(
+            "/api/sse/*",
+            settings.RATE_LIMIT_STREAMING,
+            settings.RATE_LIMIT_STREAMING_WINDOW,
+        )
+        rate_limiter.set_route_limit(
+            "/api/app/login",
+            settings.RATE_LIMIT_AUTH,
+            settings.RATE_LIMIT_AUTH_WINDOW,
+        )
+        rate_limiter.set_route_limit(
+            "/api/app/register",
+            settings.RATE_LIMIT_AUTH,
+            settings.RATE_LIMIT_AUTH_WINDOW,
+        )
+        rate_limiter.set_route_limit(
+            "/webhook/*",
+            settings.RATE_LIMIT_WEBHOOK,
+            settings.RATE_LIMIT_WEBHOOK_WINDOW,
+        )
+
+        logger.info(
+            f"Rate limiting initialized with backend: "
+            f"{'Redis' if settings.REDIS_URL else 'In-Memory'}"
+        )
+
     yield
+
     # Shutdown
-    pass
+    if settings.ENABLE_RATE_LIMITING:
+        rate_limiter = get_rate_limiter()
+        if rate_limiter:
+            await rate_limiter.cleanup()
+            logger.info("Rate limiter cleaned up")
 
 
 app = FastAPI(
@@ -77,6 +130,19 @@ else:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+
+# Rate limiting middleware (add after CORS)
+if settings.ENABLE_RATE_LIMITING:
+    app.add_middleware(
+        RateLimitMiddleware,
+        exempt_paths=[
+            "/",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/health",  # Health check endpoint
+        ],
     )
 
 # GraphQL router (temporarily disabled due to dependency issues)

@@ -1,6 +1,6 @@
 [project]
 name = "studyguru-pro"
-version = "1.0.0"
+version = "3.1.2"
 description = "StudyGuru Pro - AI-powered study assistant"
 authors = [
     {name = "StudyGuru Team", email = "team@studyguru.com"}
@@ -46,6 +46,7 @@ dependencies = [
     "google-genai>=1.46.0",
     "langgraph>=1.0.1",
     "langgraph-checkpoint>=3.0.0",
+    "redis>=5.0.0",
 ]
 
 [build-system]

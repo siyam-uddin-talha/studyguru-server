@@ -90,6 +90,37 @@ class Settings(BaseSettings):
     CACHE_TTL: int = int(getenv("CACHE_TTL", 3600))  # 1 hour default
     CACHE_MAX_SIZE: int = int(getenv("CACHE_MAX_SIZE", 1000))  # Max cached items
 
+    # Rate Limiting Configuration
+    ENABLE_RATE_LIMITING: bool = (
+        getenv("ENABLE_RATE_LIMITING", "true").lower() == "true"
+    )
+    REDIS_URL: Optional[str] = getenv(
+        "REDIS_URL", None
+    )  # e.g., redis://localhost:6379/0
+    RATE_LIMIT_DEFAULT: int = int(
+        getenv("RATE_LIMIT_DEFAULT", 100)
+    )  # requests per window
+    RATE_LIMIT_WINDOW: int = int(getenv("RATE_LIMIT_WINDOW", 60))  # seconds
+
+    # Route-specific rate limits (format: route=limit,window)
+    RATE_LIMIT_GRAPHQL: int = int(getenv("RATE_LIMIT_GRAPHQL", 60))  # GraphQL endpoint
+    RATE_LIMIT_GRAPHQL_WINDOW: int = int(getenv("RATE_LIMIT_GRAPHQL_WINDOW", 60))
+
+    RATE_LIMIT_STREAMING: int = int(
+        getenv("RATE_LIMIT_STREAMING", 30)
+    )  # Streaming endpoints
+    RATE_LIMIT_STREAMING_WINDOW: int = int(getenv("RATE_LIMIT_STREAMING_WINDOW", 60))
+
+    RATE_LIMIT_AUTH: int = int(getenv("RATE_LIMIT_AUTH", 10))  # Auth endpoints
+    RATE_LIMIT_AUTH_WINDOW: int = int(
+        getenv("RATE_LIMIT_AUTH_WINDOW", 300)
+    )  # 5 minutes
+
+    RATE_LIMIT_WEBHOOK: int = int(
+        getenv("RATE_LIMIT_WEBHOOK", 100)
+    )  # Webhook endpoints
+    RATE_LIMIT_WEBHOOK_WINDOW: int = int(getenv("RATE_LIMIT_WEBHOOK_WINDOW", 60))
+
     ADD_UNIT_ID_1: str = getenv(
         "ADD_UNIT_ID_1", "ca-app-pub-2962676217775659/5723259375"
     )
