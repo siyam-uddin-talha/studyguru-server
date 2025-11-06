@@ -24,6 +24,7 @@ from app.graphql.types.interaction import (
     ShareInteractionResponse,
     ShareStatsResponse,
     LikeDislikeInput,
+    MessageFilter,
 )
 from app.models.interaction import Interaction, InteractionShare
 from app.models.media import Media
@@ -194,10 +195,16 @@ class InteractionQuery:
 
     @strawberry.field
     async def messages(
-        self, info, id: str, limit: Optional[int] = 12, offset: Optional[int] = 0
+        self,
+        info,
+        id: str,
+        limit: Optional[int] = 12,
+        offset: Optional[int] = 0,
+        filter: Optional[MessageFilter] = None,
     ) -> List[ConversationType]:
         """
         Get messages (conversations) for a specific interaction with pagination
+        Supports filtering by role (user or assistant)
         """
         context = info.context
         current_user = await get_current_user_from_context(context)
@@ -207,8 +214,8 @@ class InteractionQuery:
 
         db: AsyncSession = context.db
 
-        # Get conversations for the interaction with pagination
-        result = await db.execute(
+        # Build the base query
+        base_query = (
             select(Conversation)
             .options(selectinload(Conversation.files))
             .join(Interaction)
@@ -217,7 +224,23 @@ class InteractionQuery:
                 Interaction.user_id == current_user.id,
                 Conversation.interaction_id == id,
             )
-            .order_by(desc(Conversation.created_at))
+        )
+
+        # Apply role filter if provided
+        if filter and filter.role:
+            # Map client role values to enum values
+            # Client sends "user" or "assistant", we need to map to ConversationRole enum
+            role_mapping = {
+                "user": ConversationRole.USER,
+                "assistant": ConversationRole.AI,
+            }
+            mapped_role = role_mapping.get(filter.role.lower())
+            if mapped_role:
+                base_query = base_query.where(Conversation.role == mapped_role)
+
+        # Get conversations for the interaction with pagination
+        result = await db.execute(
+            base_query.order_by(desc(Conversation.created_at))
             .offset(offset)
             .limit(limit)
         )
@@ -565,6 +588,229 @@ class InteractionQuery:
             )
             for task in user_tasks
         ]
+
+    @strawberry.field
+    async def get_shared_interaction(
+        self,
+        info,
+        input: GetSharedInteractionInput,
+    ) -> InteractionResponse:
+        """
+        Get a shared interaction by share_id (returns original interaction data for temporary view)
+        Awards 5 coins to the owner when someone visits the shared link (only once per unique visitor)
+        """
+        context = info.context
+        db: AsyncSession = context.db
+        current_user = await get_current_user_from_context(context)
+
+        try:
+            # Get the share record
+            share_result = await db.execute(
+                select(InteractionShare).where(
+                    InteractionShare.share_id == input.share_id,
+                    InteractionShare.is_public == True,
+                )
+            )
+            interaction_share = share_result.scalar_one_or_none()
+
+            if not interaction_share:
+                return InteractionResponse(
+                    success=False, message="Shared interaction not found"
+                )
+
+            # Award coins to the owner for the visit (5 coins per unique visitor)
+            # Only reward if visitor is not the owner and hasn't been rewarded before
+            visitor_user_id = current_user.id if current_user else None
+            # Note: In a real implementation, you'd get visitor_ip from request headers
+            # and visitor_fingerprint from client-side device fingerprinting
+            await award_share_visit_reward(
+                db,
+                interaction_share,
+                visitor_user_id=visitor_user_id,
+                visitor_ip=None,  # Would be extracted from request in real implementation
+                visitor_fingerprint=None,  # Would be provided by client in real implementation
+                reward_amount=5,
+            )
+
+            # Get the original interaction with conversations
+            result = await db.execute(
+                select(Interaction)
+                .options(
+                    selectinload(Interaction.conversations).selectinload(
+                        Conversation.files
+                    )
+                )
+                .where(Interaction.id == interaction_share.original_interaction_id)
+            )
+            original_interaction = result.scalar_one_or_none()
+
+            if not original_interaction:
+                return InteractionResponse(
+                    success=False, message="Original interaction not found"
+                )
+
+            # Convert conversations to the expected format
+            conversations = []
+            for conv in original_interaction.conversations:
+                # Get media files for this conversation
+                media_files = []
+                if conv.files:
+                    for media_file in conv.files:
+                        media_files.append(
+                            MediaType(
+                                id=media_file.id,
+                                original_filename=media_file.original_filename,
+                                s3_key=media_file.s3_key,
+                                file_type=media_file.file_type,
+                                meme_type=media_file.meme_type,
+                                original_size=media_file.original_size,
+                                compressed_size=media_file.compressed_size,
+                                compression_ratio=media_file.compression_ratio,
+                                created_at=media_file.created_at,
+                            )
+                        )
+
+                conversation = ConversationType(
+                    id=conv.id,
+                    interaction_id=original_interaction.id,
+                    role=conv.role.value,
+                    content=conv.content,
+                    question_type=conv.question_type,
+                    detected_language=conv.detected_language,
+                    tokens_used=conv.tokens_used or 0,
+                    points_cost=conv.points_cost or 0,
+                    status=conv.status,
+                    is_hidden=conv.is_hidden,
+                    is_liked=conv.is_liked,
+                    liked_at=conv.liked_at,
+                    error_message=conv.error_message,
+                    created_at=conv.created_at,
+                    updated_at=conv.updated_at,
+                    files=media_files if media_files else None,
+                    point_transaction=None,
+                )
+                conversations.append(conversation)
+
+            # Get associated media through conversations
+            media = None
+            if original_interaction.conversations:
+                for conv in original_interaction.conversations:
+                    if conv.files:
+                        media = conv.files[0]  # Get first file
+                        break
+
+            # Create the interaction type (returning original data for temporary view)
+            interaction_type = InteractionType(
+                id=original_interaction.id,
+                user_id=original_interaction.user_id,
+                title=original_interaction.title,
+                summary_title=original_interaction.summary_title,
+                is_pinned=original_interaction.is_pinned,
+                created_at=original_interaction.created_at,
+                updated_at=original_interaction.updated_at,
+                file=(
+                    MediaType(
+                        id=media.id,
+                        original_filename=media.original_filename,
+                        s3_key=media.s3_key,
+                        file_type=media.file_type,
+                        meme_type=media.meme_type,
+                        original_size=media.original_size,
+                        compressed_size=media.compressed_size,
+                        compression_ratio=media.compression_ratio,
+                        created_at=media.created_at,
+                    )
+                    if media
+                    else None
+                ),
+                conversations=conversations,
+            )
+
+            return InteractionResponse(
+                success=True,
+                message="Shared interaction retrieved successfully",
+                result=interaction_type,
+                interaction_id=original_interaction.id,
+                is_new_interaction=False,
+            )
+
+        except Exception as e:
+            return InteractionResponse(
+                success=False,
+                message=f"Failed to retrieve shared interaction: {str(e)}",
+            )
+
+    @strawberry.field
+    async def get_share_stats(
+        self,
+        info,
+        input: GetShareStatsInput,
+    ) -> ShareStatsResponse:
+        """
+        Get share statistics for an interaction (visits, coins earned, etc.)
+        """
+        context = info.context
+        current_user = await get_current_user_from_context(context)
+
+        if not current_user:
+            return ShareStatsResponse(success=False, message="Authentication required")
+
+        db: AsyncSession = context.db
+
+        try:
+            # Get the share record for this interaction
+            share_result = await db.execute(
+                select(InteractionShare).where(
+                    InteractionShare.original_interaction_id == input.interaction_id
+                )
+            )
+            interaction_share = share_result.scalar_one_or_none()
+
+            if not interaction_share:
+                return ShareStatsResponse(
+                    success=False, message="No share record found for this interaction"
+                )
+
+            # Verify the user owns this interaction
+            interaction_result = await db.execute(
+                select(Interaction).where(
+                    Interaction.id == input.interaction_id,
+                    Interaction.user_id == current_user.id,
+                )
+            )
+            interaction = interaction_result.scalar_one_or_none()
+
+            if not interaction:
+                return ShareStatsResponse(
+                    success=False, message="Interaction not found or access denied"
+                )
+
+            # Calculate total coins earned from visits (5 coins per visit)
+            total_coins_earned = interaction_share.visit_count * 5
+
+            # Create share stats response
+            share_stats = InteractionShareType(
+                id=interaction_share.id,
+                original_interaction_id=interaction_share.original_interaction_id,
+                share_id=interaction_share.share_id,
+                is_public=interaction_share.is_public,
+                visit_count=interaction_share.visit_count,
+                last_visited_at=interaction_share.last_visited_at,
+                created_at=interaction_share.created_at,
+            )
+
+            return ShareStatsResponse(
+                success=True,
+                message="Share statistics retrieved successfully",
+                share_stats=share_stats,
+                total_coins_earned=total_coins_earned,
+            )
+
+        except Exception as e:
+            return ShareStatsResponse(
+                success=False,
+                message=f"Failed to retrieve share statistics: {str(e)}",
+            )
 
 
 @strawberry.type
@@ -1290,229 +1536,6 @@ class InteractionMutation:
             await db.rollback()
             return ShareInteractionResponse(
                 success=False, message=f"Failed to share interaction: {str(e)}"
-            )
-
-    @strawberry.field
-    async def get_shared_interaction(
-        self,
-        info,
-        input: GetSharedInteractionInput,
-    ) -> InteractionResponse:
-        """
-        Get a shared interaction by share_id (returns original interaction data for temporary view)
-        Awards 5 coins to the owner when someone visits the shared link (only once per unique visitor)
-        """
-        context = info.context
-        db: AsyncSession = context.db
-        current_user = await get_current_user_from_context(context)
-
-        try:
-            # Get the share record
-            share_result = await db.execute(
-                select(InteractionShare).where(
-                    InteractionShare.share_id == input.share_id,
-                    InteractionShare.is_public == True,
-                )
-            )
-            interaction_share = share_result.scalar_one_or_none()
-
-            if not interaction_share:
-                return InteractionResponse(
-                    success=False, message="Shared interaction not found"
-                )
-
-            # Award coins to the owner for the visit (5 coins per unique visitor)
-            # Only reward if visitor is not the owner and hasn't been rewarded before
-            visitor_user_id = current_user.id if current_user else None
-            # Note: In a real implementation, you'd get visitor_ip from request headers
-            # and visitor_fingerprint from client-side device fingerprinting
-            await award_share_visit_reward(
-                db,
-                interaction_share,
-                visitor_user_id=visitor_user_id,
-                visitor_ip=None,  # Would be extracted from request in real implementation
-                visitor_fingerprint=None,  # Would be provided by client in real implementation
-                reward_amount=5,
-            )
-
-            # Get the original interaction with conversations
-            result = await db.execute(
-                select(Interaction)
-                .options(
-                    selectinload(Interaction.conversations).selectinload(
-                        Conversation.files
-                    )
-                )
-                .where(Interaction.id == interaction_share.original_interaction_id)
-            )
-            original_interaction = result.scalar_one_or_none()
-
-            if not original_interaction:
-                return InteractionResponse(
-                    success=False, message="Original interaction not found"
-                )
-
-            # Convert conversations to the expected format
-            conversations = []
-            for conv in original_interaction.conversations:
-                # Get media files for this conversation
-                media_files = []
-                if conv.files:
-                    for media_file in conv.files:
-                        media_files.append(
-                            MediaType(
-                                id=media_file.id,
-                                original_filename=media_file.original_filename,
-                                s3_key=media_file.s3_key,
-                                file_type=media_file.file_type,
-                                meme_type=media_file.meme_type,
-                                original_size=media_file.original_size,
-                                compressed_size=media_file.compressed_size,
-                                compression_ratio=media_file.compression_ratio,
-                                created_at=media_file.created_at,
-                            )
-                        )
-
-                conversation = ConversationType(
-                    id=conv.id,
-                    interaction_id=original_interaction.id,
-                    role=conv.role.value,
-                    content=conv.content,
-                    question_type=conv.question_type,
-                    detected_language=conv.detected_language,
-                    tokens_used=conv.tokens_used or 0,
-                    points_cost=conv.points_cost or 0,
-                    status=conv.status,
-                    is_hidden=conv.is_hidden,
-                    is_liked=conv.is_liked,
-                    liked_at=conv.liked_at,
-                    error_message=conv.error_message,
-                    created_at=conv.created_at,
-                    updated_at=conv.updated_at,
-                    files=media_files if media_files else None,
-                    point_transaction=None,
-                )
-                conversations.append(conversation)
-
-            # Get associated media through conversations
-            media = None
-            if original_interaction.conversations:
-                for conv in original_interaction.conversations:
-                    if conv.files:
-                        media = conv.files[0]  # Get first file
-                        break
-
-            # Create the interaction type (returning original data for temporary view)
-            interaction_type = InteractionType(
-                id=original_interaction.id,
-                user_id=original_interaction.user_id,
-                title=original_interaction.title,
-                summary_title=original_interaction.summary_title,
-                is_pinned=original_interaction.is_pinned,
-                created_at=original_interaction.created_at,
-                updated_at=original_interaction.updated_at,
-                file=(
-                    MediaType(
-                        id=media.id,
-                        original_filename=media.original_filename,
-                        s3_key=media.s3_key,
-                        file_type=media.file_type,
-                        meme_type=media.meme_type,
-                        original_size=media.original_size,
-                        compressed_size=media.compressed_size,
-                        compression_ratio=media.compression_ratio,
-                        created_at=media.created_at,
-                    )
-                    if media
-                    else None
-                ),
-                conversations=conversations,
-            )
-
-            return InteractionResponse(
-                success=True,
-                message="Shared interaction retrieved successfully",
-                result=interaction_type,
-                interaction_id=original_interaction.id,
-                is_new_interaction=False,
-            )
-
-        except Exception as e:
-            return InteractionResponse(
-                success=False,
-                message=f"Failed to retrieve shared interaction: {str(e)}",
-            )
-
-    @strawberry.field
-    async def get_share_stats(
-        self,
-        info,
-        input: GetShareStatsInput,
-    ) -> ShareStatsResponse:
-        """
-        Get share statistics for an interaction (visits, coins earned, etc.)
-        """
-        context = info.context
-        current_user = await get_current_user_from_context(context)
-
-        if not current_user:
-            return ShareStatsResponse(success=False, message="Authentication required")
-
-        db: AsyncSession = context.db
-
-        try:
-            # Get the share record for this interaction
-            share_result = await db.execute(
-                select(InteractionShare).where(
-                    InteractionShare.original_interaction_id == input.interaction_id
-                )
-            )
-            interaction_share = share_result.scalar_one_or_none()
-
-            if not interaction_share:
-                return ShareStatsResponse(
-                    success=False, message="No share record found for this interaction"
-                )
-
-            # Verify the user owns this interaction
-            interaction_result = await db.execute(
-                select(Interaction).where(
-                    Interaction.id == input.interaction_id,
-                    Interaction.user_id == current_user.id,
-                )
-            )
-            interaction = interaction_result.scalar_one_or_none()
-
-            if not interaction:
-                return ShareStatsResponse(
-                    success=False, message="Interaction not found or access denied"
-                )
-
-            # Calculate total coins earned from visits (5 coins per visit)
-            total_coins_earned = interaction_share.visit_count * 5
-
-            # Create share stats response
-            share_stats = InteractionShareType(
-                id=interaction_share.id,
-                original_interaction_id=interaction_share.original_interaction_id,
-                share_id=interaction_share.share_id,
-                is_public=interaction_share.is_public,
-                visit_count=interaction_share.visit_count,
-                last_visited_at=interaction_share.last_visited_at,
-                created_at=interaction_share.created_at,
-            )
-
-            return ShareStatsResponse(
-                success=True,
-                message="Share statistics retrieved successfully",
-                share_stats=share_stats,
-                total_coins_earned=total_coins_earned,
-            )
-
-        except Exception as e:
-            return ShareStatsResponse(
-                success=False,
-                message=f"Failed to retrieve share statistics: {str(e)}",
             )
 
     @strawberry.mutation

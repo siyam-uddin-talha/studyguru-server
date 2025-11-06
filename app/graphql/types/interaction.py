@@ -155,3 +155,8 @@ class InteractionListResponse:
     result: Optional[List[InteractionType]] = None
     total: Optional[int] = None
     has_next_page: Optional[bool] = None
+
+
+@strawberry.input
+class MessageFilter:
+    role: Optional[str] = None  # "user" or "assistant" to filter by role

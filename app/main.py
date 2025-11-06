@@ -98,7 +98,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="StudyGuru Pro API",
     description="FastAPI GraphQL API for StudyGuru Pro",
-    version="1.0.0",
     lifespan=lifespan,
 )
 
