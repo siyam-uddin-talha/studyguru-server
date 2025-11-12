@@ -33,10 +33,21 @@ async def process_conversation_message(
     media_files: Optional[List[Dict[str, str]]],
     max_tokens: Optional[int] = None,  # Will be calculated dynamically if not provided
     db: Optional[AsyncSession] = None,  # Database session parameter
+    visualize_model: Optional[str] = None,  # Model for image/document analysis
+    assistant_model: Optional[str] = None,  # Model for text conversation
 ) -> Dict[str, Any]:
     """
     Optimized conversation processor with parallel operations and aggressive caching.
     """
+
+    # Get user's subscription plan for model validation
+    subscription_plan = None
+    if user.purchased_subscription:
+        subscription_plan = user.purchased_subscription.subscription.subscription_plan
+
+    print(f"🔐 User subscription plan: {subscription_plan}")
+    print(f"🤖 Visualize model: {visualize_model or 'default'}")
+    print(f"💬 Assistant model: {assistant_model or 'default'}")
 
     # Validate input - ensure user has provided some content
     if not message or not message.strip():
@@ -370,6 +381,8 @@ async def process_conversation_message(
                             user_id=str(user_id),
                             file_url=media_url,
                             max_tokens=attachment_tokens,
+                            visualize_model=visualize_model,
+                            subscription_plan=subscription_plan,
                         )
 
                         analysis_end = time.time()
@@ -441,7 +454,10 @@ async def process_conversation_message(
                         # Fallback to basic analysis
                         try:
                             basic_analysis = await langchain_service.analyze_document(
-                                file_url=media_url, max_tokens=attachment_tokens
+                                file_url=media_url,
+                                max_tokens=attachment_tokens,
+                                visualize_model=visualize_model,
+                                subscription_plan=subscription_plan,
                             )
                             if basic_analysis.get("type") != "error":
                                 return basic_analysis, None
@@ -592,6 +608,9 @@ async def process_conversation_message(
                         else None
                     ),
                     max_tokens=max_tokens,
+                    visualize_model=visualize_model,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
                 )
 
                 ai_end = time.time()

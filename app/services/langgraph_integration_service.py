@@ -35,6 +35,8 @@ class LangGraphIntegrationService:
         media_files: Optional[List[Dict[str, str]]],
         max_tokens: Optional[int] = None,
         db: Optional[AsyncSession] = None,
+        visualize_model: Optional[str] = None,
+        assistant_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process conversation with LangGraph workflow for complex multi-source tasks
@@ -50,6 +52,8 @@ class LangGraphIntegrationService:
                 media_files=media_files,
                 max_tokens=max_tokens,
                 db=db,
+                visualize_model=visualize_model,
+                assistant_model=assistant_model,
             )
 
         # Analyze if LangGraph workflow is needed
@@ -64,6 +68,8 @@ class LangGraphIntegrationService:
                 media_files=media_files,
                 max_tokens=max_tokens,
                 db=db,
+                visualize_model=visualize_model,
+                assistant_model=assistant_model,
             )
 
         # Use LangGraph workflow for complex tasks
@@ -103,6 +109,8 @@ class LangGraphIntegrationService:
                     media_files=media_files,
                     max_tokens=max_tokens,
                     db=db,
+                    visualize_model=visualize_model,
+                    assistant_model=assistant_model,
                 )
 
         except Exception as e:
@@ -114,6 +122,8 @@ class LangGraphIntegrationService:
                 media_files=media_files,
                 max_tokens=max_tokens,
                 db=db,
+                visualize_model=visualize_model,
+                assistant_model=assistant_model,
             )
 
     async def _should_use_langgraph(
@@ -196,13 +206,31 @@ class LangGraphIntegrationService:
         message: Optional[str],
         media_files: Optional[List[Dict[str, str]]],
         websocket=None,
+        visualize_model: Optional[str] = None,
+        assistant_model: Optional[str] = None,
     ):
         """Stream workflow execution with thinking steps"""
+
+        # Get user's subscription plan
+        subscription_plan = None
+        if user.purchased_subscription:
+            subscription_plan = (
+                user.purchased_subscription.subscription.subscription_plan
+            )
+
+        # Log model selection
+        print(f"🔄 [LANGGRAPH STREAMING] Starting workflow with models:")
+        print(f"   👁️  Visualize Model: {visualize_model or 'default (auto-select)'}")
+        print(f"   💬 Assistant Model: {assistant_model or 'default (auto-select)'}")
+        print(f"   🔐 Subscription Plan: {subscription_plan or 'none'}")
 
         try:
             # Check if LangGraph is available
             if not self.langgraph_available:
                 # Fallback to standard streaming if LangGraph is not available
+                print(
+                    "⚠️ [LANGGRAPH STREAMING] LangGraph not available, using fallback streaming"
+                )
                 from app.services.langchain_service import langchain_service
 
                 async for (
@@ -212,6 +240,9 @@ class LangGraphIntegrationService:
                     context="",
                     media_urls=[],
                     max_tokens=5000,
+                    visualize_model=visualize_model,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
                 ):
                     yield chunk
                 return
@@ -221,6 +252,9 @@ class LangGraphIntegrationService:
 
             if not needs_langgraph:
                 # Use existing streaming with media URLs
+                print(
+                    "✅ [LANGGRAPH STREAMING] Using standard streaming (LangGraph not needed)"
+                )
                 from app.services.langchain_service import langchain_service
 
                 # Extract media URLs from media_files
@@ -237,19 +271,39 @@ class LangGraphIntegrationService:
                     context="",
                     media_urls=media_urls,
                     max_tokens=5000,
+                    visualize_model=visualize_model,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
                 ):
                     yield chunk
                 return
 
             # Stream LangGraph workflow with error handling
+            print("🚀 [LANGGRAPH STREAMING] Using LangGraph workflow for complex task")
             try:
                 async for thinking_step in self._stream_workflow_thinking(
-                    message, media_files, user, interaction, websocket
+                    message,
+                    media_files,
+                    user,
+                    interaction,
+                    websocket,
+                    visualize_model,
+                    assistant_model,
+                    subscription_plan,
                 ):
                     yield thinking_step
             except Exception as e:
                 # Fallback to standard processing if LangGraph fails
-                print(f"⚠️ LangGraph workflow failed: {e}")
+                print(f"⚠️ [LANGGRAPH STREAMING] LangGraph workflow failed: {e}")
+                print(
+                    f"🔄 [LANGGRAPH STREAMING] Falling back to standard streaming with models:"
+                )
+                print(
+                    f"   👁️  Visualize Model: {visualize_model or 'default (auto-select)'}"
+                )
+                print(
+                    f"   💬 Assistant Model: {assistant_model or 'default (auto-select)'}"
+                )
                 from app.services.langchain_service import langchain_service
 
                 async for (
@@ -259,6 +313,9 @@ class LangGraphIntegrationService:
                     context="",
                     media_urls=[],
                     max_tokens=5000,
+                    visualize_model=visualize_model,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
                 ):
                     yield chunk
 
@@ -276,6 +333,9 @@ class LangGraphIntegrationService:
         user: User,
         interaction: Optional[Interaction],
         websocket=None,
+        visualize_model: Optional[str] = None,
+        assistant_model: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ):
         """Stream workflow execution with thinking steps"""
 
@@ -352,6 +412,9 @@ class LangGraphIntegrationService:
                     context="",
                     media_urls=media_urls,
                     max_tokens=5000,
+                    visualize_model=visualize_model,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
                 ):
                     yield chunk
 
@@ -375,6 +438,9 @@ class LangGraphIntegrationService:
                 context="",
                 media_urls=media_urls,
                 max_tokens=5000,
+                visualize_model=visualize_model,
+                assistant_model=assistant_model,
+                subscription_plan=subscription_plan,
             ):
                 yield chunk
 

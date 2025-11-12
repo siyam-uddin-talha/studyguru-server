@@ -31,6 +31,125 @@ except ImportError:
 from app.config.cache_manager import cache_manager
 from app.core.config import settings
 
+# Model mapping for dynamic selection - matches frontend modelService.ts
+MODEL_MAPPING = {
+    # Gemini models
+    "gemini-2.5pro": "gemini-2.5-pro",
+    "gemini-2.5flash": "gemini-2.5-flash",
+    # GPT models
+    "gpt-4.1": "gpt-4.1",
+    "gpt-4.1-mini": "gpt-4.1-mini",
+    "gpt-5": "gpt-5",
+}
+
+
+# Subscription tiers
+class SubscriptionTier:
+    ESSENTIAL = "ESSENTIAL"  # Free tier
+    PLUS = "PLUS"
+    ELITE = "ELITE"
+
+
+def get_model_row(model_name: str) -> Optional[int]:
+    """
+    Determine which row a model belongs to based on model name
+
+    Returns:
+        Row number (1, 2, or 3) or None if model not found
+    """
+    # Extract base model name
+    base_model = model_name.lower()
+
+    # Row 1: Default models - gemini-2.5pro (visualize only), gemini-2.5flash, gpt-4.1 (visualize only), gpt-4.1-mini
+    row1_models = {
+        "gemini-2.5pro-visualize": 1,
+        "gemini-2.5flash": 1,
+        "gemini-2.5flash-assistant": 1,
+        "gpt-4.1-visualize": 1,
+        "gpt-4.1-mini": 1,
+        "gpt-4.1-mini-assistant": 1,
+    }
+
+    # Row 2: PLUS models - gemini-2.5pro (both), gpt-4.1 (both)
+    row2_models = {
+        "gemini-2.5pro-plus-visualize": 2,
+        "gemini-2.5pro-plus-assistant": 2,
+        "gemini-2.5pro": 2,  # When used for both visualize and assistant
+        "gpt-4.1-plus-visualize": 2,
+        "gpt-4.1-plus-assistant": 2,
+        "gpt-4.1": 2,  # When used for both visualize and assistant
+    }
+
+    # Row 3: ELITE models - gpt-5 (both)
+    row3_models = {
+        "gpt-5-elite-visualize": 3,
+        "gpt-5-elite-assistant": 3,
+        "gpt-5": 3,
+    }
+
+    # Check each row
+    if base_model in row1_models:
+        return row1_models[base_model]
+    elif base_model in row2_models:
+        return row2_models[base_model]
+    elif base_model in row3_models:
+        return row3_models[base_model]
+
+    # Fallback: try to detect from base model name
+    if "gemini-2.5flash" in base_model or "gpt-4.1-mini" in base_model:
+        return 1
+    elif "gemini-2.5pro" in base_model or (
+        "gpt-4.1" in base_model and "gpt-5" not in base_model
+    ):
+        # Could be row 1 or row 2, check context
+        if "plus" in base_model or (
+            "visualize" not in base_model and "assistant" not in base_model
+        ):
+            return 2
+        return 1
+    elif "gpt-5" in base_model:
+        return 3
+
+    return None
+
+
+def validate_model_access(model_name: str, subscription_plan: str) -> bool:
+    """
+    Validate if user has access to the selected model based on subscription
+
+    Row 1: Available to all (ESSENTIAL, PLUS, ELITE)
+    Row 2: Available to ESSENTIAL + PLUS only (not ELITE)
+    Row 3: Available to all (ESSENTIAL, PLUS, ELITE)
+
+    Args:
+        model_name: The model name (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
+        subscription_plan: User's subscription plan (ESSENTIAL, PLUS, ELITE)
+
+    Returns:
+        bool: True if user has access, False otherwise
+    """
+    # Get the row for this model
+    row = get_model_row(model_name)
+
+    if row is None:
+        # Unknown model, deny access
+        return False
+
+    # Row 1: Available to all subscribers
+    if row == 1:
+        return True
+
+    # Row 2: Available to ESSENTIAL + PLUS only (not ELITE)
+    if row == 2:
+        return subscription_plan in [SubscriptionTier.ESSENTIAL, SubscriptionTier.PLUS]
+
+    # Row 3: Available to all subscribers
+    if row == 3:
+        return True
+
+    # Default: deny access
+    return False
+
 
 class CompatibleEmbeddings(Embeddings):
     """Embeddings wrapper ensuring compatibility between different models"""
@@ -365,11 +484,51 @@ class StudyGuruModels:
         streaming=True,
         web_search=False,
         thinking_config=None,
+        model_name=None,
+        subscription_plan=None,
     ):
-        """Get chat model with optional web search capability and thinking config"""
+        """Get chat model with optional web search capability and thinking config
+
+        Args:
+            model_name: Specific model to use (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
+                       Can also include type suffix like 'gemini-2.5pro-assistant'
+            subscription_plan: User's subscription plan for access validation
+        """
         cache = StudyGuruModels._get_cache()
 
-        if StudyGuruModels._is_gemini_model():
+        # Clean model name (remove type suffixes for validation and mapping)
+        clean_model_name = model_name
+        if model_name:
+            # Remove type suffixes for validation
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+
+        # Validate model access if subscription plan provided
+        if model_name and subscription_plan:
+            if not validate_model_access(model_name, subscription_plan):
+                raise ValueError(
+                    f"Access denied: User with {subscription_plan} subscription does not have access to model: {model_name}"
+                )
+
+        # Determine the model to use
+        if model_name:
+            # Use specified model - map to actual model name
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+        else:
+            # Fall back to default behavior
+            is_gemini = StudyGuruModels._is_gemini_model()
+            actual_model = (
+                "gemini-2.5-pro"
+                if is_gemini
+                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
+            )
+
+        if is_gemini or (model_name and actual_model.startswith("gemini")):
             # Prepare tools list for web search
             tools = []
             if web_search and Tool is not None and GoogleSearch is not None:
@@ -382,7 +541,7 @@ class StudyGuruModels:
                 model_kwargs.update(thinking_config)
 
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-pro",
+                model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
@@ -392,8 +551,7 @@ class StudyGuruModels:
                 **model_kwargs,
             )
 
-        model_name = "gpt-4o" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5"
-
+        # GPT models
         # Apply thinking config for GPT models
         model_kwargs = {}
         if thinking_config:
@@ -402,7 +560,7 @@ class StudyGuruModels:
                 model_kwargs["reasoning_effort"] = thinking_config["reasoning_effort"]
 
         return ChatOpenAI(
-            model=model_name,
+            model=actual_model,
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
             max_tokens=max_tokens,
@@ -420,9 +578,47 @@ class StudyGuruModels:
         streaming: bool = True,
         web_search: bool = False,
         thinking_config=None,
+        model_name=None,
+        subscription_plan=None,
     ):
-        """Get configured vision model with optional web search capability and thinking config - supports both GPT and Gemini"""
-        if StudyGuruModels._is_gemini_model():
+        """Get configured vision model with optional web search capability and thinking config - supports both GPT and Gemini
+
+        Args:
+            model_name: Specific model to use (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
+                       Can also include type suffix like 'gpt-4.1-visualize'
+            subscription_plan: User's subscription plan for access validation
+        """
+        # Clean model name (remove type suffixes for validation and mapping)
+        clean_model_name = model_name
+        if model_name:
+            # Remove type suffixes for validation
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+
+        # Validate model access if subscription plan provided
+        if model_name and subscription_plan:
+            if not validate_model_access(model_name, subscription_plan):
+                raise ValueError(
+                    f"Access denied: User with {subscription_plan} subscription does not have access to model: {model_name}"
+                )
+
+        # Determine the model to use
+        if model_name:
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+        else:
+            is_gemini = StudyGuruModels._is_gemini_model()
+            actual_model = (
+                "gemini-2.5-pro"
+                if is_gemini
+                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
+            )
+
+        if is_gemini or (model_name and actual_model.startswith("gemini")):
             # Prepare tools list for web search
             tools = []
             if web_search and Tool is not None and GoogleSearch is not None:
@@ -434,9 +630,9 @@ class StudyGuruModels:
             if thinking_config and GENAI_AVAILABLE:
                 model_kwargs.update(thinking_config)
 
-            # Gemini 2.5 Pro with vision capabilities
+            # Gemini with vision capabilities
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-pro",  # Gemini with vision support
+                model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
@@ -456,31 +652,16 @@ class StudyGuruModels:
                     ]
 
             # GPT models
-            if StudyGuruModels.USE_FALLBACK_MODELS:
-                # Fallback to GPT-4o for compatibility
-                return ChatOpenAI(
-                    model="gpt-4o",  # Fallback model
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,
-                    request_timeout=120,
-                    streaming=streaming,
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                    **model_kwargs,
-                )
-            else:
-                # GPT-5 configuration - optimized for speed
-                return ChatOpenAI(
-                    model="gpt-5",  # GPT-5 with enhanced vision capabilities
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,
-                    request_timeout=120,  # Reduced timeout for faster processing
-                    streaming=streaming,
-                    # verbosity="low",  # Low verbosity for faster responses
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                    **model_kwargs,
-                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=max_tokens,
+                request_timeout=120,
+                streaming=streaming,
+                cache=cache_manager.get_response_cache(),  # Enable response caching
+                **model_kwargs,
+            )
 
     @staticmethod
     def get_guardrail_model(
@@ -502,7 +683,7 @@ class StudyGuruModels:
             if StudyGuruModels.USE_FALLBACK_MODELS:
                 # Fallback to GPT-4o-mini for compatibility
                 return ChatOpenAI(
-                    model="gpt-4o-mini",  # Fallback model
+                    model="gpt-4.1-mini",  # Fallback model
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
@@ -541,7 +722,7 @@ class StudyGuruModels:
             if StudyGuruModels.USE_FALLBACK_MODELS:
                 # Fallback to GPT-4o for compatibility
                 return ChatOpenAI(
-                    model="gpt-4o",  # Fallback model
+                    model="gpt-4.1",  # Fallback model
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,
@@ -595,7 +776,7 @@ class StudyGuruModels:
             if StudyGuruModels.USE_FALLBACK_MODELS:
                 # Fallback to GPT-4o-mini for compatibility
                 return ChatOpenAI(
-                    model="gpt-4o-mini",  # Fallback model
+                    model="gpt-4.1-mini",  # Fallback model
                     temperature=temperature,
                     openai_api_key=settings.OPENAI_API_KEY,
                     max_tokens=max_tokens,  # Very low token limit for cost efficiency
@@ -814,7 +995,7 @@ class StudyGuruChains:
             # Use GPT-4o-mini for better JSON stability instead of GPT-5-mini
             # GPT-5 models have issues with response_format parameter
             model = ChatOpenAI(
-                model="gpt-4o-mini",  # More reliable for JSON output
+                model="gpt-4.1-mini",  # More reliable for JSON output
                 temperature=0.3,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=300,  # Increased to ensure complete JSON response
@@ -840,7 +1021,7 @@ class StudyGuruChains:
         else:
             # Use GPT-4o-mini for better stability and disable reasoning to reserve tokens for output
             model = ChatOpenAI(
-                model="gpt-4o-mini",  # More reliable for JSON output
+                model="gpt-4.1-mini",  # More reliable for JSON output
                 temperature=0.2,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=2000,  # Aggressively increased to handle reasoning + output
@@ -866,7 +1047,7 @@ class StudyGuruChains:
         else:
             # Use GPT-4o-mini for better stability and increased token limits
             model = ChatOpenAI(
-                model="gpt-4o-mini",  # More reliable for JSON output
+                model="gpt-4.1-mini",  # More reliable for JSON output
                 temperature=0.2,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=1500,  # Aggressively increased to handle longer updates

@@ -141,12 +141,20 @@ class BackgroundMessageService:
             from app.services.interaction import process_conversation_message
             from app.models.user import User
             from app.models.interaction import Interaction
+            from app.models.subscription import PurchasedSubscription
             from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
 
             async with AsyncSessionLocal() as db:
-                # Get user
+                # Get user with eager loading of purchased_subscription
                 user_result = await db.execute(
-                    select(User).where(User.id == task.user_id)
+                    select(User)
+                    .options(
+                        selectinload(User.purchased_subscription).selectinload(
+                            PurchasedSubscription.subscription
+                        )
+                    )
+                    .where(User.id == task.user_id)
                 )
                 user = user_result.scalar_one_or_none()
 

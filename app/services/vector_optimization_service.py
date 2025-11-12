@@ -25,16 +25,7 @@ from pymilvus import DataType, FieldSchema, CollectionSchema
 
 from app.core.config import settings
 from app.services.langchain_service import langchain_service
-
-try:
-    from app.core.cache import cache_user_context, get_cached_user_context
-except ImportError:
-    # Fallback if cache module is not available
-    async def cache_user_context(key: str, data: dict, ttl: int = 300):
-        pass
-
-    async def get_cached_user_context(key: str):
-        return None
+from app.services.cache_service import cache_service
 
 
 @dataclass
@@ -93,7 +84,7 @@ class VectorOptimizationService:
         try:
             # Check cache first
             cache_key = f"hybrid_search_{hash(str(search_query))}"
-            cached_result = await get_cached_user_context(cache_key)
+            cached_result = await cache_service.get(cache_key)
             if cached_result:
                 return [
                     SearchResult(**result)
@@ -125,7 +116,7 @@ class VectorOptimizationService:
 
             # Cache results
             cache_data = [result.__dict__ for result in final_results]
-            await cache_user_context(
+            await cache_service.set(
                 cache_key, {"results": cache_data}, ttl=self._cache_ttl
             )
 

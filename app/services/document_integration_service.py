@@ -84,6 +84,8 @@ class DocumentIntegrationService:
         user_id: str,
         file_url: str,
         max_tokens: int = 2000,
+        visualize_model: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ) -> DocumentAnalysis:
         """
         Comprehensive document processing with multi-level analysis
@@ -99,7 +101,10 @@ class DocumentIntegrationService:
             print(f"📄 STEP 1 START: Basic analysis at {step1_start:.3f}")
 
             basic_analysis = await langchain_service.analyze_document(
-                file_url=file_url, max_tokens=max_tokens
+                file_url=file_url,
+                max_tokens=max_tokens,
+                visualize_model=visualize_model,
+                subscription_plan=subscription_plan,
             )
 
             step1_end = time.time()

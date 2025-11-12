@@ -15,6 +15,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
 
 from app.core.database import get_db
@@ -23,6 +24,7 @@ from app.helpers.websocket_auth import get_current_user_from_websocket
 from app.models.user import User
 from app.models.interaction import Interaction, Conversation, ConversationRole
 from app.models.media import Media
+from app.models.subscription import PurchasedSubscription
 from app.services.interaction import process_conversation_message
 from app.services.langchain_service import langchain_service
 from app.services.langgraph_integration_service import langgraph_integration_service
@@ -129,8 +131,16 @@ async def get_user_from_token(
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # Fetch user from database
-    result = await db.execute(select(User).where(User.id == user_id))
+    # Fetch user from database with eager loading of purchased_subscription
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.purchased_subscription).selectinload(
+                PurchasedSubscription.subscription
+            )
+        )
+        .where(User.id == user_id)
+    )
     user = result.scalar_one_or_none()
 
     if user is None:
@@ -193,8 +203,16 @@ async def websocket_stream_conversation(websocket: WebSocket):
         db = await db_gen.__anext__()
 
         try:
-            # Get user from database
-            result = await db.execute(select(User).where(User.id == user_id))
+            # Get user from database with eager loading of purchased_subscription
+            result = await db.execute(
+                select(User)
+                .options(
+                    selectinload(User.purchased_subscription).selectinload(
+                        PurchasedSubscription.subscription
+                    )
+                )
+                .where(User.id == user_id)
+            )
             current_user = result.scalar_one_or_none()
 
             if not current_user:
@@ -218,6 +236,23 @@ async def websocket_stream_conversation(websocket: WebSocket):
             interaction_id = payload.get("interaction_id")
             media_files = payload.get("media_files", [])
             max_tokens = payload.get("max_tokens", 5000)
+            visualize_model = payload.get(
+                "visualize_model"
+            )  # Model for document analysis
+            assistant_model = payload.get(
+                "assistant_model"
+            )  # Model for text conversation
+
+            # Log model selection for streaming
+            print(f"📊 [STREAMING] Model Selection:")
+            print(
+                f"   👁️  Visualize Model: {visualize_model or 'default (auto-select)'}"
+            )
+            print(
+                f"   💬 Assistant Model: {assistant_model or 'default (auto-select)'}"
+            )
+            print(f"   📝 Message: {message[:100] if message else 'No message'}")
+            print(f"   📎 Media Files: {len(media_files) if media_files else 0}")
 
             # Validate input
             if not message or not message.strip():
@@ -502,6 +537,8 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 message=message,
                 media_files=media_files,
                 websocket=websocket,
+                visualize_model=visualize_model,
+                assistant_model=assistant_model,
             ):
                 # Handle LangGraph workflow response format
                 if isinstance(chunk_data, str):

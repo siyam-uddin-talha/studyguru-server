@@ -172,7 +172,11 @@ class LangChainService:
             self.vector_store = None
 
     async def analyze_document(
-        self, file_url: str, max_tokens: int = 1000
+        self,
+        file_url: str,
+        max_tokens: int = 1000,
+        visualize_model: Optional[str] = None,  # Model for document analysis
+        subscription_plan: Optional[str] = None,  # User's subscription plan
     ) -> Dict[str, Any]:
         """Analyze document using LangChain with vision capabilities"""
         import time
@@ -206,7 +210,18 @@ class LangChainService:
             )
 
             # Create chain with vision model and parser
-            chain = analysis_prompt | self.vision_llm | self.document_parser
+            # Use dynamic model if provided
+            if visualize_model:
+                print(f"🔍 Using custom vision model for analysis: {visualize_model}")
+                vision_model = StudyGuruConfig.MODELS.get_vision_model(
+                    temperature=0.3,
+                    max_tokens=max_tokens,
+                    model_name=visualize_model,
+                    subscription_plan=subscription_plan,
+                )
+                chain = analysis_prompt | vision_model | self.document_parser
+            else:
+                chain = analysis_prompt | self.vision_llm | self.document_parser
 
             # Run analysis (no variables needed since we constructed the prompt directly)
             print(f"🔍 LANGCHAIN VISION MODEL CALL START: {time.time():.3f}")
@@ -435,6 +450,11 @@ class LangChainService:
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
         max_tokens: int = 5000,  # Updated default max_tokens
+        visualize_model: Optional[str] = None,  # Model for image/document analysis
+        assistant_model: Optional[str] = None,  # Model for text conversation
+        subscription_plan: Optional[
+            str
+        ] = None,  # User's subscription plan for validation
     ) -> Tuple[str, int, int, int]:
         """Generate conversation response using LangChain with optimized settings"""
         try:
@@ -542,15 +562,25 @@ class LangChainService:
             # Create chain with optimized model
             if is_document_analysis_only:
                 # Use vision model and document parser for pure document analysis
+                model_to_use = visualize_model or None
+                print(f"🔍 Using vision model: {model_to_use or 'default'}")
                 optimized_llm = StudyGuruConfig.MODELS.get_vision_model(
-                    temperature=0.3, max_tokens=max_tokens
+                    temperature=0.3,
+                    max_tokens=max_tokens,
+                    model_name=model_to_use,
+                    subscription_plan=subscription_plan,
                 )
                 chain = prompt | optimized_llm | self.document_parser
                 print("🔍 Using vision model and document parser for document analysis")
             else:
                 # Use chat model and string parser for regular conversations
+                model_to_use = assistant_model or None
+                print(f"💬 Using chat model: {model_to_use or 'default'}")
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
-                    temperature=0.2, max_tokens=max_tokens
+                    temperature=0.2,
+                    max_tokens=max_tokens,
+                    model_name=model_to_use,
+                    subscription_plan=subscription_plan,
                 )
                 chain = prompt | optimized_llm | self.string_parser
 
@@ -575,6 +605,11 @@ class LangChainService:
         interaction_title: Optional[str] = None,
         interaction_summary: Optional[str] = None,
         max_tokens: int = 5000,
+        visualize_model: Optional[str] = None,  # Model for image/document analysis
+        assistant_model: Optional[str] = None,  # Model for text conversation
+        subscription_plan: Optional[
+            str
+        ] = None,  # User's subscription plan for validation
     ):
         """Generate streaming conversation response for faster perceived performance"""
         try:
@@ -682,24 +717,42 @@ class LangChainService:
             # Create streaming chain with optimized settings
             if is_document_analysis_only:
                 # Use vision model for pure document analysis (streaming not supported for document parser)
+                model_to_use = visualize_model or None
+                print(
+                    f"🔍 [STREAMING] Requested vision model: {model_to_use or 'default (auto-select)'}"
+                )
                 optimized_llm = StudyGuruConfig.MODELS.get_vision_model(
-                    temperature=0.3, max_tokens=max_tokens
+                    temperature=0.3,
+                    max_tokens=max_tokens,
+                    model_name=model_to_use,
+                    subscription_plan=subscription_plan,
+                )
+                # Log actual model being used
+                actual_model = getattr(optimized_llm, "model", "unknown")
+                print(
+                    f"✅ [STREAMING] Using vision model: {actual_model} for document analysis"
                 )
                 chain = prompt | optimized_llm
-
-                print("🔍 Using vision model for document analysis (streaming)")
             else:
                 # Use chat model for regular conversations with speed optimizations
+                model_to_use = assistant_model or None
+                print(
+                    f"💬 [STREAMING] Requested chat model: {model_to_use or 'default (auto-select)'}"
+                )
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
                     temperature=0.1,  # Lower temperature for faster, more deterministic responses
                     max_tokens=max_tokens,
+                    model_name=model_to_use,
+                    subscription_plan=subscription_plan,
                     # reasoning_effort="low",  # Minimal reasoning for speed
                     # verbosity="low",  # Minimal verbosity for speed
                 )
-                chain = prompt | optimized_llm
+                # Log actual model being used
+                actual_model = getattr(optimized_llm, "model", "unknown")
                 print(
-                    "🔍 Using optimized chat model for streaming (low reasoning, low verbosity)"
+                    f"✅ [STREAMING] Using chat model: {actual_model} (temperature=0.1, optimized for speed)"
                 )
+                chain = prompt | optimized_llm
 
             # Stream response using direct model streaming
             full_response = ""

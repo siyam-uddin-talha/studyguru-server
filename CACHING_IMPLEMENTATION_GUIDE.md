@@ -21,7 +21,7 @@ This guide explains the comprehensive caching implementation in StudyGuru Pro, w
 ```python
 # Automatically enabled in all models
 model = ChatOpenAI(
-    model="gpt-4o",
+    model="gpt-4.1",
     cache=cache_manager.get_response_cache()  # Response caching enabled
 )
 ```

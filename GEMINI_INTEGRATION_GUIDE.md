@@ -16,8 +16,8 @@ StudyGuru Pro now supports both OpenAI GPT models and Google Gemini models. You 
 
 ### GPT Models (Fallback):
 
-- **gpt-4o**: Main chat and vision model
-- **gpt-4o-mini**: Fast, cost-effective model for guardrails and titles
+- **gpt-4.1**: Main chat and vision model
+- **gpt-4.1-mini**: Fast, cost-effective model for guardrails and titles
 - **text-embedding-3-small**: Embeddings model
 
 ## Configuration
@@ -84,9 +84,9 @@ def _is_gemini_model() -> bool:
 
 ### 🔄 Automatic Model Selection:
 
-- **Chat Model**: `gemini-2.0-flash-exp` (Gemini) vs `gpt-4o` (GPT)
-- **Vision Model**: `gemini-2.0-flash-exp` (Gemini) vs `gpt-4o` (GPT)
-- **Guardrail Model**: `gemini-1.5-flash` (Gemini) vs `gpt-4o-mini` (GPT)
+- **Chat Model**: `gemini-2.0-flash-exp` (Gemini) vs `gpt-4.1` (GPT)
+- **Vision Model**: `gemini-2.0-flash-exp` (Gemini) vs `gpt-4.1` (GPT)
+- **Guardrail Model**: `gemini-1.5-flash` (Gemini) vs `gpt-4.1-mini` (GPT)
 - **Embeddings**: `models/embedding-001` (Gemini) vs `text-embedding-3-small` (GPT)
 
 ## Vector Store Compatibility
