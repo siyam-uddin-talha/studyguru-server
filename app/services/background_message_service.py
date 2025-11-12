@@ -32,6 +32,8 @@ class BackgroundMessageTask:
     message: str
     media_files: List[Dict[str, Any]]
     max_tokens: int
+    visualize_model: Optional[str] = None
+    assistant_model: Optional[str] = None
     status: MessageTaskStatus = MessageTaskStatus.PENDING
     priority: MessageTaskPriority = MessageTaskPriority.NORMAL
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -66,6 +68,8 @@ class BackgroundMessageService:
         message: str,
         media_files: List[Dict[str, Any]],
         max_tokens: int,
+        visualize_model: Optional[str] = None,
+        assistant_model: Optional[str] = None,
         priority: MessageTaskPriority = MessageTaskPriority.NORMAL,
         max_retries: int = 3,
     ) -> str:
@@ -79,6 +83,8 @@ class BackgroundMessageService:
             message=message,
             media_files=media_files,
             max_tokens=max_tokens,
+            visualize_model=visualize_model,
+            assistant_model=assistant_model,
             priority=priority,
             max_retries=max_retries,
         )
@@ -183,6 +189,8 @@ class BackgroundMessageService:
                     media_files=task.media_files if task.media_files else None,
                     max_tokens=task.max_tokens,
                     db=db,
+                    visualize_model=task.visualize_model,
+                    assistant_model=task.assistant_model,
                 )
 
                 if result.get("success", False):

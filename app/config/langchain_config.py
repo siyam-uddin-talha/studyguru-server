@@ -15,18 +15,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 # Import native Google Search tool
-try:
-    from google.genai.types import Tool, GoogleSearch
-    from google import genai
-    from google.genai import types
+from google.genai.types import Tool, GoogleSearch
 
-    GENAI_AVAILABLE = True
-except ImportError:
-    Tool = None
-    GoogleSearch = None
-    genai = None
-    types = None
-    GENAI_AVAILABLE = False
 
 from app.config.cache_manager import cache_manager
 from app.core.config import settings
@@ -586,7 +576,7 @@ class StudyGuruModels:
 
             # Apply thinking config if provided
             model_kwargs = {}
-            if thinking_config and GENAI_AVAILABLE:
+            if thinking_config:
                 model_kwargs.update(thinking_config)
 
             return ChatGoogleGenerativeAI(
@@ -706,7 +696,7 @@ class StudyGuruModels:
 
             # Apply thinking config if provided
             model_kwargs = {}
-            if thinking_config and GENAI_AVAILABLE:
+            if thinking_config:
                 model_kwargs.update(thinking_config)
 
             # Gemini with vision capabilities
@@ -744,81 +734,181 @@ class StudyGuruModels:
 
     @staticmethod
     def get_guardrail_model(
-        temperature: float = 0.1, max_tokens: int = 500, verbosity: str = "low"
+        temperature: float = 0.1,
+        max_tokens: int = 500,
+        verbosity: str = "low",
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ):
-        """Get configured guardrail model - supports both GPT and Gemini"""
-        if StudyGuruModels._is_gemini_model():
-            # Gemini 2.5 Flash for cost efficiency (equivalent to GPT-4o-mini)
+        """Get configured guardrail model - supports both GPT and Gemini
+
+        Args:
+            model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
+                       Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
+                       If not provided, uses default assistant model based on LLM_MODEL setting
+            subscription_plan: User's subscription plan for access validation
+        """
+        cache = StudyGuruModels._get_cache()
+
+        # Clean model name (remove type suffixes for validation and mapping)
+        clean_model_name = model_name
+        if model_name:
+            # Remove type suffixes for validation
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+
+        # Validate model access if subscription plan provided
+        if model_name and subscription_plan:
+            if not validate_model_access(model_name, subscription_plan):
+                raise ValueError(
+                    f"Access denied: User with {subscription_plan} subscription does not have access to model: {model_name}"
+                )
+
+        # Determine the model to use
+        if model_name:
+            # Use specified model - map to actual model name
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+            is_kimi = actual_model.startswith("kimi")
+        else:
+            # Fall back to default behavior
+            is_gemini = StudyGuruModels._is_gemini_model()
+            is_kimi = False
+            actual_model = (
+                "gemini-2.5-flash"
+                if is_gemini
+                else (
+                    "gpt-4.1-mini"
+                    if StudyGuruModels.USE_FALLBACK_MODELS
+                    else "gpt-5-mini"
+                )
+            )
+
+        # Moonshot AI (Kimi) models
+        if is_kimi or (model_name and actual_model.startswith("kimi")):
+            if not settings.MOONSHOT_API_KEY:
+                raise ValueError(
+                    "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
+                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.MOONSHOT_API_KEY,
+                base_url="https://api.moonshot.ai/v1",
+                max_tokens=max_tokens,
+                request_timeout=15,
+                cache=cache,
+            )
+
+        if is_gemini or (model_name and actual_model.startswith("gemini")):
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",  # Fast and cost-effective model
+                model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
                 request_timeout=15,
-                cache=cache_manager.get_response_cache(),  # Enable response caching
+                cache=cache,
             )
         else:
-            # GPT models
-            if StudyGuruModels.USE_FALLBACK_MODELS:
-                # Fallback to GPT-4o-mini for compatibility
-                return ChatOpenAI(
-                    model="gpt-4.1-mini",  # Fallback model
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,
-                    request_timeout=15,
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                )
-            else:
-                # GPT-5 Mini configuration
-                return ChatOpenAI(
-                    model="gpt-5-mini",  # GPT-5 Mini: 83% more cost-effective than GPT-5
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,
-                    request_timeout=15,  # Fast timeout for guardrails
-                    # verbosity=verbosity,  # Control response length and detail
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=max_tokens,
+                request_timeout=15,
+                cache=cache,
+            )
 
     @staticmethod
     def get_complex_reasoning_model(
-        temperature: float = 0.1, max_tokens: int = 5000, verbosity: str = "medium"
+        temperature: float = 0.1,
+        max_tokens: int = 5000,
+        verbosity: str = "medium",
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ):
-        """Get configured model for complex reasoning tasks - supports both GPT and Gemini"""
-        if StudyGuruModels._is_gemini_model():
-            # Gemini 2.5 Pro for complex reasoning
+        """Get configured model for complex reasoning tasks - supports both GPT and Gemini
+
+        Args:
+            model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
+                       Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
+                       If not provided, uses default assistant model based on LLM_MODEL setting
+            subscription_plan: User's subscription plan for access validation
+        """
+        cache = StudyGuruModels._get_cache()
+
+        # Clean model name (remove type suffixes for validation and mapping)
+        clean_model_name = model_name
+        if model_name:
+            # Remove type suffixes for validation
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+
+        # Validate model access if subscription plan provided
+        if model_name and subscription_plan:
+            if not validate_model_access(model_name, subscription_plan):
+                raise ValueError(
+                    f"Access denied: User with {subscription_plan} subscription does not have access to model: {model_name}"
+                )
+
+        # Determine the model to use
+        if model_name:
+            # Use specified model - map to actual model name
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+            is_kimi = actual_model.startswith("kimi")
+        else:
+            # Fall back to default behavior
+            is_gemini = StudyGuruModels._is_gemini_model()
+            is_kimi = False
+            actual_model = (
+                "gemini-2.5-pro"
+                if is_gemini
+                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
+            )
+
+        # Moonshot AI (Kimi) models
+        if is_kimi or (model_name and actual_model.startswith("kimi")):
+            if not settings.MOONSHOT_API_KEY:
+                raise ValueError(
+                    "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
+                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.MOONSHOT_API_KEY,
+                base_url="https://api.moonshot.ai/v1",
+                max_tokens=max_tokens,
+                request_timeout=150,
+                cache=cache,
+            )
+
+        if is_gemini or (model_name and actual_model.startswith("gemini")):
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-pro",  # Latest Gemini for complex tasks
+                model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
                 request_timeout=120,
-                cache=cache_manager.get_response_cache(),  # Enable response caching
+                cache=cache,
             )
         else:
-            # GPT models
-            if StudyGuruModels.USE_FALLBACK_MODELS:
-                # Fallback to GPT-4o for compatibility
-                return ChatOpenAI(
-                    model="gpt-4.1",  # Fallback model
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,
-                    request_timeout=120,
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                )
-            else:
-                # GPT-5 configuration
-                return ChatOpenAI(
-                    model="gpt-5",  # GPT-5 for complex reasoning
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,
-                    request_timeout=150,  # Increased timeout for complex reasoning with high effort
-                    # verbosity=verbosity,  # Medium verbosity for complex reasoning tasks
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=max_tokens,
+                request_timeout=150,
+                cache=cache,
+            )
 
     @staticmethod
     @lru_cache(maxsize=1)
@@ -837,42 +927,94 @@ class StudyGuruModels:
 
     @staticmethod
     def get_title_model(
-        temperature: float = 0.3, max_tokens: int = 100, verbosity: str = "low"
+        temperature: float = 0.3,
+        max_tokens: int = 100,
+        verbosity: str = "low",
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ):
-        """Get configured title generation model - supports both GPT and Gemini"""
-        if StudyGuruModels._is_gemini_model():
-            # Gemini 2.5 Flash for cost efficiency
+        """Get configured title generation model - supports both GPT and Gemini
+
+        Args:
+            model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
+                       Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
+                       If not provided, uses default assistant model based on LLM_MODEL setting
+            subscription_plan: User's subscription plan for access validation
+        """
+        cache = StudyGuruModels._get_cache()
+
+        # Clean model name (remove type suffixes for validation and mapping)
+        clean_model_name = model_name
+        if model_name:
+            # Remove type suffixes for validation
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+
+        # Validate model access if subscription plan provided
+        if model_name and subscription_plan:
+            if not validate_model_access(model_name, subscription_plan):
+                raise ValueError(
+                    f"Access denied: User with {subscription_plan} subscription does not have access to model: {model_name}"
+                )
+
+        # Determine the model to use
+        if model_name:
+            # Use specified model - map to actual model name
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+            is_kimi = actual_model.startswith("kimi")
+        else:
+            # Fall back to default behavior
+            is_gemini = StudyGuruModels._is_gemini_model()
+            is_kimi = False
+            actual_model = (
+                "gemini-2.5-flash"
+                if is_gemini
+                else (
+                    "gpt-4.1-mini"
+                    if StudyGuruModels.USE_FALLBACK_MODELS
+                    else "gpt-5-mini"
+                )
+            )
+
+        # Moonshot AI (Kimi) models
+        if is_kimi or (model_name and actual_model.startswith("kimi")):
+            if not settings.MOONSHOT_API_KEY:
+                raise ValueError(
+                    "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
+                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.MOONSHOT_API_KEY,
+                base_url="https://api.moonshot.ai/v1",
+                max_tokens=max_tokens,
+                request_timeout=10,
+                cache=cache,
+            )
+
+        if is_gemini or (model_name and actual_model.startswith("gemini")):
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",  # Fast and cost-effective model
+                model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
-                request_timeout=10,  # Fast timeout for quick response
-                cache=cache_manager.get_response_cache(),  # Enable response caching
+                request_timeout=10,
+                cache=cache,
             )
         else:
-            # GPT models
-            if StudyGuruModels.USE_FALLBACK_MODELS:
-                # Fallback to GPT-4o-mini for compatibility
-                return ChatOpenAI(
-                    model="gpt-4.1-mini",  # Fallback model
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,  # Very low token limit for cost efficiency
-                    request_timeout=10,  # Fast timeout for quick response
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                )
-            else:
-                # GPT-5 Mini configuration
-                return ChatOpenAI(
-                    model="gpt-5-mini",  # GPT-5 Mini: Most cost-effective model
-                    temperature=temperature,
-                    openai_api_key=settings.OPENAI_API_KEY,
-                    max_tokens=max_tokens,  # Very low token limit for cost efficiency
-                    request_timeout=10,  # Fast timeout for quick response
-                    # verbosity=verbosity,  # Control response length and detail
-                    cache=cache_manager.get_response_cache(),  # Enable response caching
-                )
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=max_tokens,
+                request_timeout=10,
+                cache=cache,
+            )
 
     @staticmethod
     def get_web_search_model(
@@ -1040,9 +1182,22 @@ class StudyGuruChains:
         return StudyGuruPrompts.DOCUMENT_ANALYSIS | model | parser
 
     @staticmethod
-    def get_guardrail_chain():
-        """Get guardrail check chain"""
-        model = StudyGuruModels.get_guardrail_model(temperature=0.2, max_tokens=400)
+    def get_guardrail_chain(
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
+    ):
+        """Get guardrail check chain
+
+        Args:
+            model_name: Specific model to use (assistant model for guardrails)
+            subscription_plan: User's subscription plan for access validation
+        """
+        model = StudyGuruModels.get_guardrail_model(
+            temperature=0.2,
+            max_tokens=400,
+            model_name=model_name,
+            subscription_plan=subscription_plan,
+        )
         parser = MarkdownJsonOutputParser()  # Use robust parser for guardrails
         return StudyGuruPrompts.GUARDRAIL_CHECK | model | parser
 
@@ -1058,29 +1213,22 @@ class StudyGuruChains:
             return StudyGuruPrompts.CONVERSATION_WITHOUT_CONTEXT | model | parser
 
     @staticmethod
-    def get_title_generation_chain():
-        """Get title generation chain (cost-optimized) with robust error handling"""
-        if StudyGuruModels._is_gemini_model():
-            # Gemini 2.5 Flash for cost efficiency
-            model = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",  # Fast and cost-effective model
-                temperature=0.3,
-                google_api_key=settings.GOOGLE_API_KEY,
-                max_output_tokens=300,  # Increased to ensure complete JSON response
-                request_timeout=20,  # Increased timeout
-                cache=cache_manager.get_response_cache(),  # Enable response caching
-            )
-        else:
-            # Use GPT-4o-mini for better JSON stability instead of GPT-5-mini
-            # GPT-5 models have issues with response_format parameter
-            model = ChatOpenAI(
-                model="gpt-4.1-mini",  # More reliable for JSON output
-                temperature=0.3,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=300,  # Increased to ensure complete JSON response
-                request_timeout=20,  # Increased timeout
-                # model_kwargs={"response_format": {"type": "json_object"}},
-            )
+    def get_title_generation_chain(
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
+    ):
+        """Get title generation chain (cost-optimized) with robust error handling
+
+        Args:
+            model_name: Specific model to use (assistant model for title generation)
+            subscription_plan: User's subscription plan for access validation
+        """
+        model = StudyGuruModels.get_title_model(
+            temperature=0.3,
+            max_tokens=300,  # Increased to ensure complete JSON response
+            model_name=model_name,
+            subscription_plan=subscription_plan,
+        )
         parser = MarkdownJsonOutputParser()  # Use robust parser for title generation
         return StudyGuruPrompts.TITLE_GENERATION | model | parser
 
@@ -1137,10 +1285,21 @@ class StudyGuruChains:
         return StudyGuruPrompts.INTERACTION_SUMMARY_UPDATE | model | parser
 
     @staticmethod
-    def get_mcq_generation_chain():
-        """Get MCQ generation chain using complex reasoning model for better question quality"""
+    def get_mcq_generation_chain(
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
+    ):
+        """Get MCQ generation chain using complex reasoning model for better question quality
+
+        Args:
+            model_name: Specific model to use (assistant model for reasoning)
+            subscription_plan: User's subscription plan for access validation
+        """
         model = StudyGuruModels.get_complex_reasoning_model(
-            temperature=0.3, max_tokens=1200
+            temperature=0.3,
+            max_tokens=1200,
+            model_name=model_name,
+            subscription_plan=subscription_plan,
         )
         parser = MarkdownJsonOutputParser()  # Use robust parser for MCQ generation
         return StudyGuruPrompts.MCQ_GENERATION | model | parser

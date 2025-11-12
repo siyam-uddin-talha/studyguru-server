@@ -256,15 +256,22 @@ class LangChainService:
             }
 
     async def generate_mcq_questions(
-        self, topic_or_content: str, max_tokens: int = 1200
+        self,
+        topic_or_content: str,
+        max_tokens: int = 1200,
+        assistant_model: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate MCQ questions for a given topic or content"""
         try:
             # Create callback handler to track tokens
             callback_handler = StudyGuruCallbackHandler()
 
-            # Get MCQ generation chain
-            chain = StudyGuruConfig.CHAINS.get_mcq_generation_chain()
+            # Get MCQ generation chain (use dynamic model if provided)
+            chain = StudyGuruConfig.CHAINS.get_mcq_generation_chain(
+                model_name=assistant_model,
+                subscription_plan=subscription_plan,
+            )
 
             # Run MCQ generation
             result = await chain.ainvoke(
@@ -291,7 +298,11 @@ class LangChainService:
             }
 
     async def check_guardrails(
-        self, message: str, media_urls: Optional[List[str]] = None
+        self,
+        message: str,
+        media_urls: Optional[List[str]] = None,
+        assistant_model: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ) -> GuardrailOutput:
         """Check content against guardrails using LangChain - optimized for speed"""
         try:
@@ -316,8 +327,17 @@ class LangChainService:
             # Use the configured guardrail prompt
             guardrail_prompt = StudyGuruConfig.PROMPTS.GUARDRAIL_CHECK
 
-            # Create chain using dedicated guardrail model
-            chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
+            # Create chain using dedicated guardrail model (use dynamic model if provided)
+            if assistant_model:
+                guardrail_model = StudyGuruConfig.MODELS.get_guardrail_model(
+                    temperature=0.2,
+                    max_tokens=400,
+                    model_name=assistant_model,
+                    subscription_plan=subscription_plan,
+                )
+                chain = guardrail_prompt | guardrail_model | self.guardrail_parser
+            else:
+                chain = guardrail_prompt | self.guardrail_llm | self.guardrail_parser
 
             # Build content - analyze images if they exist for better accuracy
             if media_urls:
@@ -1302,7 +1322,11 @@ class LangChainService:
         return max(1, tokens_used // 100)
 
     async def generate_interaction_title(
-        self, message: str, response_preview: str
+        self,
+        message: str,
+        response_preview: str,
+        assistant_model: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """Generate interaction title and summary using cost-efficient model"""
         try:
@@ -1316,8 +1340,11 @@ class LangChainService:
             # Use the improved title generation chain with robust error handling
             from app.config.langchain_config import StudyGuruChains
 
-            # Use the improved chain that handles GPT-5 JSON issues
-            title_chain = StudyGuruChains.get_title_generation_chain()
+            # Use the improved chain that handles GPT-5 JSON issues (use dynamic model if provided)
+            title_chain = StudyGuruChains.get_title_generation_chain(
+                model_name=assistant_model,
+                subscription_plan=subscription_plan,
+            )
 
             # Generate title with multiple fallback attempts
             result = None

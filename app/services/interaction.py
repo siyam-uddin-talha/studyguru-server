@@ -201,7 +201,10 @@ async def process_conversation_message(
                     return None
                 try:
                     result = await langchain_service.check_guardrails(
-                        message or "", media_urls
+                        message or "",
+                        media_urls,
+                        assistant_model=assistant_model,
+                        subscription_plan=subscription_plan,
                     )
                     guardrail_end = time.time()
                     print(
@@ -811,6 +814,8 @@ async def process_conversation_message(
                     interaction=interaction,
                     content_text=ai_response,
                     original_message=message or "",
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
                 )
 
             except Exception as title_error:
@@ -1451,7 +1456,11 @@ async def _send_ai_response_notification(
 
 
 async def _extract_interaction_metadata_fast(
-    interaction: Interaction, content_text, original_message: str = ""
+    interaction: Interaction,
+    content_text,
+    original_message: str = "",
+    assistant_model: Optional[str] = None,
+    subscription_plan: Optional[str] = None,
 ):
     """Fast metadata extraction with dedicated title generation using langchain_service"""
     try:
@@ -1576,6 +1585,8 @@ async def _extract_interaction_metadata_fast(
                     await langchain_service.generate_interaction_title(
                         message=original_message,
                         response_preview=response_preview,
+                        assistant_model=assistant_model,
+                        subscription_plan=subscription_plan,
                     )
                 )
 

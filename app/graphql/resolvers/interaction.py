@@ -909,6 +909,8 @@ class InteractionMutation:
     #         media_files=media_files_dict,
     #         max_tokens=None,  # Will be calculated dynamically based on file count
     #         db=db,  # Pass the database session
+    #         visualize_model=input.visualize_model,
+    #         assistant_model=input.assistant_model,
     #     )
     #     print(f"🔧 RESOLVER: Got result from service: {result}")
 
@@ -1296,6 +1298,8 @@ class InteractionMutation:
         interaction_id: Optional[str] = None,
         media_files: Optional[List[str]] = None,
         max_tokens: Optional[int] = None,
+        visualize_model: Optional[str] = None,
+        assistant_model: Optional[str] = None,
     ) -> DefaultResponse:
         """Submit a message for background processing"""
         context = info.context
@@ -1329,6 +1333,8 @@ class InteractionMutation:
                 message=message,
                 media_files=media_files_list,
                 max_tokens=max_tokens,
+                visualize_model=visualize_model,
+                assistant_model=assistant_model,
                 priority=MessageTaskPriority.HIGH,  # High priority for user-initiated messages
             )
 
