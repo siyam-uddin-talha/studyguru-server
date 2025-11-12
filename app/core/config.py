@@ -71,6 +71,9 @@ class Settings(BaseSettings):
 
     GOOGLE_CLIENT_ID: str = getenv("GOOGLE_CLIENT_ID", "google-id")
 
+    # Moonshot AI (Kimi)
+    MOONSHOT_API_KEY: str = getenv("MOONSHOT_API_KEY", "")
+
     # Zilliz / Milvus Vector DB
     ZILLIZ_URI: str = getenv("ZILLIZ_URI", "")
     ZILLIZ_TOKEN: str = getenv("ZILLIZ_TOKEN", "")

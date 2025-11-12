@@ -34,12 +34,15 @@ from app.core.config import settings
 # Model mapping for dynamic selection - matches frontend modelService.ts
 MODEL_MAPPING = {
     # Gemini models
-    "gemini-2.5pro": "gemini-2.5-pro",
-    "gemini-2.5flash": "gemini-2.5-flash",
+    "gemini-2.5-pro": "gemini-2.5-pro",
+    "gemini-2.5-flash": "gemini-2.5-flash",
     # GPT models
     "gpt-4.1": "gpt-4.1",
     "gpt-4.1-mini": "gpt-4.1-mini",
     "gpt-5": "gpt-5",
+    # Moonshot AI (Kimi) models
+    "kimi-k2-thinking": "kimi-k2-thinking",
+    "kimi-k2": "kimi-k2-thinking",  # Alias
 }
 
 
@@ -60,31 +63,43 @@ def get_model_row(model_name: str) -> Optional[int]:
     # Extract base model name
     base_model = model_name.lower()
 
-    # Row 1: Default models - gemini-2.5pro (visualize only), gemini-2.5flash, gpt-4.1 (visualize only), gpt-4.1-mini
+    # Row 1: Default models - gemini-2.5-pro (visualize only), gemini-2.5-flash, gpt-4.1 (visualize only), gpt-4.1-mini, kimi models
     row1_models = {
-        "gemini-2.5pro-visualize": 1,
-        "gemini-2.5flash": 1,
-        "gemini-2.5flash-assistant": 1,
+        "gemini-2.5-pro-visualize": 1,
+        "gemini-2.5-flash": 1,
+        "gemini-2.5-flash-assistant": 1,
         "gpt-4.1-visualize": 1,
         "gpt-4.1-mini": 1,
         "gpt-4.1-mini-assistant": 1,
+        "kimi-k2-thinking": 1,
+        "kimi-k2": 1,
+        "kimi-k2-visualize": 1,
+        "kimi-k2-assistant": 1,
     }
 
-    # Row 2: PLUS models - gemini-2.5pro (both), gpt-4.1 (both)
+    # Row 2: PLUS models - gemini-2.5-pro (both), gpt-4.1 (both), kimi models
     row2_models = {
-        "gemini-2.5pro-plus-visualize": 2,
-        "gemini-2.5pro-plus-assistant": 2,
-        "gemini-2.5pro": 2,  # When used for both visualize and assistant
+        "gemini-2.5-pro-plus-visualize": 2,
+        "gemini-2.5-pro-plus-assistant": 2,
+        "gemini-2.5-pro": 2,  # When used for both visualize and assistant
         "gpt-4.1-plus-visualize": 2,
         "gpt-4.1-plus-assistant": 2,
         "gpt-4.1": 2,  # When used for both visualize and assistant
+        "kimi-k2-thinking": 2,
+        "kimi-k2": 2,
+        "kimi-k2-visualize": 2,
+        "kimi-k2-assistant": 2,
     }
 
-    # Row 3: ELITE models - gpt-5 (both)
+    # Row 3: ELITE models - gpt-5 (both), kimi models
     row3_models = {
         "gpt-5-elite-visualize": 3,
         "gpt-5-elite-assistant": 3,
         "gpt-5": 3,
+        "kimi-k2-thinking": 3,
+        "kimi-k2": 3,
+        "kimi-k2-visualize": 3,
+        "kimi-k2-assistant": 3,
     }
 
     # Check each row
@@ -96,9 +111,13 @@ def get_model_row(model_name: str) -> Optional[int]:
         return row3_models[base_model]
 
     # Fallback: try to detect from base model name
-    if "gemini-2.5flash" in base_model or "gpt-4.1-mini" in base_model:
+    if (
+        "gemini-2.5-flash" in base_model
+        or "gpt-4.1-mini" in base_model
+        or "kimi" in base_model
+    ):
         return 1
-    elif "gemini-2.5pro" in base_model or (
+    elif "gemini-2.5-pro" in base_model or (
         "gpt-4.1" in base_model and "gpt-5" not in base_model
     ):
         # Could be row 1 or row 2, check context
@@ -122,7 +141,7 @@ def validate_model_access(model_name: str, subscription_plan: str) -> bool:
     Row 3: Available to all (ESSENTIAL, PLUS, ELITE)
 
     Args:
-        model_name: The model name (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
+        model_name: The model name (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5')
         subscription_plan: User's subscription plan (ESSENTIAL, PLUS, ELITE)
 
     Returns:
@@ -462,7 +481,7 @@ Use web search to enhance your educational responses with current, accurate info
 
 
 class StudyGuruModels:
-    """Model configurations - supports GPT and Gemini"""
+    """Model configurations - supports GPT, Gemini, and Moonshot AI (Kimi)"""
 
     USE_FALLBACK_MODELS = False
 
@@ -490,8 +509,8 @@ class StudyGuruModels:
         """Get chat model with optional web search capability and thinking config
 
         Args:
-            model_name: Specific model to use (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
-                       Can also include type suffix like 'gemini-2.5pro-assistant'
+            model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
+                       Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
             subscription_plan: User's subscription plan for access validation
         """
         cache = StudyGuruModels._get_cache()
@@ -519,13 +538,43 @@ class StudyGuruModels:
             # Use specified model - map to actual model name
             actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
             is_gemini = actual_model.startswith("gemini")
+            is_kimi = actual_model.startswith("kimi")
         else:
             # Fall back to default behavior
             is_gemini = StudyGuruModels._is_gemini_model()
+            is_kimi = False
             actual_model = (
                 "gemini-2.5-pro"
                 if is_gemini
                 else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
+            )
+
+        # Moonshot AI (Kimi) models - use OpenAI-compatible API
+        if is_kimi or (model_name and actual_model.startswith("kimi")):
+            if not settings.MOONSHOT_API_KEY:
+                raise ValueError(
+                    "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
+                )
+
+            # Apply thinking config for Kimi models
+            model_kwargs = {}
+            if thinking_config:
+                # Moonshot AI supports similar parameters to OpenAI
+                if "reasoning_effort" in thinking_config:
+                    model_kwargs["reasoning_effort"] = thinking_config[
+                        "reasoning_effort"
+                    ]
+
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.MOONSHOT_API_KEY,
+                base_url="https://api.moonshot.ai/v1",
+                max_tokens=max_tokens,
+                request_timeout=120,
+                streaming=streaming,
+                cache=cache,
+                **model_kwargs,
             )
 
         if is_gemini or (model_name and actual_model.startswith("gemini")):
@@ -581,11 +630,11 @@ class StudyGuruModels:
         model_name=None,
         subscription_plan=None,
     ):
-        """Get configured vision model with optional web search capability and thinking config - supports both GPT and Gemini
+        """Get configured vision model with optional web search capability and thinking config - supports GPT, Gemini, and Moonshot AI (Kimi)
 
         Args:
-            model_name: Specific model to use (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
-                       Can also include type suffix like 'gpt-4.1-visualize'
+            model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
+                       Can also include type suffix like 'gpt-4.1-visualize' or 'kimi-k2-visualize'
             subscription_plan: User's subscription plan for access validation
         """
         # Clean model name (remove type suffixes for validation and mapping)
@@ -610,12 +659,42 @@ class StudyGuruModels:
         if model_name:
             actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
             is_gemini = actual_model.startswith("gemini")
+            is_kimi = actual_model.startswith("kimi")
         else:
             is_gemini = StudyGuruModels._is_gemini_model()
+            is_kimi = False
             actual_model = (
                 "gemini-2.5-pro"
                 if is_gemini
                 else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
+            )
+
+        # Moonshot AI (Kimi) models - use OpenAI-compatible API
+        if is_kimi or (model_name and actual_model.startswith("kimi")):
+            if not settings.MOONSHOT_API_KEY:
+                raise ValueError(
+                    "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
+                )
+
+            # Apply thinking config for Kimi models
+            model_kwargs = {}
+            if thinking_config:
+                # Moonshot AI supports similar parameters to OpenAI
+                if "reasoning_effort" in thinking_config:
+                    model_kwargs["reasoning_effort"] = thinking_config[
+                        "reasoning_effort"
+                    ]
+
+            return ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.MOONSHOT_API_KEY,
+                base_url="https://api.moonshot.ai/v1",
+                max_tokens=max_tokens,
+                request_timeout=120,
+                streaming=streaming,
+                cache=cache_manager.get_response_cache(),  # Enable response caching
+                **model_kwargs,
             )
 
         if is_gemini or (model_name and actual_model.startswith("gemini")):

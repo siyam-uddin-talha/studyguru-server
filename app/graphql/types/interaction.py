@@ -82,7 +82,7 @@ class DoConversationInput:
     max_tokens: Optional[int] = (
         None  # Will be calculated dynamically based on file count
     )
-    # Model selection from frontend (e.g., 'gemini-2.5pro', 'gpt-4.1', 'gpt-5')
+    # Model selection from frontend (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5')
     visualize_model: Optional[str] = None  # Model for image/document analysis
     assistant_model: Optional[str] = None  # Model for text conversation
 
