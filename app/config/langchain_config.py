@@ -274,10 +274,10 @@ RULES:
 JSON FORMAT:
 
 MCQ:
-{{"type": "mcq", "language": "lang", "_result": {{"questions": [{{"question": "text", "options": {{"a": "1", "b": "2", "c": "3", "d": "4"}}, "answer": "letter", "explanation": "solution"}}]}}}}
+{{"type": "mcq",  "_result": {{"questions": [{{"question": "text", "options": {{"a": "1", "b": "2", "c": "3", "d": "4"}}, "answer": "letter", "explanation": "solution"}}]}}}}
 
 Written:
-{{"type": "written", "language": "lang", "_result": {{"content": "text"}}}}
+{{"type": "written", "_result": {{"content": "text"}}}}
 
 Return valid JSON only.""",
             ),
@@ -993,7 +993,7 @@ class StudyGuruModels:
                 openai_api_key=settings.MOONSHOT_API_KEY,
                 base_url="https://api.moonshot.ai/v1",
                 max_tokens=max_tokens,
-                request_timeout=10,
+                request_timeout=30,  # Increased from 10 to 30 seconds for title generation
                 cache=cache,
             )
 
@@ -1003,7 +1003,7 @@ class StudyGuruModels:
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
-                request_timeout=10,
+                request_timeout=30,  # Increased from 10 to 30 seconds for title generation
                 cache=cache,
             )
         else:
@@ -1012,7 +1012,7 @@ class StudyGuruModels:
                 temperature=temperature,
                 openai_api_key=settings.OPENAI_API_KEY,
                 max_tokens=max_tokens,
-                request_timeout=10,
+                request_timeout=30,  # Increased from 10 to 30 seconds for title generation
                 cache=cache,
             )
 
@@ -1330,9 +1330,7 @@ class StudyGuruConfig:
     # Token system configuration
     BASE_TOKENS = 5000  # Base tokens for text-only prompts
     TOKENS_PER_FILE = 5000  # Additional tokens per file
-    MAX_TOKENS_LIMIT = (
-        30000  # Maximum token limit to prevent excessive usage (increased from 20000)
-    )
+    MAX_TOKENS_LIMIT = 30000
 
     # Default settings
     DEFAULT_MAX_TOKENS = 5000

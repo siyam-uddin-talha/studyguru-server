@@ -290,10 +290,19 @@ class ContextRetrievalService:
             # Convert SearchResult objects to expected format
             results = []
             for result in search_results:
-                # Truncate content for faster processing
+                # Truncate content for faster processing (increased limit for more context)
                 content = result.content
-                if len(content) > 300:
-                    content = content[:300] + "..."
+                original_length = len(content)
+                if len(content) > 1000:  # Increased from 300 to 1000 for more context
+                    content = content[:1000] + "..."
+                    print(
+                        f"🔍 [CONTEXT SERVICE] Content truncated: {original_length} -> {len(content)} chars"
+                    )
+                else:
+                    print(f"🔍 [CONTEXT SERVICE] Content length: {len(content)} chars")
+                print(
+                    f"🔍 [CONTEXT SERVICE] Title: {result.title}, Type: {result.content_type}"
+                )
 
                 results.append(
                     {

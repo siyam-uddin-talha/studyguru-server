@@ -152,7 +152,7 @@ class RealTimeContextService:
             if success:
                 task.status = UpdateStatus.COMPLETED
                 task.updated_at = datetime.now()
-                print(f"✅ Context update completed: {task.update_type}")
+                # print(f"✅ Context update completed: {task.update_type}")  # Removed for cleaner logs
                 return True
             else:
                 raise Exception("Update handler returned False")
@@ -231,7 +231,7 @@ class RealTimeContextService:
                     print(f"⚠️ Semantic summary not saved correctly")
                     return False
 
-                print(f"✅ Semantic summary updated successfully")
+                # print(f"✅ Semantic summary updated successfully")  # Removed for cleaner logs
                 return True
 
         except Exception as e:
@@ -265,7 +265,7 @@ class RealTimeContextService:
             )
 
             if result:
-                print(f"✅ Embedding created successfully")
+                # print(f"✅ Embedding created successfully")  # Removed for cleaner logs
                 return True
             else:
                 print(f"⚠️ Embedding creation returned False")

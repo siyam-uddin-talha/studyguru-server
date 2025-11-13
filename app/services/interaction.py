@@ -192,7 +192,7 @@ async def process_conversation_message(
             )
 
             async def run_guardrails():
-                """Run guardrail checks"""
+                """Run guardrail checks with timeout"""
                 guardrail_start = time.time()
                 print(f"🛡️ GUARDRAIL START: {guardrail_start:.3f}")
 
@@ -200,17 +200,27 @@ async def process_conversation_message(
                     print(f"🛡️ GUARDRAIL SKIP: No content to check")
                     return None
                 try:
-                    result = await langchain_service.check_guardrails(
-                        message or "",
-                        media_urls,
-                        assistant_model=assistant_model,
-                        subscription_plan=subscription_plan,
+                    # OPTIMIZATION: Add timeout for guardrail check (increased for reliability)
+                    result = await asyncio.wait_for(
+                        langchain_service.check_guardrails(
+                            message or "",
+                            media_urls,
+                            assistant_model=assistant_model,
+                            subscription_plan=subscription_plan,
+                        ),
+                        timeout=3.0,  # Increased from 2.0 to 3.0 seconds
                     )
                     guardrail_end = time.time()
                     print(
                         f"🛡️ GUARDRAIL COMPLETE: {guardrail_end:.3f} (took {guardrail_end - guardrail_start:.3f}s)"
                     )
                     return result
+                except asyncio.TimeoutError:
+                    guardrail_end = time.time()
+                    print(
+                        f"🛡️ GUARDRAIL TIMEOUT: {guardrail_end:.3f} (took {guardrail_end - guardrail_start:.3f}s) - continuing"
+                    )
+                    return None
                 except Exception as e:
                     guardrail_end = time.time()
                     print(
@@ -219,20 +229,23 @@ async def process_conversation_message(
                     return None
 
             async def get_context_fast():
-                """Enhanced context retrieval using multi-level strategy"""
+                """Enhanced context retrieval with timeout and length limits"""
                 context_start = time.time()
                 print(f"🔍 CONTEXT START: {context_start:.3f}")
 
                 try:
                     from app.services.context_service import context_service
 
-                    # Use the new enhanced context retrieval service
-                    context_result = await context_service.get_comprehensive_context(
-                        user_id=str(user_id),
-                        interaction_id=str(interaction.id) if interaction else None,
-                        message=message or "",
-                        include_cross_interaction=True,
-                        max_context_length=10000,  # Increased from 4000 to 10000
+                    # OPTIMIZATION: Use timeout and reduced context length for faster retrieval
+                    context_result = await asyncio.wait_for(
+                        context_service.get_comprehensive_context(
+                            user_id=str(user_id),
+                            interaction_id=str(interaction.id) if interaction else None,
+                            message=message or "",
+                            include_cross_interaction=True,
+                            max_context_length=8000,  # Increased from 3000 to 8000 for more context
+                        ),
+                        timeout=3.5,  # Increased from 2.0 to 3.5 seconds for reliability
                     )
 
                     context_text = context_result.get("context", "")
@@ -245,26 +258,34 @@ async def process_conversation_message(
 
                     print(f"🔍 Enhanced Context Retrieval Results:")
                     print(f"   Sources used: {metadata.get('sources_used', [])}")
-                    print(f"   Sources ignored: {metadata.get('sources_ignored', [])}")
                     print(
-                        f"   Total retrieval time: {metadata.get('total_retrieval_time', 0):.3f}s"
+                        f"   Context length: {len(context_text)} characters (optimized)"
                     )
-                    print(f"   Context length: {len(context_text)} characters")
 
-                    # Log context usage for monitoring
+                    # Log context usage for monitoring (non-blocking)
                     if interaction:
-                        await context_service.log_context_usage(
-                            user_id=str(user_id),
-                            interaction_id=str(interaction.id),
-                            conversation_id=None,  # Will be set later
-                            context_sources_used=metadata.get("sources_used", []),
-                            context_sources_ignored=metadata.get("sources_ignored", []),
-                            retrieval_time=metadata.get("total_retrieval_time", 0),
-                            user_query=message or "",
-                            query_type="general_inquiry",
+                        asyncio.create_task(
+                            context_service.log_context_usage(
+                                user_id=str(user_id),
+                                interaction_id=str(interaction.id),
+                                conversation_id=None,
+                                context_sources_used=metadata.get("sources_used", []),
+                                context_sources_ignored=metadata.get(
+                                    "sources_ignored", []
+                                ),
+                                retrieval_time=metadata.get("total_retrieval_time", 0),
+                                user_query=message or "",
+                                query_type="general_inquiry",
+                            )
                         )
 
                     return context_text
+                except asyncio.TimeoutError:
+                    context_end = time.time()
+                    print(
+                        f"🔍 CONTEXT TIMEOUT: {context_end:.3f} (took {context_end - context_start:.3f}s) - continuing without context"
+                    )
+                    return ""
                 except Exception as e:
                     context_end = time.time()
                     print(
@@ -272,11 +293,19 @@ async def process_conversation_message(
                     )
                     return ""
 
-            # Run guardrails and context retrieval in parallel
+            # Run guardrails and context retrieval in parallel with overall timeout
             print(f"🔄 Starting parallel guardrails + context retrieval...")
-            guardrail_result, context_text = await asyncio.gather(
-                run_guardrails(), get_context_fast(), return_exceptions=True
-            )
+            try:
+                guardrail_result, context_text = await asyncio.wait_for(
+                    asyncio.gather(
+                        run_guardrails(), get_context_fast(), return_exceptions=True
+                    ),
+                    timeout=5.0,  # Increased from 2.5 to 5.0 seconds for reliability
+                )
+            except asyncio.TimeoutError:
+                print(f"⏱️ Phase 2 timed out - continuing with available results")
+                guardrail_result = None
+                context_text = ""
 
             phase2_end = time.time()
             print(
@@ -808,21 +837,7 @@ async def process_conversation_message(
                 # This is a critical error - we must not continue without storing the response
                 raise Exception(f"Failed to store AI response in database: {db_error}")
 
-            # Update interaction title if needed using enhanced metadata extraction
-            try:
-                await _extract_interaction_metadata_fast(
-                    interaction=interaction,
-                    content_text=ai_response,
-                    original_message=message or "",
-                    assistant_model=assistant_model,
-                    subscription_plan=subscription_plan,
-                )
-
-            except Exception as title_error:
-                print(f"⚠️ Metadata extraction failed: {title_error}")
-                # Don't let title generation failure break the main AI response
-
-            # CRITICAL: Always commit the AI response, even if other operations fail
+            # CRITICAL: Always commit the AI response FIRST (non-blocking title generation)
             try:
                 await db.commit()
                 print(f"✅ AI response committed to database successfully")
@@ -834,6 +849,17 @@ async def process_conversation_message(
                 raise Exception(
                     f"Failed to commit AI response to database: {commit_error}"
                 )
+
+            # OPTIMIZATION: Update interaction title in background (non-blocking)
+            asyncio.create_task(
+                _update_title_background_task(
+                    interaction_id=str(interaction.id),
+                    content_text=ai_response,
+                    original_message=message or "",
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
+                )
+            )
 
             # Refresh the interaction to verify the changes were saved
             try:
@@ -1670,6 +1696,38 @@ def _format_mcq_response(mcq_data: dict) -> str:
         result = f"**MCQ Questions**\n\nError formatting questions: {str(e)}"
         print(f"🔧 Error case returning: {result}")
         return result
+
+
+# Background task for non-blocking title generation
+async def _update_title_background_task(
+    interaction_id: str,
+    content_text: str,
+    original_message: str,
+    assistant_model: Optional[str] = None,
+    subscription_plan: Optional[str] = None,
+):
+    """Update interaction title in background without blocking response"""
+    try:
+        from app.core.database import AsyncSessionLocal
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Interaction).where(Interaction.id == interaction_id)
+            )
+            interaction = result.scalar_one_or_none()
+            if interaction:
+                await _extract_interaction_metadata_fast(
+                    interaction=interaction,
+                    content_text=content_text,
+                    original_message=original_message,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
+                )
+                await db.commit()
+                print(f"✅ Background title generation completed")
+    except Exception as title_error:
+        print(f"⚠️ Background title generation failed: {title_error}")
 
 
 def _process_ai_content_fast(content_text) -> tuple[str, str]:

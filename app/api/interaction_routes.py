@@ -25,7 +25,7 @@ from app.models.user import User
 from app.models.interaction import Interaction, Conversation, ConversationRole
 from app.models.media import Media
 from app.models.subscription import PurchasedSubscription
-from app.services.interaction import process_conversation_message
+
 from app.services.langchain_service import langchain_service
 from app.services.langgraph_integration_service import langgraph_integration_service
 from app.config.langchain_config import StudyGuruConfig
@@ -57,6 +57,48 @@ async def send_thinking_status(
         print(f"🧠 Sent thinking status: {status_type} - {message}")
     except Exception as e:
         print(f"⚠️ Failed to send thinking status: {e}")
+
+
+# Background function for non-blocking title generation
+async def _update_title_background(
+    interaction_id: str,
+    content_text: str,
+    original_message: str,
+    assistant_model: Optional[str] = None,
+    subscription_plan: Optional[str] = None,
+):
+    """Update interaction title in background without blocking response"""
+    try:
+        from app.core.database import AsyncSessionLocal
+        from sqlalchemy import select
+        from app.models.interaction import Interaction
+        from app.services.interaction import _extract_interaction_metadata_fast
+
+        # Create a new database session for the background task
+        async with AsyncSessionLocal() as db:
+            # Fetch the interaction with a fresh session
+            result = await db.execute(
+                select(Interaction).where(Interaction.id == interaction_id)
+            )
+            interaction = result.scalar_one_or_none()
+
+            if interaction:
+                await _extract_interaction_metadata_fast(
+                    interaction=interaction,
+                    content_text=content_text,
+                    original_message=original_message,
+                    assistant_model=assistant_model,
+                    subscription_plan=subscription_plan,
+                )
+                await db.commit()
+                print(f"✅ Background title generation completed and saved")
+            else:
+                print(f"⚠️ Interaction {interaction_id} not found for title generation")
+    except Exception as title_error:
+        print(f"⚠️ Background title generation failed: {title_error}")
+        import traceback
+
+        traceback.print_exc()
 
 
 # Thinking status types and messages
@@ -393,27 +435,168 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 ]
                 await asyncio.gather(*media_tasks, return_exceptions=True)
 
-            # Check guardrails (same as do_conversation)
+            # OPTIMIZATION: Run guardrails and context retrieval in parallel
+            context_text = ""
+            guardrail_result = None
+
+            # Create parallel tasks
+            async def run_guardrails_async():
+                try:
+                    await send_thinking_status(
+                        websocket,
+                        "checking_guardrails",
+                        THINKING_STATUSES["checking_guardrails"]["message"],
+                    )
+                    media_urls = []
+                    if media_files:
+                        for media_file in media_files:
+                            if media_file.get("url"):
+                                media_urls.append(media_file["url"])
+                    return await langchain_service.check_guardrails(
+                        message=message or "", media_urls=media_urls
+                    )
+                except Exception as e:
+                    print(f"⚠️ Guardrail check failed: {e}")
+                    return None
+
+            async def get_context_async():
+                if is_fresh_interaction:
+                    print(
+                        f"🔍 [CONTEXT] Fresh interaction - skipping context retrieval"
+                    )
+                    return ""
+                try:
+                    print(
+                        f"🔍 [CONTEXT] Starting context retrieval for interaction: {interaction.id}"
+                    )
+                    print(f"🔍 [CONTEXT] Query: '{message or ''}'")
+                    print(f"🔍 [CONTEXT] User ID: {current_user.id}")
+
+                    await send_thinking_status(
+                        websocket,
+                        "searching_context",
+                        THINKING_STATUSES["searching_context"]["message"],
+                    )
+                    if interaction_id:
+                        try:
+                            # OPTIMIZATION: Increased timeout for reliability
+                            print(
+                                f"🔍 [CONTEXT] Calling similarity_search_by_interaction..."
+                            )
+                            search_results = await asyncio.wait_for(
+                                langchain_service.similarity_search_by_interaction(
+                                    query=message or "",
+                                    user_id=str(current_user.id),
+                                    interaction_id=str(interaction.id),
+                                    top_k=2,  # Reduced for speed
+                                ),
+                                timeout=3.0,  # Increased from 1.5 to 3.0 seconds
+                            )
+                            print(
+                                f"🔍 [CONTEXT] Search completed. Results count: {len(search_results) if search_results else 0}"
+                            )
+
+                            if search_results:
+                                print(f"🔍 [CONTEXT] Raw search results:")
+                                for i, result in enumerate(search_results):
+                                    print(
+                                        f"   [{i+1}] Title: {result.get('title', 'N/A')}"
+                                    )
+                                    print(
+                                        f"   [{i+1}] Content preview: {result.get('content', '')[:100]}..."
+                                    )
+                                    print(
+                                        f"   [{i+1}] Score: {result.get('score', 'N/A')}"
+                                    )
+
+                                context_parts = []
+                                max_length = (
+                                    5000  # Increased from 2000 to 5000 for more context
+                                )
+                                current_length = 0
+                                for result in search_results:
+                                    content = result.get("content", "")
+                                    if current_length + len(content) > max_length:
+                                        remaining = max_length - current_length
+                                        if remaining > 100:
+                                            content = content[:remaining] + "..."
+                                            context_parts.append(
+                                                f"**{result.get('title', 'Previous Discussion')}:**\n{content}"
+                                            )
+                                        break
+                                    context_parts.append(
+                                        f"**{result.get('title', 'Previous Discussion')}:**\n{content}"
+                                    )
+                                    current_length += len(content)
+
+                                final_context = "\n\n".join(context_parts)
+                                print(
+                                    f"🔍 [CONTEXT] Final context length: {len(final_context)} characters"
+                                )
+                                print(
+                                    f"🔍 [CONTEXT] Final context preview: {final_context[:200]}..."
+                                )
+                                return final_context
+                            else:
+                                print(f"🔍 [CONTEXT] No search results found")
+                                return ""
+                        except asyncio.TimeoutError:
+                            print(
+                                f"⏱️ [CONTEXT] Context search timed out - continuing without context"
+                            )
+                            return ""
+                    else:
+                        print(f"🔍 [CONTEXT] No interaction_id provided")
+                        return ""
+                except Exception as e:
+                    print(f"⚠️ [CONTEXT] Context retrieval failed: {e}")
+                    import traceback
+
+                    traceback.print_exc()
+                    return ""
+
+            # Run in parallel with timeout
+            guardrail_task = asyncio.create_task(run_guardrails_async())
+            context_task = asyncio.create_task(get_context_async())
+
+            # Wait for both with increased timeout
             try:
-                # Send thinking status for guardrail check
-                await send_thinking_status(
-                    websocket,
-                    "checking_guardrails",
-                    THINKING_STATUSES["checking_guardrails"]["message"],
+                guardrail_result, context_text = await asyncio.wait_for(
+                    asyncio.gather(
+                        guardrail_task, context_task, return_exceptions=True
+                    ),
+                    timeout=4.0,  # Increased from 2.0 to 4.0 seconds for reliability
                 )
 
-                # Extract media URLs for guardrail checking
-                media_urls = []
-                if media_files:
-                    for media_file in media_files:
-                        if media_file.get("url"):
-                            media_urls.append(media_file["url"])
+                # Debug: Print context retrieval result
+                if isinstance(context_text, Exception):
+                    print(
+                        f"🔍 [CONTEXT] Context retrieval returned exception: {context_text}"
+                    )
+                    context_text = ""
+                else:
+                    print(
+                        f"🔍 [CONTEXT] Context retrieval result: {len(context_text) if context_text else 0} characters"
+                    )
+                    if context_text:
+                        print(f"🔍 [CONTEXT] Context will be used in response")
+                    else:
+                        print(
+                            f"🔍 [CONTEXT] No context available - proceeding without context"
+                        )
 
-                # Check guardrails
-                guardrail_result = await langchain_service.check_guardrails(
-                    message=message or "", media_urls=media_urls
+            except asyncio.TimeoutError:
+                print(
+                    f"⏱️ [CONTEXT] Guardrails/context retrieval timed out - continuing"
                 )
+                if not guardrail_task.done():
+                    guardrail_result = None
+                if not context_task.done():
+                    context_text = ""
+                    print(f"🔍 [CONTEXT] Context task timed out - no context available")
 
+            # Handle guardrail result
+            if guardrail_result and not isinstance(guardrail_result, Exception):
                 if guardrail_result.is_violation:
                     await websocket.send_text(
                         json.dumps(
@@ -427,64 +610,6 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     await websocket.close()
                     return
 
-                print(f"✅ Guardrail check passed: {guardrail_result.reasoning}")
-
-            except Exception as guardrail_error:
-                print(f"⚠️ Guardrail check failed: {guardrail_error}")
-                # Continue - don't let guardrail failure block the conversation
-
-            # Get context for the conversation (RAG functionality)
-            context_text = ""
-
-            # Only search for context if this is NOT a fresh interaction
-            if not is_fresh_interaction:
-                try:
-                    # Send thinking status for context search
-                    await send_thinking_status(
-                        websocket,
-                        "searching_context",
-                        THINKING_STATUSES["searching_context"]["message"],
-                    )
-
-                    # Get conversation context using similarity search
-                    if interaction_id:
-                        # Search within the same interaction for context only
-                        print(
-                            f"🔍 Searching context within interaction: {interaction.id}"
-                        )
-                        search_results = (
-                            await langchain_service.similarity_search_by_interaction(
-                                query=message or "",
-                                user_id=str(current_user.id),
-                                interaction_id=str(interaction.id),
-                                top_k=3,
-                            )
-                        )
-                    else:
-                        # This should not happen for existing interactions
-                        # If we reach here, it means interaction_id was None but is_fresh_interaction is False
-                        # This is an edge case - skip context search to be safe
-                        print(
-                            f"⚠️ Edge case: No interaction_id but not fresh interaction - skipping context search"
-                        )
-                        search_results = []
-
-                    # Build context from search results
-                    if search_results:
-                        context_parts = []
-                        for result in search_results:
-                            context_parts.append(
-                                f"**{result.get('title', 'Previous Discussion')}:**\n{result.get('content', '')}"
-                            )
-                        context_text = "\n\n".join(context_parts)
-                        print(f"🔍 Context length: {len(context_text)} characters")
-
-                except Exception as context_error:
-                    print(f"⚠️ Context retrieval failed: {context_error}")
-                    # Continue without context - streaming will still work
-            else:
-                print(f"🆕 Fresh interaction detected - skipping context search")
-
             # Generate streaming response using LangChain
             full_response = ""
             print(f"🚀 Starting WebSocket streaming response generation...")
@@ -496,34 +621,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 THINKING_STATUSES["preparing_response"]["message"],
             )
 
-            # Add a minimal delay to ensure status is sent
-            await asyncio.sleep(0.1)
-
-            # Check if the question might benefit from web search
-            web_search_keywords = [
-                "latest",
-                "current",
-                "recent",
-                "2024",
-                "2025",
-                "news",
-                "update",
-                "today",
-                "now",
-            ]
-            might_need_web_search = any(
-                keyword in (message or "").lower() for keyword in web_search_keywords
-            )
-
-            if might_need_web_search:
-                await send_thinking_status(
-                    websocket,
-                    "searching_web",
-                    THINKING_STATUSES["searching_web"]["message"],
-                )
-                await asyncio.sleep(0.1)  # Brief pause to show web search status
-
-            # Send thinking status for AI generation
+            # Send thinking status for AI generation (immediately, no delay)
             await send_thinking_status(
                 websocket, "generating", THINKING_STATUSES["generating"]["message"]
             )
@@ -603,11 +701,6 @@ async def websocket_stream_conversation(websocket: WebSocket):
 
             # Now save the AI response to database and handle background operations
             try:
-                # Send thinking status for saving
-                # await send_thinking_status(
-                #     websocket, "saving", THINKING_STATUSES["saving"]["message"]
-                # )
-
                 # Process AI content
                 from app.services.interaction import _process_ai_content_fast
 
@@ -640,22 +733,27 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 db.add(ai_conv)
                 await db.flush()
 
-                # Update interaction title if needed
-                try:
-                    from app.services.interaction import (
-                        _extract_interaction_metadata_fast,
+                # Commit the conversation FIRST (non-blocking title generation)
+                await db.commit()
+
+                # Update interaction title in background (non-blocking)
+                # Get subscription plan for title generation
+                subscription_plan = None
+                if current_user.purchased_subscription:
+                    subscription_plan = (
+                        current_user.purchased_subscription.subscription.subscription_plan
                     )
 
-                    await _extract_interaction_metadata_fast(
-                        interaction=interaction,
+                asyncio.create_task(
+                    _update_title_background(
+                        interaction_id=str(interaction.id),
                         content_text=full_response,
                         original_message=message or "",
+                        assistant_model=assistant_model,
+                        subscription_plan=subscription_plan,
                     )
-                except Exception as title_error:
-                    print(f"⚠️ Title generation failed: {title_error}")
+                )
 
-                # Commit the conversation
-                await db.commit()
                 print(f"✅ AI response saved to database successfully")
 
                 # Send completion status (internal only, not shown to user)
@@ -729,216 +827,6 @@ async def websocket_stream_conversation(websocket: WebSocket):
             await websocket.close()
         except:
             pass
-
-
-# @interaction_router.websocket("/stream-simple")
-# async def websocket_stream_simple(websocket: WebSocket):
-#     """
-#     WebSocket endpoint for simple conversation streaming
-
-#     This is a simpler version that just streams the AI response without
-#     the full conversation processing pipeline.
-#     """
-#     print("🔍 WebSocket /stream-simple - Connection attempt")
-
-#     try:
-#         # Authenticate user first
-#         print("🔍 WebSocket /stream-simple - Starting authentication")
-#         user_id = await get_current_user_from_websocket(websocket)
-#         print(
-#             f"🔍 WebSocket /stream-simple - Authentication successful, user_id: {user_id}"
-#         )
-
-#         await websocket.accept()
-#         print("🔍 WebSocket /stream-simple - Connection accepted")
-#     except Exception as e:
-#         print(f"❌ WebSocket /stream-simple - Authentication failed: {e}")
-#         raise
-
-#     try:
-#         # Receive the initial message
-#         data = await websocket.receive_text()
-#         payload = json.loads(data)
-
-#         message = payload.get("message", "")
-#         interaction_id = payload.get("interaction_id")
-
-#         print(f"🔍 WebSocket /stream-simple - Received message: '{message[:50]}...'")
-
-#         if not message:
-#             await websocket.send_text(
-#                 json.dumps(
-#                     {
-#                         "type": "error",
-#                         "error": "Message is required",
-#                         "timestamp": asyncio.get_event_loop().time(),
-#                     }
-#                 )
-#             )
-#             await websocket.close()
-#             return
-
-#         # Send initial metadata
-#         await websocket.send_text(
-#             json.dumps(
-#                 {
-#                     "type": "start",
-#                     "message": "Starting response generation...",
-#                     "timestamp": asyncio.get_event_loop().time(),
-#                 }
-#             )
-#         )
-
-#         # Generate streaming response using LangChain
-#         full_response = ""
-#         async for chunk in langchain_service.generate_conversation_response_streaming(
-#             message=message,
-#             context="",
-#             image_urls=[],
-#             max_tokens=2000,
-#         ):
-#             full_response += chunk
-
-#             # Send each chunk
-#             await websocket.send_text(
-#                 json.dumps(
-#                     {
-#                         "type": "token",
-#                         "content": chunk,
-#                         "timestamp": asyncio.get_event_loop().time(),
-#                     }
-#                 )
-#             )
-
-#         # Send completion
-#         await websocket.send_text(
-#             json.dumps(
-#                 {
-#                     "type": "complete",
-#                     "content": full_response,
-#                     "timestamp": asyncio.get_event_loop().time(),
-#                 }
-#             )
-#         )
-
-#     except WebSocketDisconnect:
-#         print("🔌 WebSocket /stream-simple - Client disconnected")
-#     except Exception as e:
-#         print(f"❌ WebSocket /stream-simple - Error: {e}")
-#         try:
-#             await websocket.send_text(
-#                 json.dumps(
-#                     {
-#                         "type": "error",
-#                         "error": f"Error: {str(e)}",
-#                         "timestamp": asyncio.get_event_loop().time(),
-#                     }
-#                 )
-#             )
-#         except:
-#             pass
-#     finally:
-#         try:
-#             await websocket.close()
-#         except:
-#             pass
-
-
-# @interaction_router.websocket("/test-stream")
-# async def websocket_test_stream(websocket: WebSocket):
-#     """
-#     WebSocket endpoint for testing streaming functionality
-#     """
-#     print("🔍 WebSocket /test-stream - Connection attempt")
-
-#     try:
-#         # Authenticate user first
-#         print("🔍 WebSocket /test-stream - Starting authentication")
-#         user_id = await get_current_user_from_websocket(websocket)
-#         print(
-#             f"🔍 WebSocket /test-stream - Authentication successful, user_id: {user_id}"
-#         )
-
-#         await websocket.accept()
-#         print("🔍 WebSocket /test-stream - Connection accepted")
-#     except Exception as e:
-#         print(f"❌ WebSocket /test-stream - Authentication failed: {e}")
-#         raise
-
-#     try:
-#         # Receive the initial message
-#         data = await websocket.receive_text()
-#         payload = json.loads(data)
-
-#         message = payload.get("message", "Hello")
-
-#         print(f"🔍 WebSocket /test-stream - Received message: '{message}'")
-
-#         # Send initial metadata
-#         await websocket.send_text(
-#             json.dumps(
-#                 {
-#                     "type": "start",
-#                     "message": "Starting test streaming...",
-#                     "timestamp": asyncio.get_event_loop().time(),
-#                 }
-#             )
-#         )
-
-#         # Generate a simple test response
-#         test_response = f"Test response for: '{message}'. This is a streaming test. "
-#         test_response += "Each word is being sent as it's generated. "
-#         test_response += "The WebSocket streaming is working correctly!"
-
-#         # Split the response into words for streaming
-#         words = test_response.split()
-
-#         for i, word in enumerate(words):
-#             await websocket.send_text(
-#                 json.dumps(
-#                     {
-#                         "type": "token",
-#                         "content": word + " ",
-#                         "timestamp": asyncio.get_event_loop().time(),
-#                     }
-#                 )
-#             )
-
-#             # Small delay to simulate real streaming
-#             await asyncio.sleep(0.1)
-
-#         # Send completion
-#         await websocket.send_text(
-#             json.dumps(
-#                 {
-#                     "type": "complete",
-#                     "content": test_response,
-#                     "timestamp": asyncio.get_event_loop().time(),
-#                 }
-#             )
-#         )
-
-#     except WebSocketDisconnect:
-#         print("🔌 WebSocket /test-stream - Client disconnected")
-#     except Exception as e:
-#         print(f"❌ WebSocket /test-stream - Error: {e}")
-#         try:
-#             await websocket.send_text(
-#                 json.dumps(
-#                     {
-#                         "type": "error",
-#                         "error": f"Test error: {str(e)}",
-#                         "timestamp": asyncio.get_event_loop().time(),
-#                     }
-#                 )
-#             )
-#         except:
-#             pass
-#     finally:
-#         try:
-#             await websocket.close()
-#         except:
-#             pass
 
 
 @interaction_router.get("/health")

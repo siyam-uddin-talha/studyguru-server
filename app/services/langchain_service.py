@@ -662,9 +662,19 @@ class LangChainService:
                 You are StudyGuru AI, an educational assistant. Provide helpful, accurate educational assistance. Keep responses concise and informative. For simple questions, give direct answers without extensive context processing.
                 """
 
+            # OPTIMIZATION: Detect simple queries for faster processing
+            is_simple_query = self._is_simple_question(message or "")
+
             # Build user content
             user_content = []
-            if context and not is_document_analysis_only:
+            # OPTIMIZATION: Limit context length and skip for simple queries
+            if context and not is_document_analysis_only and not is_simple_query:
+                # Truncate context if too long (increased limit for more context)
+                if len(context) > 5000:
+                    context = (
+                        context[:5000] + "...\n[Context truncated for faster response]"
+                    )
+
                 # Check if user is asking about a specific numbered item
                 is_specific_query = re.search(
                     r"(equation|question|problem|mcq)\s+(\d+)",
@@ -747,8 +757,14 @@ class LangChainService:
                     model_name=model_to_use,
                     subscription_plan=subscription_plan,
                 )
-                # Log actual model being used
-                actual_model = getattr(optimized_llm, "model", "unknown")
+                # Log actual model being used - use requested model name (it's what we're actually using)
+                # Try to get from instance, but fallback to requested name
+                actual_model = (
+                    getattr(optimized_llm, "model_name", None)
+                    or getattr(optimized_llm, "model", None)
+                    or model_to_use
+                    or "default"
+                )
                 print(
                     f"✅ [STREAMING] Using vision model: {actual_model} for document analysis"
                 )
@@ -759,18 +775,29 @@ class LangChainService:
                 print(
                     f"💬 [STREAMING] Requested chat model: {model_to_use or 'default (auto-select)'}"
                 )
+
+                # OPTIMIZATION: Use lower max_tokens for simple queries
+                optimized_max_tokens = (
+                    min(max_tokens, 2000) if is_simple_query else max_tokens
+                )
+
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
                     temperature=0.1,  # Lower temperature for faster, more deterministic responses
-                    max_tokens=max_tokens,
+                    max_tokens=optimized_max_tokens,  # Reduced tokens for simple queries
                     model_name=model_to_use,
                     subscription_plan=subscription_plan,
-                    # reasoning_effort="low",  # Minimal reasoning for speed
-                    # verbosity="low",  # Minimal verbosity for speed
+                    streaming=True,  # Ensure streaming is enabled
                 )
-                # Log actual model being used
-                actual_model = getattr(optimized_llm, "model", "unknown")
+                # Log actual model being used - use requested model name (it's what we're actually using)
+                # Try to get from instance, but fallback to requested name
+                actual_model = (
+                    getattr(optimized_llm, "model_name", None)
+                    or getattr(optimized_llm, "model", None)
+                    or model_to_use
+                    or "default"
+                )
                 print(
-                    f"✅ [STREAMING] Using chat model: {actual_model} (temperature=0.1, optimized for speed)"
+                    f"✅ [STREAMING] Using chat model: {actual_model} (temperature=0.1, max_tokens={optimized_max_tokens}, simple_query={is_simple_query})"
                 )
                 chain = prompt | optimized_llm
 
@@ -836,10 +863,21 @@ class LangChainService:
             # Convert SearchResult objects to expected format
             results = []
             for result in search_results:
-                # Truncate content for faster processing
+                # Truncate content for faster processing (increased limit for more context)
                 content = result.content
-                if len(content) > 300:
-                    content = content[:300] + "..."
+                original_length = len(content)
+                if len(content) > 1000:  # Increased from 300 to 1000 for more context
+                    content = content[:1000] + "..."
+                    print(
+                        f"🔍 [SIMILARITY SEARCH] Content truncated: {original_length} -> {len(content)} chars"
+                    )
+                else:
+                    print(
+                        f"🔍 [SIMILARITY SEARCH] Content length: {len(content)} chars"
+                    )
+                print(
+                    f"🔍 [SIMILARITY SEARCH] Title: {result.title}, Type: {result.content_type}"
+                )
 
                 results.append(
                     {
@@ -946,10 +984,21 @@ class LangChainService:
             # Convert SearchResult objects to expected format
             results = []
             for result in search_results:
-                # Minimal truncation for speed
+                # Increased truncation limit for more context
                 content = result.content
-                if len(content) > 150:
-                    content = content[:150] + "..."
+                original_length = len(content)
+                if len(content) > 1000:  # Increased from 150 to 1000 for more context
+                    content = content[:1000] + "..."
+                    print(
+                        f"🔍 [INTERACTION SEARCH] Content truncated: {original_length} -> {len(content)} chars"
+                    )
+                else:
+                    print(
+                        f"🔍 [INTERACTION SEARCH] Content length: {len(content)} chars"
+                    )
+                print(
+                    f"🔍 [INTERACTION SEARCH] Title: {result.title}, Type: {result.content_type}, Score: {result.score}"
+                )
 
                 results.append(
                     {
@@ -1072,9 +1121,15 @@ class LangChainService:
                 # Convert any other type to string
                 text = str(text)
 
-            # Truncate text to reduce embedding time and storage
-            if len(text) > 1000:  # Limit text length for faster embedding
-                text = text[:1000] + "..."
+            # Truncate text to reduce embedding time and storage (increased limit for more context)
+            original_text_length = len(text)
+            if len(text) > 3000:  # Increased from 1000 to 3000 for more context
+                text = text[:3000] + "..."
+                print(
+                    f"🔍 [EMBEDDING] Text truncated to 3000 chars (original: {original_text_length} chars)"
+                )
+            else:
+                print(f"🔍 [EMBEDDING] Storing text: {len(text)} chars, title: {title}")
 
             # Extract interaction_id from metadata if present
             interaction_id = None
@@ -1346,16 +1401,20 @@ class LangChainService:
                 subscription_plan=subscription_plan,
             )
 
-            # Generate title with multiple fallback attempts
+            # Generate title with multiple fallback attempts and increased timeout
             result = None
             for attempt in range(3):  # Try up to 3 times
                 try:
-                    result = await title_chain.ainvoke(
-                        {
-                            "message": limited_message,
-                            "response_preview": limited_response,
-                        },
-                        config={"callbacks": [callback_handler]},
+                    # Use asyncio.wait_for to add timeout protection
+                    result = await asyncio.wait_for(
+                        title_chain.ainvoke(
+                            {
+                                "message": limited_message,
+                                "response_preview": limited_response,
+                            },
+                            config={"callbacks": [callback_handler]},
+                        ),
+                        timeout=25.0,  # 25 second timeout per attempt
                     )
 
                     # Validate result
@@ -1366,15 +1425,17 @@ class LangChainService:
                             f"⚠️ Attempt {attempt + 1}: Invalid result format: {result}"
                         )
                         if attempt < 2:  # Don't sleep on last attempt
-                            import asyncio
-
                             await asyncio.sleep(0.5)  # Brief delay before retry
 
+                except asyncio.TimeoutError:
+                    print(f"⚠️ Attempt {attempt + 1}: Title generation timed out (25s)")
+                    if attempt < 2:  # Don't sleep on last attempt
+                        await asyncio.sleep(
+                            1.0
+                        )  # Longer delay before retry for timeout
                 except Exception as chain_error:
                     print(f"⚠️ Attempt {attempt + 1}: Chain error: {chain_error}")
                     if attempt < 2:  # Don't sleep on last attempt
-                        import asyncio
-
                         await asyncio.sleep(0.5)  # Brief delay before retry
 
             # Extract title and summary with robust validation
