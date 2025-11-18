@@ -1,4 +1,6 @@
 import strawberry
+import asyncio
+import logging
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
@@ -13,7 +15,7 @@ from app.graphql.types.auth import (
     AccountAccessInput,
 )
 from app.graphql.types.common import DefaultResponse
-from app.models.user import User, AccountProvider
+from app.models.user import User, AccountProvider, UserAccountType
 from app.models.subscription import PurchasedSubscription
 from app.models.pivot import Country
 
@@ -29,7 +31,7 @@ from app.helpers.subscription import (
     add_earned_points_async,
 )
 from app.helpers.pivot import get_or_create_country_from_object
-from app.helpers.user import create_user_profile
+from app.helpers.user import create_user_profile, merge_guest_account_data
 from app.helpers.email import (
     send_verification_email,
     send_reset_email,
@@ -37,6 +39,43 @@ from app.helpers.email import (
 )
 from app.constants.constant import CONSTANTS, COIN, RESPONSE_STATUS
 from app.services.detect_location import GetLocation
+
+logger = logging.getLogger(__name__)
+
+
+async def get_location_in_background(
+    location_detector: GetLocation, user_id: int
+) -> None:
+    """
+    Safely get location details in the background and update user record.
+    This function handles all errors gracefully to prevent breaking the system.
+    Creates its own database session for the background task.
+    """
+    try:
+        location_details = await location_detector.get_all_location_details()
+
+        if location_details:
+            # Create a new database session for the background task
+            from app.core.database import AsyncSessionLocal
+
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(select(User).where(User.id == user_id))
+                    user = result.scalar_one_or_none()
+                    if user:
+                        user.last_login_details = location_details
+                        await db.commit()
+            except Exception as db_error:
+                logger.error(
+                    f"Error updating location details for user {user_id}: {db_error}",
+                    exc_info=True,
+                )
+    except Exception as e:
+        # Log the error but don't break the system
+        logger.warning(
+            f"GetLocation API error (possibly rate limit or network issue): {e}",
+            exc_info=True,
+        )
 
 
 @strawberry.type
@@ -99,11 +138,10 @@ class AuthMutation:
                 return forwarded.split(",")[0].strip()
             return context.request.client.host if context.request.client else "unknown"
 
-        # Initialize location detector
+        # Initialize location detector (will be used in background)
         location_detector = GetLocation(
             request_headers=get_request_headers(), remote_address=get_remote_address()
         )
-        location_details = await location_detector.get_all_location_details()
 
         if input.provider == "GOOGLE":
             if not input.credential:
@@ -139,11 +177,30 @@ class AuthMutation:
             existing_user = result.scalar_one_or_none()
 
             if existing_user:
+                # Check if there's a guest account from the current session
+                guest_user = None
+                if (
+                    context.current_user
+                    and context.current_user.account_type == UserAccountType.GUEST
+                ):
+                    guest_user = context.current_user
+
+                # If guest account exists, merge its data into the real user account
+                if guest_user and guest_user.id != existing_user.id:
+                    await merge_guest_account_data(db, guest_user, existing_user)
+                    # Refresh user to get updated data
+                    await db.refresh(existing_user)
+
                 # Login existing user
-                existing_user.last_login_details = location_details
                 await db.commit()
                 token = create_access_token(data={"sub": existing_user.id})
                 account = await create_user_profile(existing_user)
+
+                # Get location in background (non-blocking, error-safe)
+                asyncio.create_task(
+                    get_location_in_background(location_detector, existing_user.id)
+                )
+
                 return AuthType(
                     success=True, message="Welcome back", account=account, token=token
                 )
@@ -179,11 +236,15 @@ class AuthMutation:
             )
             get_new_user = new_user_result.scalar_one_or_none()
 
-            # Store location details
-            get_new_user.last_login_details = location_details
             await db.commit()
 
             account = await create_user_profile(get_new_user)
+
+            # Get location in background (non-blocking, error-safe)
+            asyncio.create_task(
+                get_location_in_background(location_detector, get_new_user.id)
+            )
+
             await send_welcome_email(
                 get_new_user.email,
                 f"{get_new_user.first_name} {get_new_user.last_name}",
@@ -292,9 +353,12 @@ class AuthMutation:
         )
         get_new_user = new_user_result.scalar_one_or_none()
 
-        # Store location details
-        get_new_user.last_login_details = location_details
         await db.commit()
+
+        # Get location in background (non-blocking, error-safe)
+        asyncio.create_task(
+            get_location_in_background(location_detector, get_new_user.id, db)
+        )
 
         await send_welcome_email(
             get_new_user.email,
@@ -445,6 +509,21 @@ class AuthMutation:
         #         success=False,
         #         message="Your account has been deactivated. Please contact support."
         #     )
+
+        # Check if there's a guest account from the current session
+        # Get guest user from token if present
+        guest_user = None
+        if (
+            context.current_user
+            and context.current_user.account_type == UserAccountType.GUEST
+        ):
+            guest_user = context.current_user
+
+        # If guest account exists, merge its data into the real user account
+        if guest_user and guest_user.id != user.id:
+            await merge_guest_account_data(db, guest_user, user)
+            # Refresh user to get updated data
+            await db.refresh(user)
 
         # Update last login
         user.last_login_at = func.now()
@@ -619,6 +698,82 @@ class AuthMutation:
         await send_reset_email(user.email, pin, f"{user.first_name} {user.last_name}")
 
         return DefaultResponse(success=True, message="OTP has been sent to your email.")
+
+    @strawberry.mutation
+    async def create_guest_account(self, info) -> AuthType:
+        """Create a guest account for users who click 'Get started' without signing up"""
+        context = info.context
+        db: AsyncSession = context.db
+
+        # Generate unique guest email
+        import uuid
+
+        guest_email = f"guest_{uuid.uuid4().hex[:12]}@guest.temp"
+
+        # Ensure email is unique
+        result = await db.execute(select(User).where(User.email == guest_email))
+        while result.scalar_one_or_none():
+            guest_email = f"guest_{uuid.uuid4().hex[:12]}@guest.temp"
+            result = await db.execute(select(User).where(User.email == guest_email))
+
+        # Initialize location detector (will be used in background)
+        def get_request_headers() -> dict:
+            return dict(context.request.headers)
+
+        def get_remote_address() -> str:
+            forwarded = context.request.headers.get("X-Forwarded-For")
+            if forwarded:
+                return forwarded.split(",")[0].strip()
+            return context.request.client.host if context.request.client else "unknown"
+
+        location_detector = GetLocation(
+            request_headers=get_request_headers(), remote_address=get_remote_address()
+        )
+
+        # Create guest user
+        free_sub = await get_or_create_free_subscription(db)
+
+        guest_user = User(
+            email=guest_email,
+            first_name="Guest",
+            last_name="",
+            account_provider=None,
+            account_type=UserAccountType.GUEST,
+            verify_status=False,
+            purchased_subscription_id=free_sub.id,
+        )
+
+        db.add(guest_user)
+        await db.commit()
+        await db.refresh(guest_user)
+
+        # Get full user with relationships
+        user_result = await db.execute(
+            select(User)
+            .options(
+                selectinload(User.purchased_subscription).selectinload(
+                    PurchasedSubscription.subscription
+                ),
+                selectinload(User.country),
+            )
+            .where(User.id == guest_user.id)
+        )
+        full_guest_user = user_result.scalar_one_or_none()
+
+        # Get location in background (non-blocking, error-safe)
+        asyncio.create_task(
+            get_location_in_background(location_detector, full_guest_user.id)
+        )
+
+        token = create_access_token(data={"sub": full_guest_user.id})
+        account = await create_user_profile(full_guest_user)
+
+        return AuthType(
+            success=True,
+            message="Guest account created successfully",
+            account=account,
+            token=token,
+        )
 
     @strawberry.mutation
     async def update_reset_password(

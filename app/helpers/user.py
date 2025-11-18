@@ -1,4 +1,4 @@
-from app.models.user import User
+from app.models.user import User, UserAccountType
 from app.graphql.types.auth import Account, AccountProviderEnum
 from app.graphql.types.subscription import (
     PurchasedSubscriptionType,
@@ -8,6 +8,9 @@ from app.graphql.types.subscription import (
 )
 from app.core.config import settings
 from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+
 
 def parse_photo_url(photo_url: str) -> str:
     """Parse photo URL to include S3 bucket URL if needed"""
@@ -18,6 +21,7 @@ def parse_photo_url(photo_url: str) -> str:
         return photo_url
 
     return f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com/{photo_url}"
+
 
 async def create_user_profile(user: User) -> Account:
     """Create user profile from User model"""
@@ -82,8 +86,44 @@ async def create_user_profile(user: User) -> Account:
         birthday=user.birthday,
     )
 
+
 async def get_current_user_from_context(context) -> Optional[User]:
     """Extract current user from GraphQL context"""
     if hasattr(context, "current_user"):
         return context.current_user
     return None
+
+
+async def merge_guest_account_data(
+    db: AsyncSession, guest_user: User, real_user: User
+) -> None:
+    """
+    Merge guest account data (interactions, conversations, point transactions)
+    into the real user account, then delete the guest account.
+    """
+    from app.models.interaction import Interaction, Conversation
+    from app.models.subscription import PointTransaction
+    from sqlalchemy import delete
+
+    # Transfer all interactions (which includes conversations)
+    await db.execute(
+        update(Interaction)
+        .where(Interaction.user_id == guest_user.id)
+        .values(user_id=real_user.id)
+    )
+
+    # Transfer point transactions
+    await db.execute(
+        update(PointTransaction)
+        .where(PointTransaction.user_id == guest_user.id)
+        .values(user_id=real_user.id)
+    )
+
+    # Merge points (add guest points to real user)
+    real_user.current_points += guest_user.current_points
+    real_user.total_points_earned += guest_user.total_points_earned
+    real_user.total_points_used += guest_user.total_points_used
+
+    # Delete the guest account
+    await db.execute(delete(User).where(User.id == guest_user.id))
+    await db.commit()

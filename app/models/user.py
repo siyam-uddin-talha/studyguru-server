@@ -28,6 +28,7 @@ class UserAccountType(enum.Enum):
     ADMIN = "ADMIN"
     USER = "USER"
     SELLER = "SELLER"
+    GUEST = "GUEST"
 
 
 class User(Base):
