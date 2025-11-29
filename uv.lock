@@ -2752,7 +2752,7 @@ wheels = [
 
 [[package]]
 name = "studyguru-pro"
-version = "3.1.2"
+version = "1.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },

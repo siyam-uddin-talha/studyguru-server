@@ -208,6 +208,7 @@ class LangGraphIntegrationService:
         websocket=None,
         visualize_model: Optional[str] = None,
         assistant_model: Optional[str] = None,
+        context: str = "",
     ):
         """Stream workflow execution with thinking steps"""
 
@@ -223,6 +224,7 @@ class LangGraphIntegrationService:
         print(f"   👁️  Visualize Model: {visualize_model or 'default (auto-select)'}")
         print(f"   💬 Assistant Model: {assistant_model or 'default (auto-select)'}")
         print(f"   🔐 Subscription Plan: {subscription_plan or 'none'}")
+        print(f"   📝 Context Length: {len(context) if context else 0} chars")
 
         try:
             # Check if LangGraph is available
@@ -237,7 +239,7 @@ class LangGraphIntegrationService:
                     chunk
                 ) in langchain_service.generate_conversation_response_streaming(
                     message=message,
-                    context="",
+                    context=context,
                     media_urls=[],
                     max_tokens=5000,
                     visualize_model=visualize_model,
@@ -268,7 +270,7 @@ class LangGraphIntegrationService:
                     chunk
                 ) in langchain_service.generate_conversation_response_streaming(
                     message=message,
-                    context="",
+                    context=context,
                     media_urls=media_urls,
                     max_tokens=5000,
                     visualize_model=visualize_model,
@@ -290,6 +292,7 @@ class LangGraphIntegrationService:
                     visualize_model,
                     assistant_model,
                     subscription_plan,
+                    context,
                 ):
                     yield thinking_step
             except Exception as e:
@@ -310,7 +313,7 @@ class LangGraphIntegrationService:
                     chunk
                 ) in langchain_service.generate_conversation_response_streaming(
                     message=message,
-                    context="",
+                    context=context,
                     media_urls=[],
                     max_tokens=5000,
                     visualize_model=visualize_model,
@@ -336,6 +339,7 @@ class LangGraphIntegrationService:
         visualize_model: Optional[str] = None,
         assistant_model: Optional[str] = None,
         subscription_plan: Optional[str] = None,
+        context: str = "",
     ):
         """Stream workflow execution with thinking steps"""
 
@@ -362,6 +366,8 @@ class LangGraphIntegrationService:
             }
 
             # Execute workflow
+            # Note: workflow_service currently manages its own context retrieval
+            # We might want to pass the context here in the future if supported
             workflow_result = await self.workflow_service.execute_workflow(
                 message=message or "",
                 media_files=workflow_media_files,
@@ -409,7 +415,7 @@ class LangGraphIntegrationService:
                     chunk
                 ) in langchain_service.generate_conversation_response_streaming(
                     message=message,
-                    context="",
+                    context=context,
                     media_urls=media_urls,
                     max_tokens=5000,
                     visualize_model=visualize_model,
@@ -435,7 +441,7 @@ class LangGraphIntegrationService:
                 chunk
             ) in langchain_service.generate_conversation_response_streaming(
                 message=message,
-                context="",
+                context=context,
                 media_urls=media_urls,
                 max_tokens=5000,
                 visualize_model=visualize_model,

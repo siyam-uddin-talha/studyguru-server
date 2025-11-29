@@ -25,6 +25,52 @@ active_generation_tasks: Dict[str, asyncio.Task] = {}
 document_integration_service = DocumentIntegrationService()
 
 
+def detect_mindmap_request(message: str) -> bool:
+    """Detect if user wants a mindmap"""
+    if not message:
+        return False
+
+    message_lower = message.lower()
+    mindmap_keywords = [
+        "mindmap",
+        "mind map",
+        "concept map",
+        "visualize",
+        "diagram of",
+        "map out",
+        "visual representation",
+    ]
+    return any(keyword in message_lower for keyword in mindmap_keywords)
+
+
+def extract_topic_from_message(message: str) -> str:
+    """Extract topic from mindmap request"""
+    # Simple extraction - can be enhanced with NLP
+    patterns = [
+        r"mindmap (?:of |about |for )?(.+)",
+        r"(?:create|make|generate) (?:a )?mindmap (?:of |about |for )?(.+)",
+        r"visualize (.+)",
+        r"(?:map out|diagram of) (.+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return message  # Fallback to full message
+
+
+def serialize_mindmap_tree(node) -> Dict[str, Any]:
+    """Convert MindmapNode to serializable dict"""
+    return {
+        "id": node.id,
+        "content": node.content,
+        "level": node.level,
+        "parent_id": node.parent_id,
+        "color": node.color,
+        "children": [serialize_mindmap_tree(child) for child in node.children],
+    }
+
+
 async def process_conversation_message(
     *,
     user: User,
@@ -617,6 +663,107 @@ async def process_conversation_message(
                         "success": False,
                         "message": "Document processing failed for all uploaded files",
                     }
+
+            # === PHASE 3: DETECT SPECIAL REQUEST TYPES ===
+            # Check if this is a mindmap request
+            is_mindmap_request = detect_mindmap_request(message or "")
+
+            print(f"🔍 Request type detection:")
+            print(f"   Mindmap request: {is_mindmap_request}")
+
+            # Handle mindmap generation requests
+            if is_mindmap_request:
+                print(f"🗺️ MINDMAP GENERATOR MODE ACTIVATED")
+                try:
+                    # Extract topic from message
+                    topic = extract_topic_from_message(message or "")
+                    print(f"   Topic: {topic}")
+
+                    # Generate mindmap WITH CONTEXT
+                    mindmap = await langchain_service.generate_mindmap(
+                        topic=topic,
+                        context=context_text,  # NEW: Pass context
+                        max_tokens=max_tokens,
+                        assistant_model=assistant_model,
+                        subscription_plan=subscription_plan,
+                    )
+
+                    # Format as conversation content
+                    ai_content = {
+                        "type": "mindmap",
+                        "_result": {
+                            "topic": mindmap.topic,
+                            "nodes": serialize_mindmap_tree(mindmap.root_node),
+                            "total_nodes": mindmap.total_nodes,
+                        },
+                    }
+
+                    # Create AI conversation entry
+                    ai_conv = Conversation(
+                        interaction_id=str(interaction.id),
+                        role=ConversationRole.AI,
+                        content=ai_content,
+                        question_type="mindmap",
+                        input_tokens=0,
+                        output_tokens=0,
+                        tokens_used=0,
+                        points_cost=0,
+                        status="completed",
+                    )
+
+                    db.add(ai_conv)
+                    await db.flush()
+
+                    print(f"✅ Mindmap generated successfully")
+                    print(f"   Topic: {mindmap.topic}")
+                    print(f"   Total nodes: {mindmap.total_nodes}")
+
+                    # NEW: Background title generation
+                    asyncio.create_task(
+                        _extract_interaction_metadata_fast(
+                            interaction=interaction,
+                            content_text=f"Mindmap: {topic}",
+                            original_message=message or "",
+                            assistant_model=assistant_model,
+                            subscription_plan=subscription_plan,
+                        )
+                    )
+
+                    # NEW: Background vector DB storage
+                    def format_mindmap_for_embedding(node, depth=0):
+                        indent = "  " * depth
+                        text = f"{indent}- {node.content}\n"
+                        for child in node.children:
+                            text += format_mindmap_for_embedding(child, depth + 1)
+                        return text
+
+                    formatted_text = f"Mindmap: {topic}\n\n{format_mindmap_for_embedding(mindmap.root_node)}"
+
+                    asyncio.create_task(
+                        langchain_service.upsert_embedding(
+                            conv_id=str(ai_conv.id),
+                            user_id=str(user_id),
+                            text=formatted_text,
+                            title=f"Mindmap: {topic}",
+                            metadata={
+                                "interaction_id": str(interaction.id),
+                                "type": "mindmap",
+                                "total_nodes": mindmap.total_nodes,
+                            },
+                        )
+                    )
+
+                    return {
+                        "success": True,
+                        "message": "Mindmap generated",
+                        "conversation_id": str(ai_conv.id),
+                        "solution_type": "mindmap",
+                    }
+
+                except Exception as e:
+                    print(f"❌ Mindmap generator error: {e}")
+                    # Fall through to regular conversation generation
+                    is_mindmap_request = False
 
             # Generate conversation response using LangChain
             ai_generation_start = time.time()

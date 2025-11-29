@@ -285,6 +285,54 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 "assistant_model"
             )  # Model for text conversation
 
+            # Extract custom context/mindmap from payload if provided
+            custom_context_data = payload.get("context") or payload.get("mindmap")
+            custom_context_str = ""
+            if custom_context_data:
+                print(f"🔍 Found custom context in payload")
+                if isinstance(custom_context_data, dict):
+                    # Check if it's a mindmap
+                    if custom_context_data.get("type") == "mindmap":
+                        try:
+                            # Format mindmap context nicely
+                            mindmap_result = custom_context_data.get("_result", {})
+                            nodes = mindmap_result.get("nodes", {})
+                            topic = mindmap_result.get("topic", "Mindmap")
+
+                            # Helper to format node tree
+                            def format_node_tree(node, depth=0):
+                                indent = "  " * depth
+                                content = node.get("content", "")
+                                text = f"{indent}- {content}\n"
+                                children = node.get("children", [])
+                                for child in children:
+                                    text += format_node_tree(child, depth + 1)
+                                return text
+
+                            custom_context_str = (
+                                f"**CURRENT MINDMAP CONTEXT ({topic}):**\n"
+                            )
+                            if (
+                                isinstance(nodes, dict) and "id" in nodes
+                            ):  # Root node structure
+                                custom_context_str += format_node_tree(nodes)
+                            elif isinstance(nodes, list):  # Flat list or list of roots
+                                for node in nodes:
+                                    custom_context_str += format_node_tree(node)
+
+                            print(
+                                f"🔍 Formatted mindmap context: {len(custom_context_str)} chars"
+                            )
+                        except Exception as e:
+                            print(f"⚠️ Error formatting mindmap context: {e}")
+                            custom_context_str = f"**PROVIDED CONTEXT:**\n{json.dumps(custom_context_data)}"
+                    else:
+                        custom_context_str = (
+                            f"**PROVIDED CONTEXT:**\n{json.dumps(custom_context_data)}"
+                        )
+                elif isinstance(custom_context_data, str):
+                    custom_context_str = f"**PROVIDED CONTEXT:**\n{custom_context_data}"
+
             # Log model selection for streaming
             print(f"📊 [STREAMING] Model Selection:")
             print(
@@ -295,6 +343,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
             )
             print(f"   📝 Message: {message[:100] if message else 'No message'}")
             print(f"   📎 Media Files: {len(media_files) if media_files else 0}")
+            print(f"   🔍 Payload keys: {list(payload.keys())}")  # Debug payload keys
 
             # Validate input
             if not message or not message.strip():
@@ -511,7 +560,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
 
                                 context_parts = []
                                 max_length = (
-                                    5000  # Increased from 2000 to 5000 for more context
+                                    8000  # Increased from 5000 to 8000 for more context
                                 )
                                 current_length = 0
                                 for result in search_results:
@@ -610,6 +659,139 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     await websocket.close()
                     return
 
+            # === DETECT SPECIAL REQUEST TYPES (AFTER GUARDRAILS/CONTEXT) ===
+            from app.services.interaction import (
+                detect_mindmap_request,
+                extract_topic_from_message,
+                serialize_mindmap_tree,
+            )
+
+            # Extract image URLs
+            image_urls = []
+            if media_files:
+                for media_file in media_files:
+                    if media_file.get("url"):
+                        image_urls.append(media_file["url"])
+
+            is_mindmap_request = detect_mindmap_request(message)
+
+            print(f"🔍 WebSocket Request type detection (after guardrails/context):")
+            print(f"   Mindmap request: {is_mindmap_request}")
+            print(
+                f"   Context available: {len(context_text) if context_text else 0} chars"
+            )
+
+            # Handle Mindmap Generation (with context)
+            if is_mindmap_request:
+                print(f"🗺️ WEBSOCKET MINDMAP GENERATOR MODE ACTIVATED (with context)")
+                try:
+                    # Send thinking status
+                    await send_thinking_status(
+                        websocket,
+                        "generating",
+                        "Generating personalized mindmap structure...",
+                    )
+
+                    # Extract topic
+                    topic = extract_topic_from_message(message)
+
+                    # Generate mindmap WITH CONTEXT
+                    mindmap = await langchain_service.generate_mindmap(
+                        topic=topic,
+                        context=context_text,  # NEW: Pass context
+                        max_tokens=max_tokens,
+                        assistant_model=assistant_model,
+                        subscription_plan=(
+                            current_user.purchased_subscription.subscription.subscription_plan
+                            if current_user.purchased_subscription
+                            else None
+                        ),
+                    )
+
+                    # Prepare content
+                    ai_content = {
+                        "type": "mindmap",
+                        "_result": {
+                            "topic": mindmap.topic,
+                            "nodes": serialize_mindmap_tree(mindmap.root_node),
+                            "total_nodes": mindmap.total_nodes,
+                        },
+                    }
+
+                    # Save to DB
+                    ai_conv = Conversation(
+                        interaction_id=str(interaction.id),
+                        role=ConversationRole.AI,
+                        content=ai_content,
+                        question_type="mindmap",
+                        status="completed",
+                    )
+                    db.add(ai_conv)
+                    await db.flush()
+                    await db.commit()
+
+                    # Send response
+                    await websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "completed",
+                                "content": json.dumps(ai_content),
+                                "timestamp": asyncio.get_event_loop().time(),
+                            }
+                        )
+                    )
+
+                    print(f"✅ Mindmap generated and sent via WebSocket")
+
+                    # NEW: Background title generation
+                    asyncio.create_task(
+                        _update_title_background(
+                            interaction_id=str(interaction.id),
+                            content_text=f"Mindmap: {topic}",
+                            original_message=message,
+                            assistant_model=assistant_model,
+                            subscription_plan=(
+                                current_user.purchased_subscription.subscription.subscription_plan
+                                if current_user.purchased_subscription
+                                else None
+                            ),
+                        )
+                    )
+
+                    # NEW: Background vector DB storage
+                    # Format mindmap as readable text for embedding
+                    def format_mindmap_for_embedding(node, depth=0):
+                        indent = "  " * depth
+                        text = f"{indent}- {node.content}\n"
+                        for child in node.children:
+                            text += format_mindmap_for_embedding(child, depth + 1)
+                        return text
+
+                    formatted_text = f"Mindmap: {topic}\n\n{format_mindmap_for_embedding(mindmap.root_node)}"
+
+                    asyncio.create_task(
+                        langchain_service.upsert_embedding(
+                            conv_id=str(ai_conv.id),
+                            user_id=str(current_user.id),
+                            text=formatted_text,
+                            title=f"Mindmap: {topic}",
+                            metadata={
+                                "interaction_id": str(interaction.id),
+                                "type": "mindmap",
+                                "total_nodes": mindmap.total_nodes,
+                            },
+                        )
+                    )
+
+                    return
+
+                except Exception as e:
+                    print(f"❌ Mindmap generation failed: {e}")
+                    import traceback
+
+                    traceback.print_exc()
+                    # Fall through to normal streaming
+
             # Generate streaming response using LangChain
             full_response = ""
             print(f"🚀 Starting WebSocket streaming response generation...")
@@ -626,6 +808,17 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 websocket, "generating", THINKING_STATUSES["generating"]["message"]
             )
 
+            # Combine retrieved context with custom provided context
+            final_context = context_text or ""
+            if custom_context_str:
+                if final_context:
+                    final_context += "\n\n" + custom_context_str
+                else:
+                    final_context = custom_context_str
+                print(
+                    f"🔍 [CONTEXT] Added custom context. Total length: {len(final_context)} chars"
+                )
+
             # Use LangGraph integration for intelligent workflow orchestration
             async for (
                 chunk_data
@@ -637,6 +830,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 websocket=websocket,
                 visualize_model=visualize_model,
                 assistant_model=assistant_model,
+                context=final_context,
             ):
                 # Handle LangGraph workflow response format
                 if isinstance(chunk_data, str):

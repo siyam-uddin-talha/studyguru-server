@@ -98,11 +98,21 @@ async def merge_guest_account_data(
     db: AsyncSession, guest_user: User, real_user: User
 ) -> None:
     """
-    Merge guest account data (interactions, conversations, point transactions)
+    Merge guest account data (interactions, conversations, point transactions, context data)
     into the real user account, then delete the guest account.
     """
-    from app.models.interaction import Interaction, Conversation
-    from app.models.subscription import PointTransaction
+    from app.models.interaction import (
+        Interaction,
+        Conversation,
+        InteractionShareVisitor,
+    )
+    from app.models.subscription import PointTransaction, BillingLog
+    from app.models.context import (
+        ConversationContext,
+        UserLearningProfile,
+        DocumentContext,
+        ContextUsageLog,
+    )
     from sqlalchemy import delete
 
     # Transfer all interactions (which includes conversations)
@@ -119,11 +129,76 @@ async def merge_guest_account_data(
         .values(user_id=real_user.id)
     )
 
+    # Transfer billing logs
+    await db.execute(
+        update(BillingLog)
+        .where(BillingLog.user_id == guest_user.id)
+        .values(user_id=real_user.id)
+    )
+
+    # Transfer conversation context
+    await db.execute(
+        update(ConversationContext)
+        .where(ConversationContext.user_id == guest_user.id)
+        .values(user_id=real_user.id)
+    )
+
+    # Transfer document context
+    await db.execute(
+        update(DocumentContext)
+        .where(DocumentContext.user_id == guest_user.id)
+        .values(user_id=real_user.id)
+    )
+
+    # Transfer context usage logs
+    await db.execute(
+        update(ContextUsageLog)
+        .where(ContextUsageLog.user_id == guest_user.id)
+        .values(user_id=real_user.id)
+    )
+
+    # Transfer user learning profile (if exists)
+    # Check if real user already has a learning profile
+    result = await db.execute(
+        select(UserLearningProfile).where(UserLearningProfile.user_id == real_user.id)
+    )
+    real_user_profile = result.scalar_one_or_none()
+
+    result = await db.execute(
+        select(UserLearningProfile).where(UserLearningProfile.user_id == guest_user.id)
+    )
+    guest_user_profile = result.scalar_one_or_none()
+
+    if guest_user_profile:
+        if real_user_profile:
+            # Real user already has a profile, delete guest's profile
+            # (or you could merge the data if needed)
+            await db.execute(
+                delete(UserLearningProfile).where(
+                    UserLearningProfile.user_id == guest_user.id
+                )
+            )
+        else:
+            # Real user doesn't have a profile, transfer guest's
+            await db.execute(
+                update(UserLearningProfile)
+                .where(UserLearningProfile.user_id == guest_user.id)
+                .values(user_id=real_user.id)
+            )
+
+    # Transfer interaction share visitors (if any)
+    await db.execute(
+        update(InteractionShareVisitor)
+        .where(InteractionShareVisitor.visitor_user_id == guest_user.id)
+        .values(visitor_user_id=real_user.id)
+    )
+
     # Merge points (add guest points to real user)
     real_user.current_points += guest_user.current_points
     real_user.total_points_earned += guest_user.total_points_earned
     real_user.total_points_used += guest_user.total_points_used
 
     # Delete the guest account
+    # Note: user_module_permission has cascade delete, so it will be handled automatically
     await db.execute(delete(User).where(User.id == guest_user.id))
     await db.commit()

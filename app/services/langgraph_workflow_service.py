@@ -6,6 +6,7 @@ Intelligent orchestration for links + PDFs + web search with ThinkingConfig
 import asyncio
 import json
 import re
+import hashlib
 from typing import Dict, Any, List, Optional, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -928,8 +929,20 @@ class LangGraphWorkflowService:
         }
 
         try:
-            # Execute workflow
-            result = await self.workflow_graph.ainvoke(initial_state)
+            # Execute workflow with checkpointer config
+            # LangGraph requires thread_id or other checkpoint keys when using a checkpointer
+            # Generate a stable thread_id from interaction_id or create one from user_id and message
+            if interaction_id:
+                thread_id = f"thread_{interaction_id}"
+            else:
+                # Create a hash-based thread_id if no interaction_id
+                message_hash = hashlib.md5(f"{user_id}_{message}".encode()).hexdigest()[
+                    :12
+                ]
+                thread_id = f"thread_{user_id}_{message_hash}"
+
+            config = {"configurable": {"thread_id": thread_id}}
+            result = await self.workflow_graph.ainvoke(initial_state, config=config)
 
             return {
                 "success": True,

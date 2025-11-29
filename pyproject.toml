@@ -1,6 +1,6 @@
 [project]
 name = "studyguru-pro"
-version = "3.1.2"
+version = "1.0.3"
 description = "StudyGuru Pro - AI-powered study assistant"
 authors = [
     {name = "StudyGuru Team", email = "team@studyguru.com"}

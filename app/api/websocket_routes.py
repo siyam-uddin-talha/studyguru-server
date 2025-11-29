@@ -304,6 +304,67 @@ async def websocket_conversation_stream(websocket: WebSocket):
                 if media_file.get("url"):
                     image_urls.append(media_file["url"])
 
+        # === DETECT SPECIAL REQUEST TYPES ===
+        from app.services.interaction import (
+            detect_mindmap_request,
+            extract_topic_from_message,
+            serialize_mindmap_tree,
+        )
+
+        is_mindmap_request = detect_mindmap_request(message)
+
+        print(f"🔍 WebSocket Request type detection:")
+        print(f"   Mindmap request: {is_mindmap_request}")
+
+        # Handle mindmap generation requests
+        if is_mindmap_request:
+            print(f"🗺️ WEBSOCKET MINDMAP GENERATOR MODE ACTIVATED")
+            try:
+                # Extract topic from message
+                topic = extract_topic_from_message(message)
+                print(f"   Topic: {topic}")
+
+                # Generate mindmap
+                mindmap = await langchain_service.generate_mindmap(
+                    topic=topic,
+                    max_tokens=max_tokens,
+                )
+
+                # Format as JSON response
+                mindmap_data = {
+                    "type": "mindmap",
+                    "_result": {
+                        "topic": mindmap.topic,
+                        "nodes": serialize_mindmap_tree(mindmap.root_node),
+                        "total_nodes": mindmap.total_nodes,
+                    },
+                }
+
+                # Send as complete response (no streaming for structured data)
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "complete",
+                            "content": json.dumps(mindmap_data),
+                            "timestamp": asyncio.get_event_loop().time(),
+                        }
+                    )
+                )
+
+                print(f"✅ Mindmap sent successfully")
+                print(f"   Topic: {mindmap.topic}")
+                print(f"   Total nodes: {mindmap.total_nodes}")
+
+                await websocket.close()
+                return
+
+            except Exception as e:
+                print(f"❌ Mindmap generator error: {e}")
+                import traceback
+
+                traceback.print_exc()
+                # Fall through to regular conversation generation
+
         # Generate streaming response with optimized settings
         full_response = ""
         print(f"🚀 Starting WebSocket conversation streaming for: '{message[:50]}...'")

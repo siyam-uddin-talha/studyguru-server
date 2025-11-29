@@ -57,6 +57,49 @@ class GuardrailOutput(BaseModel):
     reasoning: str = Field(description="Explanation of the decision")
 
 
+class MindmapNode(BaseModel):
+    """Pydantic model for a mindmap node"""
+
+    id: str = Field(description="Unique identifier for this node")
+    content: str = Field(description="Content/text of this node")
+    level: int = Field(description="Depth level in the tree (0 = root)")
+    parent_id: Optional[str] = Field(
+        default=None, description="ID of parent node, None for root"
+    )
+    color: str = Field(default="#4A90E2", description="Hex color code for this node")
+    children: List["MindmapNode"] = Field(
+        default_factory=list, description="List of child nodes"
+    )
+
+
+class MindmapNodeFlat(BaseModel):
+    """Pydantic model for a flat mindmap node (no recursion for LLM)"""
+
+    id: str = Field(description="Unique identifier for this node")
+    content: str = Field(description="Content/text of this node")
+    level: int = Field(description="Depth level in the tree (0 = root)")
+    parent_id: Optional[str] = Field(
+        default=None, description="ID of parent node, None for root"
+    )
+    color: str = Field(default="#4A90E2", description="Hex color code for this node")
+
+
+class MindmapFlatOutput(BaseModel):
+    """Pydantic model for flat mindmap generation output"""
+
+    topic: str = Field(description="Main topic of the mindmap")
+    nodes: List[MindmapNodeFlat] = Field(description="List of all nodes in the mindmap")
+    total_nodes: int = Field(description="Total number of nodes in the mindmap")
+
+
+class MindmapOutput(BaseModel):
+    """Pydantic model for mindmap generation output (hierarchical)"""
+
+    topic: str = Field(description="Main topic of the mindmap")
+    root_node: MindmapNode = Field(description="Root node of the mindmap tree")
+    total_nodes: int = Field(description="Total number of nodes in the mindmap")
+
+
 class LangChainService:
     """LangChain-based service for StudyGuru operations"""
 
@@ -73,6 +116,7 @@ class LangChainService:
         # Output parsers
         self.document_parser = JsonOutputParser(pydantic_object=DocumentAnalysisOutput)
         self.guardrail_parser = JsonOutputParser(pydantic_object=GuardrailOutput)
+        self.mindmap_parser = JsonOutputParser(pydantic_object=MindmapOutput)
         self.string_parser = StrOutputParser()
 
         # Pre-configured chains
@@ -667,12 +711,15 @@ class LangChainService:
 
             # Build user content
             user_content = []
-            # OPTIMIZATION: Limit context length and skip for simple queries
-            if context and not is_document_analysis_only and not is_simple_query:
+            # OPTIMIZATION: Limit context length and skip for simple queries ONLY if no explicit context provided
+            # If context is provided (e.g. mindmap), we should use it regardless of query simplicity
+            should_use_context = context and not is_document_analysis_only
+
+            if should_use_context:
                 # Truncate context if too long (increased limit for more context)
-                if len(context) > 5000:
+                if len(context) > 8000:  # Increased from 5000 to 8000
                     context = (
-                        context[:5000] + "...\n[Context truncated for faster response]"
+                        context[:8000] + "...\n[Context truncated for faster response]"
                     )
 
                 # Check if user is asking about a specific numbered item
@@ -1403,6 +1450,7 @@ class LangChainService:
 
             # Generate title with multiple fallback attempts and increased timeout
             result = None
+            json_parse_error = False
             for attempt in range(3):  # Try up to 3 times
                 try:
                     # Use asyncio.wait_for to add timeout protection
@@ -1421,20 +1469,37 @@ class LangChainService:
                     if result and isinstance(result, dict) and result.get("title"):
                         break
                     else:
-                        print(
-                            f"⚠️ Attempt {attempt + 1}: Invalid result format: {result}"
-                        )
+                        if attempt == 2:  # Last attempt
+                            json_parse_error = True
                         if attempt < 2:  # Don't sleep on last attempt
                             await asyncio.sleep(0.5)  # Brief delay before retry
 
                 except asyncio.TimeoutError:
-                    print(f"⚠️ Attempt {attempt + 1}: Title generation timed out (25s)")
+                    if attempt == 2:  # Last attempt
+                        json_parse_error = True
                     if attempt < 2:  # Don't sleep on last attempt
                         await asyncio.sleep(
                             1.0
                         )  # Longer delay before retry for timeout
                 except Exception as chain_error:
-                    print(f"⚠️ Attempt {attempt + 1}: Chain error: {chain_error}")
+                    error_str = str(chain_error).lower()
+                    # Check if it's a JSON parsing error
+                    if (
+                        "json" in error_str
+                        or "parse" in error_str
+                        or "output_parsing" in error_str
+                    ):
+                        json_parse_error = True
+                        # Only log on last attempt to reduce noise
+                        if attempt == 2:
+                            print(
+                                f"⚠️ Title generation failed: JSON parsing error after 3 attempts"
+                            )
+                    else:
+                        # Log non-JSON errors
+                        if attempt == 2:  # Only log on last attempt
+                            print(f"⚠️ Title generation failed: {chain_error}")
+
                     if attempt < 2:  # Don't sleep on last attempt
                         await asyncio.sleep(0.5)  # Brief delay before retry
 
@@ -1449,6 +1514,18 @@ class LangChainService:
             else:
                 title = None
                 summary_title = None
+
+            # If all attempts failed, use fallback
+            if not title and not summary_title:
+                # Fallback: create simple title from message
+                if message:
+                    simple_title = message[:40].strip()
+                    return (simple_title, f"Help with {simple_title.lower()}")
+                elif response_preview:
+                    simple_title = response_preview[:40].strip()
+                    return (simple_title, "Educational assistance")
+                else:
+                    return ("Study Session", "Educational assistance")
 
             return title, summary_title
 
@@ -1585,6 +1662,182 @@ class LangChainService:
                     "version": 1,
                     "last_updated": datetime.now().isoformat(),
                 }
+
+    async def generate_mindmap(
+        self,
+        topic: str,
+        context: str = "",
+        max_tokens: int = 2000,
+        assistant_model: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
+    ) -> MindmapOutput:
+        """
+        Generate hierarchical mindmap structure for a given topic.
+
+        Args:
+            topic: The main topic for the mindmap
+            max_tokens: Maximum tokens for generation
+            assistant_model: Model to use for generation
+            subscription_plan: User's subscription plan
+
+        Returns:
+            MindmapOutput with hierarchical node structure
+        """
+        try:
+            # Create callback handler
+            callback_handler = StudyGuruCallbackHandler()
+
+            # Build system prompt for mindmap generation
+            system_prompt = """You are an expert at creating educational mindmaps that help students visualize and understand complex topics.
+
+CRITICAL INSTRUCTIONS:
+1. **Create a hierarchical structure** with the main topic as the root
+2. **Each node must have**:
+   - Unique ID (use format: "node_1", "node_2", etc.)
+   - Content (concise, 2-5 words)
+   - Level (0 for root, 1 for main branches, 2+ for sub-branches)
+   - Parent ID (null for root)
+   - Color (use different colors for different levels)
+   - Children (list of child nodes)
+3. **Aim for 8-15 total nodes** for clarity
+4. **Use colors**:
+   - Level 0 (root): #4A90E2 (blue)
+   - Level 1: #E74C3C (red), #2ECC71 (green), #F39C12 (orange)
+   - Level 2+: #9B59B6 (purple), #1ABC9C (teal), #E67E22 (dark orange)
+5. **Keep content concise** - each node should be a key concept
+
+Format your response as JSON with this structure:
+{
+  "topic": "Photosynthesis",
+  "root_node": {
+    "id": "node_0",
+    "content": "Photosynthesis",
+    "level": 0,
+    "parent_id": null,
+    "color": "#4A90E2",
+    "children": [
+      {
+        "id": "node_1",
+        "content": "Light Reactions",
+        "level": 1,
+        "parent_id": "node_0",
+        "color": "#E74C3C",
+        "children": []
+      }
+    ]
+  },
+  "total_nodes": 12
+}"""
+
+            # Build user content
+            user_content = []
+
+            # Add context if available
+            if context:
+                user_content.append(
+                    {
+                        "type": "text",
+                        "text": f"**USER'S LEARNING CONTEXT:**\\n{context}\\n\\n**INSTRUCTIONS:** Use this context to create a personalized mindmap that builds on concepts the user has already discussed and focuses on their areas of interest.\\n\\n",
+                    }
+                )
+
+            user_content.append(
+                {
+                    "type": "text",
+                    "text": f"**TOPIC:** {topic}\\n\\n**INSTRUCTIONS:** Create a comprehensive mindmap with 8-15 nodes covering the key concepts, subtopics, and relationships.",
+                }
+            )
+
+            # Create prompt
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_content),
+                ]
+            )
+
+            # Use chat model
+            model = StudyGuruConfig.MODELS.get_chat_model(
+                temperature=0.4,  # Slightly higher for creativity
+                max_tokens=max_tokens,
+                model_name=assistant_model,
+                subscription_plan=subscription_plan,
+            )
+
+            # Use structured output with FLAT model to avoid recursion issues
+            structured_model = model.with_structured_output(MindmapFlatOutput)
+
+            # Create chain
+            chain = prompt | structured_model
+
+            # Generate flat mindmap
+            flat_result = await chain.ainvoke(
+                {}, config={"callbacks": [callback_handler]}
+            )
+
+            # Reconstruct tree from flat list
+            nodes_map = {}
+            root_node = None
+
+            # First pass: Create MindmapNodes
+            for flat_node in flat_result.nodes:
+                node = MindmapNode(
+                    id=flat_node.id,
+                    content=flat_node.content,
+                    level=flat_node.level,
+                    parent_id=flat_node.parent_id,
+                    color=flat_node.color,
+                    children=[],
+                )
+                nodes_map[node.id] = node
+                if node.level == 0 or node.parent_id is None:
+                    root_node = node
+
+            # Second pass: Build hierarchy
+            for node_id, node in nodes_map.items():
+                if node.parent_id and node.parent_id in nodes_map:
+                    nodes_map[node.parent_id].children.append(node)
+
+            # Fallback if no root found
+            if not root_node and nodes_map:
+                # Use the first node as root
+                root_node = list(nodes_map.values())[0]
+
+            if not root_node:
+                raise ValueError(
+                    "Could not reconstruct mindmap tree: No nodes generated"
+                )
+
+            return MindmapOutput(
+                topic=flat_result.topic,
+                root_node=root_node,
+                total_nodes=flat_result.total_nodes,
+            )
+
+        except Exception as e:
+            print(f"❌ Mindmap generation error: {e}")
+            # Return fallback mindmap
+            return MindmapOutput(
+                topic=topic,
+                root_node=MindmapNode(
+                    id="node_0",
+                    content=topic[:20],  # Truncate if too long
+                    level=0,
+                    parent_id=None,
+                    color="#4A90E2",
+                    children=[
+                        MindmapNode(
+                            id="node_1",
+                            content="Error occurred",
+                            level=1,
+                            parent_id="node_0",
+                            color="#E74C3C",
+                            children=[],
+                        )
+                    ],
+                ),
+                total_nodes=2,
+            )
 
 
 # Global instance
