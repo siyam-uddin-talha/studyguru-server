@@ -961,12 +961,19 @@ class LangGraphWorkflowService:
             # First, scrape any URLs provided
             if urls:
                 print(f"🔗 [PERFORM WEB SEARCH] Scraping {len(urls)} URLs...")
-                for url in urls[:3]:  # Limit to 3 URLs
+                url_count = len(urls[:3])  # Limit to 3 URLs
+                for idx, url in enumerate(urls[:3], 1):
                     scraped_content = await self._scrape_url_with_serper(url)
                     if scraped_content:
-                        # Format content without URL in header to avoid confusion
-                        # The content is already retrieved, so we don't need to mention the URL
-                        all_results.append(f"📄 Retrieved Content:\n{scraped_content}")
+                        # Format content with numbering if multiple URLs
+                        if url_count > 1:
+                            all_results.append(
+                                f"📄 Retrieved Content (Source {idx} of {url_count}):\n{scraped_content}"
+                            )
+                        else:
+                            all_results.append(
+                                f"📄 Retrieved Content:\n{scraped_content}"
+                            )
                         print(f"✅ Successfully scraped: {url}")
                     else:
                         print(
@@ -975,9 +982,14 @@ class LangGraphWorkflowService:
                         # Fallback: Search for the URL to get snippet/title
                         search_result = await self._search_with_serper(url)
                         if search_result:
-                            all_results.append(
-                                f"🔍 Retrieved Information:\n{search_result}"
-                            )
+                            if url_count > 1:
+                                all_results.append(
+                                    f"🔍 Retrieved Information (Source {idx} of {url_count}):\n{search_result}"
+                                )
+                            else:
+                                all_results.append(
+                                    f"🔍 Retrieved Information:\n{search_result}"
+                                )
                             print(f"✅ Found search results for URL: {url}")
                         else:
                             print(f"❌ Failed to search for URL: {url}")
@@ -1098,6 +1110,75 @@ class LangGraphWorkflowService:
                 success=False, error=str(e), processing_time=processing_time
             )
 
+    def _prepare_summary_prompt(self, context: WorkflowContext) -> tuple[str, bool]:
+        """
+        Prepare the summary prompt from context.
+        Returns: (prompt, has_content)
+        """
+        # Prepare summary content from all sources
+        content_parts = []
+
+        # Add integration result if available
+        if context.integration_result and context.integration_result.success:
+            content_parts.append(
+                f"Integrated Analysis:\n{context.integration_result.content}"
+            )
+
+        # Add PDF results
+        if context.pdf_results:
+            for pdf_result in context.pdf_results:
+                if pdf_result.success and pdf_result.content:
+                    content_parts.append(f"Document Content:\n{pdf_result.content}")
+
+        # Add web search/scrape results (already retrieved - no URL needed)
+        if (
+            context.web_search_results
+            and context.web_search_results.success
+            and context.web_search_results.content
+        ):
+            # The content already has proper headers from _perform_web_search
+            # For single URL: "📄 Retrieved Content:"
+            # For multiple URLs: "📄 Retrieved Content (Source 1 of 2):", etc.
+            # Just clean up any old "Content from URL:" headers if they exist
+            content_text = context.web_search_results.content
+            content_text = re.sub(
+                r"📄 Content from https?://[^\n]+\n",
+                "📄 Retrieved Content:\n",
+                content_text,
+            )
+            # Keep the numbered source headers - they help identify multiple sources
+            # Don't add another outer header since content already has proper headers
+            content_parts.append(content_text)
+
+        summary_content = "\n\n---\n\n".join(content_parts)
+
+        # Debug logging
+        print(f"🔍 [SUMMARY] Content parts: {len(content_parts)}")
+        print(f"🔍 [SUMMARY] Total content length: {len(summary_content)} chars")
+
+        # If no content was gathered, provide a helpful message
+        if not summary_content or not summary_content.strip():
+            return None, False
+
+        # Get the user's original question/request (remove URLs)
+        user_query = ""
+        if hasattr(context, "original_message") and context.original_message:
+            # Extract the question part (remove URLs)
+            url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+            user_query = re.sub(url_pattern, "", context.original_message).strip()
+            # Clean up extra whitespace/newlines
+            user_query = re.sub(r"\n\s*\n", "\n", user_query).strip()
+
+        # Create simple prompt: content + user question (no URLs in prompt)
+        if user_query:
+            summary_prompt = f"""{summary_content}
+
+{user_query}"""
+        else:
+            summary_prompt = summary_content
+
+        return summary_prompt, True
+
     async def _generate_final_summary(
         self, context: WorkflowContext
     ) -> ProcessingResult:
@@ -1108,45 +1189,10 @@ class LangGraphWorkflowService:
             # Get appropriate model
             model = StudyGuruConfig.MODELS.get_chat_model()
 
-            # Prepare summary content from all sources
-            content_parts = []
+            # Prepare summary prompt
+            summary_prompt, has_content = self._prepare_summary_prompt(context)
 
-            # Add integration result if available
-            if context.integration_result and context.integration_result.success:
-                content_parts.append(
-                    f"Integrated Analysis:\n{context.integration_result.content}"
-                )
-
-            # Add PDF results
-            if context.pdf_results:
-                for pdf_result in context.pdf_results:
-                    if pdf_result.success and pdf_result.content:
-                        content_parts.append(f"Document Content:\n{pdf_result.content}")
-
-            # Add web search/scrape results (already retrieved - no URL needed)
-            if (
-                context.web_search_results
-                and context.web_search_results.success
-                and context.web_search_results.content
-            ):
-                # Remove any URL references from the content header
-                content_text = context.web_search_results.content
-                # Clean up any "Content from URL:" headers that might be in the content
-                content_text = re.sub(
-                    r"📄 Content from https?://[^\n]+\n",
-                    "📄 Retrieved Content:\n",
-                    content_text,
-                )
-                content_parts.append(f"Retrieved Content:\n{content_text}")
-
-            summary_content = "\n\n---\n\n".join(content_parts)
-
-            # Debug logging
-            print(f"🔍 [SUMMARY] Content parts: {len(content_parts)}")
-            print(f"🔍 [SUMMARY] Total content length: {len(summary_content)} chars")
-
-            # If no content was gathered, provide a helpful message
-            if not summary_content or not summary_content.strip():
+            if not has_content:
                 # Still try to respond based on the original message
                 original_message = (
                     context.original_message
@@ -1176,53 +1222,11 @@ class LangGraphWorkflowService:
                     processing_time=(datetime.now() - start_time).total_seconds(),
                 )
 
-            # Get the user's original question/request
-            user_query = ""
-            if hasattr(context, "original_message") and context.original_message:
-                # Extract the question part (remove URLs)
-                url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-                user_query = re.sub(url_pattern, "", context.original_message).strip()
-
-            # Create summary prompt that addresses the user's question
-            # IMPORTANT: The content below is already retrieved/scraped - do NOT mention inability to access URLs
-            if user_query:
-                summary_prompt = f"""You have been provided with content that has already been retrieved for you. Use this content to answer the user's question.
-
-User's Question: {user_query}
-
-Retrieved Content (already available - use this directly):
-{summary_content}
-
-Please provide a comprehensive, educational response that:
-1. Directly answers the user's question using the provided content
-2. Is well-structured and easy to understand
-3. Includes key insights and findings from the content
-4. Cites relevant sources when appropriate
-5. Is informative and helpful for learning
-
-IMPORTANT: The content above is already retrieved and available to you. Do NOT mention that you cannot access URLs or websites - you already have the content."""
-            else:
-                summary_prompt = f"""You have been provided with content that has already been retrieved for you. Please summarize and explain it in an educational way.
-
-Retrieved Content (already available - use this directly):
-{summary_content}
-
-The response should be:
-1. Well-structured and easy to understand
-2. Include key insights and findings from the provided content
-3. Be educational and informative
-4. Cite sources where appropriate
-
-IMPORTANT: The content above is already retrieved and available to you. Do NOT mention that you cannot access URLs or websites - you already have the content."""
-
             # Generate summary
             print(f"🚀 [SUMMARY] Generating response...")
             response = await model.ainvoke([HumanMessage(content=summary_prompt)])
 
             processing_time = (datetime.now() - start_time).total_seconds()
-            print(
-                f"✅ [SUMMARY] Response generated: {len(response.content)} chars in {processing_time:.2f}s"
-            )
 
             return ProcessingResult(
                 success=True,
@@ -1238,6 +1242,80 @@ IMPORTANT: The content above is already retrieved and available to you. Do NOT m
             return ProcessingResult(
                 success=False, error=str(e), processing_time=processing_time
             )
+
+    async def _generate_final_summary_streaming(self, context: WorkflowContext):
+        """
+        Stream final comprehensive summary - yields chunks as they're generated.
+        Similar to generate_conversation_response_streaming.
+        """
+        try:
+            # Get appropriate model
+            model = StudyGuruConfig.MODELS.get_chat_model()
+
+            # Prepare summary prompt
+            summary_prompt, has_content = self._prepare_summary_prompt(context)
+
+            if not has_content:
+                # Still try to respond based on the original message
+                original_message = (
+                    context.original_message
+                    if hasattr(context, "original_message")
+                    else ""
+                )
+
+                # Check if there are URLs in the message that couldn't be scraped
+                if context.input_analysis.has_links:
+                    error_response = (
+                        "I apologize, but I was unable to retrieve content from the provided URL(s). "
+                        "This could be due to:\n"
+                        "1. The website blocking automated access\n"
+                        "2. The page requiring authentication\n"
+                        "3. Network connectivity issues\n\n"
+                        "Please try:\n"
+                        "- Copying and pasting the relevant text directly\n"
+                        "- Providing a different link to the same content\n"
+                        "- Describing the topic you'd like to learn about"
+                    )
+                else:
+                    error_response = "I couldn't find any content to analyze. Please provide more details about what you'd like to learn."
+
+                # Stream the error response as chunks
+                chunk_size = 50
+                for i in range(0, len(error_response), chunk_size):
+                    yield error_response[i : i + chunk_size]
+                return
+
+            # Stream summary using model's astream (like generate_conversation_response_streaming)
+            print(f"🚀 [SUMMARY STREAMING] Generating response...")
+            messages = [HumanMessage(content=summary_prompt)]
+
+            # Use model's native streaming if available
+            if hasattr(model, "astream"):
+                async for chunk in model.astream(messages):
+                    if hasattr(chunk, "content") and chunk.content:
+                        yield chunk.content
+            elif hasattr(model, "stream"):
+                # Some models use 'stream' instead of 'astream'
+                async for chunk in model.stream(messages):
+                    if hasattr(chunk, "content") and chunk.content:
+                        yield chunk.content
+            else:
+                # Fallback: if model doesn't support streaming, use ainvoke and chunk manually
+                print(
+                    f"⚠️ [SUMMARY STREAMING] Model doesn't support streaming, using fallback"
+                )
+                response = await model.ainvoke(messages)
+                if response.content:
+                    chunk_size = 50
+                    for i in range(0, len(response.content), chunk_size):
+                        yield response.content[i : i + chunk_size]
+
+        except Exception as e:
+            print(f"❌ [SUMMARY STREAMING] Error: {e}")
+            error_msg = f"Error generating response: {str(e)}"
+            chunk_size = 50
+            for i in range(0, len(error_msg), chunk_size):
+                yield error_msg[i : i + chunk_size]
 
     async def execute_workflow(
         self,

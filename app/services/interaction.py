@@ -1671,7 +1671,9 @@ async def _extract_interaction_metadata_fast(
                 else:
                     response_preview = "MCQ Generation"
             else:
-                response_preview = str(content_text)[:300]
+                response_preview = str(content_text)[
+                    :500
+                ]  # Increased for better context
         elif isinstance(content_text, str):
             # For string responses, check if it's MCQ JSON
             if (
@@ -1699,15 +1701,21 @@ async def _extract_interaction_metadata_fast(
                             else:
                                 response_preview = "MCQ Generation"
                         else:
-                            response_preview = content_text[:300]
+                            response_preview = content_text[
+                                :2000
+                            ]  # Increased for better context
                     else:
-                        response_preview = content_text[:300]
+                        response_preview = content_text[
+                            :2000
+                        ]  # Increased for better context
                 except:
-                    response_preview = content_text[:300]
+                    response_preview = content_text[
+                        :2000
+                    ]  # Increased for better context
             else:
-                response_preview = content_text[:300]
+                response_preview = content_text[:2000]  # Increased for better context
         else:
-            response_preview = str(content_text)[:300]
+            response_preview = str(content_text)[:2000]  # Increased for better context
 
         print(
             f"🔍 Calling title generation with message: '{original_message}', response_preview: '{response_preview}'"
@@ -1765,10 +1773,47 @@ async def _extract_interaction_metadata_fast(
 
             except Exception as ai_title_error:
                 print(f"⚠️ AI title generation failed: {ai_title_error}")
-                # Fallback to simple title generation
+                # Fallback to intelligent title generation
                 if original_message:
-                    title = original_message[:40].strip()
-                    summary_title = f"Help with {title.lower()}"
+                    # Check if the message is a URL
+                    url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+                    is_url = bool(re.match(url_pattern, original_message.strip()))
+
+                    if is_url:
+                        # For URLs, try to extract meaningful title from response or domain
+                        try:
+                            from urllib.parse import urlparse
+
+                            parsed_url = urlparse(original_message.strip())
+                            domain = parsed_url.netloc.replace("www.", "").split(".")[0]
+
+                            # Try to extract title from response_preview if available
+                            if response_preview and len(response_preview) > 20:
+                                # Look for common title patterns in the response
+                                # Try to find the first sentence or meaningful phrase
+                                first_sentence = response_preview.split(".")[0].strip()
+                                if (
+                                    len(first_sentence) > 10
+                                    and len(first_sentence) < 60
+                                ):
+                                    title = first_sentence
+                                    summary_title = f"Content from {domain.title()}"
+                                else:
+                                    # Use domain-based title
+                                    title = f"Research from {domain.title()}"
+                                    summary_title = f"Content from {domain.title()}"
+                            else:
+                                # Use domain-based title
+                                title = f"Research from {domain.title()}"
+                                summary_title = f"Content from {domain.title()}"
+                        except Exception as url_error:
+                            print(f"⚠️ URL parsing error: {url_error}")
+                            title = "Research Article"
+                            summary_title = "Educational content"
+                    else:
+                        # For regular messages, use first 40 characters
+                        title = original_message[:40].strip()
+                        summary_title = f"Help with {title.lower()}"
                 else:
                     title = "Study Session"
                     summary_title = "Educational assistance"

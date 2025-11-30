@@ -354,7 +354,10 @@ Rules:
 - For educational questions: focus on the subject/topic
 - For general questions: use the main topic discussed
 
-JSON: {{"title": "conversation title", "summary_title": "brief description"}}""",
+IMPORTANT: You MUST respond with ONLY valid JSON in this exact format:
+{{"title": "conversation title", "summary_title": "brief description"}}
+
+Do not include any markdown, code blocks, or additional text. Only return the JSON object.""",
             ),
             ("human", "User: {message}\nResponse: {response_preview}"),
         ]

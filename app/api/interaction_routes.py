@@ -66,8 +66,12 @@ async def _update_title_background(
     original_message: str,
     assistant_model: Optional[str] = None,
     subscription_plan: Optional[str] = None,
+    websocket: Optional[WebSocket] = None,
 ):
-    """Update interaction title in background without blocking response"""
+    """
+    Update interaction title in background without blocking response.
+    If websocket is provided, sends the generated title through websocket.
+    """
     try:
         from app.core.database import AsyncSessionLocal
         from sqlalchemy import select
@@ -83,6 +87,10 @@ async def _update_title_background(
             interaction = result.scalar_one_or_none()
 
             if interaction:
+                # Store original title to check if it changed
+                old_title = interaction.title
+                old_summary_title = interaction.summary_title
+
                 await _extract_interaction_metadata_fast(
                     interaction=interaction,
                     content_text=content_text,
@@ -91,7 +99,31 @@ async def _update_title_background(
                     subscription_plan=subscription_plan,
                 )
                 await db.commit()
-                print(f"✅ Background title generation completed and saved")
+
+                # Refresh to get updated values
+                await db.refresh(interaction)
+
+                # Send title through websocket if provided and title was generated/updated
+                if websocket and interaction.title and interaction.title != old_title:
+                    try:
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "title_update",
+                                    "title": interaction.title,
+                                    "summary_title": interaction.summary_title,
+                                    "interaction_id": interaction_id,
+                                    "timestamp": asyncio.get_event_loop().time(),
+                                }
+                            )
+                        )
+                        print(f"✅ Title sent through websocket: '{interaction.title}'")
+                    except Exception as ws_error:
+                        print(f"⚠️ Failed to send title through websocket: {ws_error}")
+
+                print(
+                    f"✅ Background title generation completed and saved: '{interaction.title}'"
+                )
             else:
                 print(f"⚠️ Interaction {interaction_id} not found for title generation")
     except Exception as title_error:
@@ -894,6 +926,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 full_response = "No response generated"
 
             # Now save the AI response to database and handle background operations
+            title_task = None  # Initialize title task variable
             try:
                 # Process AI content
                 from app.services.interaction import _process_ai_content_fast
@@ -930,7 +963,6 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 # Commit the conversation FIRST (non-blocking title generation)
                 await db.commit()
 
-                # Update interaction title in background (non-blocking)
                 # Get subscription plan for title generation
                 subscription_plan = None
                 if current_user.purchased_subscription:
@@ -938,17 +970,19 @@ async def websocket_stream_conversation(websocket: WebSocket):
                         current_user.purchased_subscription.subscription.subscription_plan
                     )
 
-                asyncio.create_task(
+                print(f"✅ AI response saved to database successfully")
+
+                # Start title generation in background - it will send title through websocket when ready
+                title_task = asyncio.create_task(
                     _update_title_background(
                         interaction_id=str(interaction.id),
                         content_text=full_response,
                         original_message=message or "",
                         assistant_model=assistant_model,
                         subscription_plan=subscription_plan,
+                        websocket=websocket,  # Pass websocket to send title when ready
                     )
                 )
-
-                print(f"✅ AI response saved to database successfully")
 
                 # Send completion status (internal only, not shown to user)
                 await websocket.send_text(
@@ -996,6 +1030,20 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 )
             )
 
+            # Wait for title generation to complete (with timeout) so title can be sent through websocket
+            # Title generation typically takes 1-3 seconds, so we wait up to 8 seconds
+            if title_task:
+                print("⏳ Waiting for title generation to complete...")
+                try:
+                    await asyncio.wait_for(title_task, timeout=8.0)
+                    print("✅ Title generation completed")
+                except asyncio.TimeoutError:
+                    print("⏰ Title generation timeout (continuing anyway)")
+                except Exception as title_error:
+                    print(f"⚠️ Title generation error: {title_error}")
+            else:
+                print("⚠️ Title task not created, skipping wait")
+
         finally:
             # Close the database session
             await db.close()
@@ -1018,7 +1066,10 @@ async def websocket_stream_conversation(websocket: WebSocket):
             pass
     finally:
         try:
+            # Small delay before closing to allow any pending title generation messages
+            await asyncio.sleep(0.5)
             await websocket.close()
+            print("🔌 WebSocket closed")
         except:
             pass
 

@@ -628,7 +628,9 @@ class LangChainService:
             enable_web_search = not is_document_analysis_only
 
             if enable_web_search:
-                prompt_messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
+                prompt_messages.append(
+                    MessagesPlaceholder(variable_name="agent_scratchpad")
+                )
 
             prompt = ChatPromptTemplate.from_messages(prompt_messages)
 
@@ -645,22 +647,24 @@ class LangChainService:
                 )
                 chain = prompt | optimized_llm | self.document_parser
                 print("🔍 Using vision model and document parser for document analysis")
-                
+
                 # Generate response
-                response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
-            
+                response = await chain.ainvoke(
+                    {}, config={"callbacks": [callback_handler]}
+                )
+
             elif enable_web_search:
                 # Use Agent with Serper tool for regular conversations
                 model_to_use = assistant_model or None
                 print(f"💬 Using chat model with Serper: {model_to_use or 'default'}")
-                
+
                 # Get model WITHOUT binding tools in config (we bind manually for agent)
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
                     temperature=0.2,
                     max_tokens=max_tokens,
                     model_name=model_to_use,
                     subscription_plan=subscription_plan,
-                    web_search=False # Important: Don't bind in config
+                    web_search=False,  # Important: Don't bind in config
                 )
 
                 # Setup Serper tool
@@ -668,7 +672,7 @@ class LangChainService:
                 serper_tool = Tool(
                     name="google_search",
                     func=search.run,
-                    description="Useful for searching the internet for current information, facts, and educational content."
+                    description="Useful for searching the internet for current information, facts, and educational content.",
                 )
                 tools = [serper_tool]
 
@@ -677,7 +681,9 @@ class LangChainService:
                 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
                 # Execute Agent
-                result = await agent_executor.ainvoke({}, config={"callbacks": [callback_handler]})
+                result = await agent_executor.ainvoke(
+                    {}, config={"callbacks": [callback_handler]}
+                )
                 response = result["output"]
 
             else:
@@ -691,9 +697,11 @@ class LangChainService:
                     subscription_plan=subscription_plan,
                 )
                 chain = prompt | optimized_llm | self.string_parser
-                
+
                 # Generate response
-                response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
+                response = await chain.ainvoke(
+                    {}, config={"callbacks": [callback_handler]}
+                )
 
             return (
                 response,
@@ -837,7 +845,9 @@ class LangChainService:
             enable_web_search = not is_document_analysis_only
 
             if enable_web_search:
-                prompt_messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
+                prompt_messages.append(
+                    MessagesPlaceholder(variable_name="agent_scratchpad")
+                )
 
             prompt = ChatPromptTemplate.from_messages(prompt_messages)
 
@@ -865,7 +875,7 @@ class LangChainService:
                     f"✅ [STREAMING] Using vision model: {actual_model} for document analysis"
                 )
                 chain = prompt | optimized_llm
-                
+
                 # Stream response using direct model streaming
                 full_response = ""
                 if hasattr(optimized_llm, "astream"):
@@ -880,7 +890,10 @@ class LangChainService:
                 else:
                     async for chunk in chain.astream(
                         {},
-                        config={"callbacks": [callback_handler], "stream_mode": "values"},
+                        config={
+                            "callbacks": [callback_handler],
+                            "stream_mode": "values",
+                        },
                     ):
                         if hasattr(chunk, "content") and chunk.content:
                             full_response += chunk.content
@@ -889,8 +902,10 @@ class LangChainService:
             elif enable_web_search:
                 # Use Agent with Serper tool for regular conversations
                 model_to_use = assistant_model or None
-                print(f"💬 [STREAMING] Using chat model with Serper: {model_to_use or 'default'}")
-                
+                print(
+                    f"💬 [STREAMING] Using chat model with Serper: {model_to_use or 'default'}"
+                )
+
                 # Get model WITHOUT binding tools in config (we bind manually for agent)
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
                     temperature=0.1,
@@ -898,7 +913,7 @@ class LangChainService:
                     model_name=model_to_use,
                     subscription_plan=subscription_plan,
                     streaming=True,
-                    web_search=False # Important: Don't bind in config
+                    web_search=False,  # Important: Don't bind in config
                 )
 
                 # Setup Serper tool
@@ -906,7 +921,7 @@ class LangChainService:
                 serper_tool = Tool(
                     name="google_search",
                     func=search.run,
-                    description="Useful for searching the internet for current information, facts, and educational content."
+                    description="Useful for searching the internet for current information, facts, and educational content.",
                 )
                 tools = [serper_tool]
 
@@ -916,7 +931,9 @@ class LangChainService:
 
                 # Stream events
                 full_response = ""
-                async for event in agent_executor.astream_events({}, version="v1", config={"callbacks": [callback_handler]}):
+                async for event in agent_executor.astream_events(
+                    {}, version="v1", config={"callbacks": [callback_handler]}
+                ):
                     kind = event["event"]
                     if kind == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
@@ -943,7 +960,7 @@ class LangChainService:
                     subscription_plan=subscription_plan,
                     streaming=True,  # Ensure streaming is enabled
                 )
-                
+
                 chain = prompt | optimized_llm
 
                 # Stream response using direct model streaming
@@ -962,7 +979,10 @@ class LangChainService:
                 else:
                     async for chunk in chain.astream(
                         {},
-                        config={"callbacks": [callback_handler], "stream_mode": "values"},
+                        config={
+                            "callbacks": [callback_handler],
+                            "stream_mode": "values",
+                        },
                     ):
                         if hasattr(chunk, "content") and chunk.content:
                             full_response += chunk.content
@@ -1524,9 +1544,9 @@ class LangChainService:
     ) -> Tuple[Optional[str], Optional[str]]:
         """Generate interaction title and summary using cost-efficient model"""
         try:
-            # Limit input sizes for cost efficiency
+            # Limit input sizes for cost efficiency, but use more context for better titles
             limited_message = message[:200] if message else ""
-            limited_response = response_preview[:300] if response_preview else ""
+            limited_response = response_preview[:400] if response_preview else ""
 
             # Create callback handler for minimal token tracking
             callback_handler = StudyGuruCallbackHandler()
@@ -1542,11 +1562,12 @@ class LangChainService:
 
             # Generate title with multiple fallback attempts and increased timeout
             result = None
+            raw_response = None
             json_parse_error = False
             for attempt in range(3):  # Try up to 3 times
                 try:
                     # Use asyncio.wait_for to add timeout protection
-                    result = await asyncio.wait_for(
+                    chain_result = await asyncio.wait_for(
                         title_chain.ainvoke(
                             {
                                 "message": limited_message,
@@ -1557,10 +1578,31 @@ class LangChainService:
                         timeout=25.0,  # 25 second timeout per attempt
                     )
 
+                    # Store raw response for debugging and fallback extraction
+                    if isinstance(chain_result, str):
+                        raw_response = chain_result
+                    elif isinstance(chain_result, dict):
+                        raw_response = json.dumps(chain_result)
+
                     # Validate result
-                    if result and isinstance(result, dict) and result.get("title"):
+                    if (
+                        chain_result
+                        and isinstance(chain_result, dict)
+                        and chain_result.get("title")
+                    ):
+                        result = chain_result
                         break
                     else:
+                        # Try to parse as dict if it's a string
+                        if isinstance(chain_result, str):
+                            try:
+                                parsed = json.loads(chain_result)
+                                if isinstance(parsed, dict) and parsed.get("title"):
+                                    result = parsed
+                                    break
+                            except:
+                                pass
+
                         if attempt == 2:  # Last attempt
                             json_parse_error = True
                         if attempt < 2:  # Don't sleep on last attempt
@@ -1582,11 +1624,28 @@ class LangChainService:
                         or "output_parsing" in error_str
                     ):
                         json_parse_error = True
+                        # Try to extract raw response from error if available
+                        if hasattr(chain_error, "response") or hasattr(
+                            chain_error, "text"
+                        ):
+                            try:
+                                error_text = getattr(
+                                    chain_error,
+                                    "response",
+                                    getattr(chain_error, "text", ""),
+                                )
+                                if error_text:
+                                    raw_response = str(error_text)
+                            except:
+                                pass
+
                         # Only log on last attempt to reduce noise
                         if attempt == 2:
                             print(
                                 f"⚠️ Title generation failed: JSON parsing error after 3 attempts"
                             )
+                            if raw_response:
+                                print(f"🔍 Raw response preview: {raw_response[:200]}")
                     else:
                         # Log non-JSON errors
                         if attempt == 2:  # Only log on last attempt
@@ -1596,6 +1655,9 @@ class LangChainService:
                         await asyncio.sleep(0.5)  # Brief delay before retry
 
             # Extract title and summary with robust validation
+            title = None
+            summary_title = None
+
             if result and isinstance(result, dict):
                 title = result.get("title", "")[:50] if result.get("title") else None
                 summary_title = (
@@ -1603,9 +1665,38 @@ class LangChainService:
                     if result.get("summary_title")
                     else None
                 )
-            else:
-                title = None
-                summary_title = None
+
+            # If JSON parsing failed but we have raw response, try to extract title from text
+            if not title and raw_response:
+                try:
+                    # Try to extract title from raw text using regex
+                    # Look for "title": "..." pattern
+                    title_match = re.search(
+                        r'"title"\s*:\s*"([^"]+)"', raw_response, re.IGNORECASE
+                    )
+                    if title_match:
+                        title = title_match.group(1).strip()[:50]
+                        print(f"✅ Extracted title from raw response: {title}")
+
+                    # Look for "summary_title": "..." pattern
+                    summary_match = re.search(
+                        r'"summary_title"\s*:\s*"([^"]+)"', raw_response, re.IGNORECASE
+                    )
+                    if summary_match:
+                        summary_title = summary_match.group(1).strip()[:100]
+
+                    # If still no title, try to find any quoted string that might be a title
+                    if not title:
+                        # Look for any quoted string that's reasonable length
+                        quoted_strings = re.findall(r'"([^"]{10,50})"', raw_response)
+                        if quoted_strings:
+                            # Use the first reasonable string as title
+                            title = quoted_strings[0].strip()[:50]
+                            print(f"✅ Extracted title from quoted string: {title}")
+                except Exception as extract_error:
+                    print(
+                        f"⚠️ Failed to extract title from raw response: {extract_error}"
+                    )
 
             # If all attempts failed, use fallback
             if not title and not summary_title:

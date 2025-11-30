@@ -385,23 +385,6 @@ class LangGraphIntegrationService:
                 interaction_id=str(interaction.id) if interaction else "",
             )
 
-            # Debug logging
-            print(
-                f"🔍 [STREAM WORKFLOW] workflow_result keys: {list(workflow_result.keys())}"
-            )
-            print(
-                f"🔍 [STREAM WORKFLOW] workflow_result['success']: {workflow_result.get('success')}"
-            )
-            print(
-                f"🔍 [STREAM WORKFLOW] workflow_result['result'] type: {type(workflow_result.get('result'))}"
-            )
-            print(
-                f"🔍 [STREAM WORKFLOW] workflow_result['result'] length: {len(str(workflow_result.get('result', '')))}"
-            )
-            print(
-                f"🔍 [STREAM WORKFLOW] workflow_result['result'] preview: {str(workflow_result.get('result', ''))[:200]}"
-            )
-
             if workflow_result["success"]:
                 # Stream thinking steps
                 thinking_steps = workflow_result.get("thinking_steps", [])
@@ -415,19 +398,32 @@ class LangGraphIntegrationService:
                     }
                     await asyncio.sleep(0.5)  # Small delay for better UX
 
-                # Stream final result as token chunks for compatibility
-                final_content = workflow_result.get("result", "")
-                print(
-                    f"📝 [LANGGRAPH STREAMING] Streaming final result: {len(final_content)} chars"
-                )
-
-                chunk_size = 100
-                for i in range(0, len(final_content), chunk_size):
-                    chunk = final_content[i : i + chunk_size]
-                    yield chunk
-                    await asyncio.sleep(0.01)  # Small delay to simulate streaming
-
-                print(f"✅ [LANGGRAPH STREAMING] Streaming complete")
+                # Get context from workflow result for streaming
+                context = workflow_result.get("context")
+                if context:
+                    # Stream final summary using model's native streaming (like generate_conversation_response_streaming)
+                    print(
+                        f"🚀 [LANGGRAPH STREAMING] Streaming final summary from model..."
+                    )
+                    async for (
+                        chunk
+                    ) in self.workflow_service._generate_final_summary_streaming(
+                        context
+                    ):
+                        yield chunk
+                    print(f"✅ [LANGGRAPH STREAMING] Streaming complete")
+                else:
+                    # Fallback: stream final result as token chunks if context not available
+                    final_content = workflow_result.get("result", "")
+                    print(
+                        f"📝 [LANGGRAPH STREAMING] Streaming final result (fallback): {len(final_content)} chars"
+                    )
+                    chunk_size = 100
+                    for i in range(0, len(final_content), chunk_size):
+                        chunk = final_content[i : i + chunk_size]
+                        yield chunk
+                        await asyncio.sleep(0.01)  # Small delay to simulate streaming
+                    print(f"✅ [LANGGRAPH STREAMING] Streaming complete")
             else:
                 # Handle workflow failure - fallback to standard processing
                 error_message = workflow_result.get("error", "Unknown error")
