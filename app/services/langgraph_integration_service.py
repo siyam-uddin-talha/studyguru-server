@@ -158,15 +158,25 @@ class LangGraphIntegrationService:
             keyword in (message or "").lower() for keyword in analytical_keywords
         )
 
+        # Debug logging
+        print(
+            f"🔍 [LANGGRAPH DECISION] has_pdfs={has_pdfs}, has_links={has_links}, has_multiple_files={has_multiple_files}, has_analytical_keywords={has_analytical_keywords}"
+        )
+
         # Use LangGraph for complex scenarios
-        return (
-            (has_pdfs and has_links)  # PDFs + links
+        # URLs always need LangGraph for web scraping/searching
+        should_use = (
+            has_links  # URLs need web scraping - always use LangGraph
+            or (has_pdfs and has_links)  # PDFs + links
             or (has_pdfs and has_multiple_files)  # Multiple PDFs
             or (has_links and has_analytical_keywords)  # Links + analysis
             or (
                 has_multiple_files and has_analytical_keywords
             )  # Multiple files + analysis
         )
+
+        print(f"🔍 [LANGGRAPH DECISION] Should use LangGraph: {should_use}")
+        return should_use
 
     async def _process_workflow_result(
         self,
@@ -375,6 +385,23 @@ class LangGraphIntegrationService:
                 interaction_id=str(interaction.id) if interaction else "",
             )
 
+            # Debug logging
+            print(
+                f"🔍 [STREAM WORKFLOW] workflow_result keys: {list(workflow_result.keys())}"
+            )
+            print(
+                f"🔍 [STREAM WORKFLOW] workflow_result['success']: {workflow_result.get('success')}"
+            )
+            print(
+                f"🔍 [STREAM WORKFLOW] workflow_result['result'] type: {type(workflow_result.get('result'))}"
+            )
+            print(
+                f"🔍 [STREAM WORKFLOW] workflow_result['result'] length: {len(str(workflow_result.get('result', '')))}"
+            )
+            print(
+                f"🔍 [STREAM WORKFLOW] workflow_result['result'] preview: {str(workflow_result.get('result', ''))[:200]}"
+            )
+
             if workflow_result["success"]:
                 # Stream thinking steps
                 thinking_steps = workflow_result.get("thinking_steps", [])
@@ -388,14 +415,19 @@ class LangGraphIntegrationService:
                     }
                     await asyncio.sleep(0.5)  # Small delay for better UX
 
-                # Stream final result
-                yield {
-                    "type": "response",
-                    "content": workflow_result.get("result", ""),
-                    "thinking_steps": thinking_steps,
-                    "total_tokens": workflow_result.get("total_tokens", 0),
-                    "workflow_type": "langgraph",
-                }
+                # Stream final result as token chunks for compatibility
+                final_content = workflow_result.get("result", "")
+                print(
+                    f"📝 [LANGGRAPH STREAMING] Streaming final result: {len(final_content)} chars"
+                )
+
+                chunk_size = 100
+                for i in range(0, len(final_content), chunk_size):
+                    chunk = final_content[i : i + chunk_size]
+                    yield chunk
+                    await asyncio.sleep(0.01)  # Small delay to simulate streaming
+
+                print(f"✅ [LANGGRAPH STREAMING] Streaming complete")
             else:
                 # Handle workflow failure - fallback to standard processing
                 error_message = workflow_result.get("error", "Unknown error")

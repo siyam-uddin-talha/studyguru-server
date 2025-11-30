@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # Moonshot AI (Kimi)
     MOONSHOT_API_KEY: str = getenv("MOONSHOT_API_KEY", "")
 
+    # Serper API
+    SERPER_API_KEY: str = getenv("SERPER_API_KEY", "")
+
     # Zilliz / Milvus Vector DB
     ZILLIZ_URI: str = getenv("ZILLIZ_URI", "")
     ZILLIZ_TOKEN: str = getenv("ZILLIZ_TOKEN", "")
@@ -130,6 +133,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        # extra = "ignore"
 
 
 settings = Settings()

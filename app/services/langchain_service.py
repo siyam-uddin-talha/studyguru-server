@@ -19,6 +19,9 @@ from app.core.config import settings
 from app.config.langchain_config import StudyGuruConfig
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_community.utilities import GoogleSerperAPIWrapper
+from langchain_core.tools import Tool
 
 
 class StudyGuruCallbackHandler(AsyncCallbackHandler):
@@ -615,13 +618,19 @@ class LangChainService:
                 for url in media_urls:
                     user_content.append(self._create_media_content(url))
 
-            # Create prompt
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_content),
-                ]
-            )
+            # Create prompt messages
+            prompt_messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_content),
+            ]
+
+            # Enable web search automatically
+            enable_web_search = not is_document_analysis_only
+
+            if enable_web_search:
+                prompt_messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
+
+            prompt = ChatPromptTemplate.from_messages(prompt_messages)
 
             # Create chain with optimized model
             if is_document_analysis_only:
@@ -636,8 +645,43 @@ class LangChainService:
                 )
                 chain = prompt | optimized_llm | self.document_parser
                 print("🔍 Using vision model and document parser for document analysis")
+                
+                # Generate response
+                response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
+            
+            elif enable_web_search:
+                # Use Agent with Serper tool for regular conversations
+                model_to_use = assistant_model or None
+                print(f"💬 Using chat model with Serper: {model_to_use or 'default'}")
+                
+                # Get model WITHOUT binding tools in config (we bind manually for agent)
+                optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
+                    temperature=0.2,
+                    max_tokens=max_tokens,
+                    model_name=model_to_use,
+                    subscription_plan=subscription_plan,
+                    web_search=False # Important: Don't bind in config
+                )
+
+                # Setup Serper tool
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content."
+                )
+                tools = [serper_tool]
+
+                # Create Agent
+                agent = create_tool_calling_agent(optimized_llm, tools, prompt)
+                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+                # Execute Agent
+                result = await agent_executor.ainvoke({}, config={"callbacks": [callback_handler]})
+                response = result["output"]
+
             else:
-                # Use chat model and string parser for regular conversations
+                # Fallback for non-search cases (though we enabled it above)
                 model_to_use = assistant_model or None
                 print(f"💬 Using chat model: {model_to_use or 'default'}")
                 optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
@@ -647,9 +691,9 @@ class LangChainService:
                     subscription_plan=subscription_plan,
                 )
                 chain = prompt | optimized_llm | self.string_parser
-
-            # Generate response
-            response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
+                
+                # Generate response
+                response = await chain.ainvoke({}, config={"callbacks": [callback_handler]})
 
             return (
                 response,
@@ -783,13 +827,19 @@ class LangChainService:
                 for url in media_urls:
                     user_content.append(self._create_media_content(url))
 
-            # Create prompt
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_content),
-                ]
-            )
+            # Create prompt messages
+            prompt_messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_content),
+            ]
+
+            # Enable web search automatically
+            enable_web_search = not is_document_analysis_only
+
+            if enable_web_search:
+                prompt_messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
+
+            prompt = ChatPromptTemplate.from_messages(prompt_messages)
 
             # Create streaming chain with optimized settings
             if is_document_analysis_only:
@@ -804,8 +854,7 @@ class LangChainService:
                     model_name=model_to_use,
                     subscription_plan=subscription_plan,
                 )
-                # Log actual model being used - use requested model name (it's what we're actually using)
-                # Try to get from instance, but fallback to requested name
+                # Log actual model being used
                 actual_model = (
                     getattr(optimized_llm, "model_name", None)
                     or getattr(optimized_llm, "model", None)
@@ -816,8 +865,67 @@ class LangChainService:
                     f"✅ [STREAMING] Using vision model: {actual_model} for document analysis"
                 )
                 chain = prompt | optimized_llm
+                
+                # Stream response using direct model streaming
+                full_response = ""
+                if hasattr(optimized_llm, "astream"):
+                    messages = prompt.format_messages()
+                    async for chunk in optimized_llm.astream(
+                        messages,
+                        config={"callbacks": [callback_handler]},
+                    ):
+                        if hasattr(chunk, "content") and chunk.content:
+                            full_response += chunk.content
+                            yield chunk.content
+                else:
+                    async for chunk in chain.astream(
+                        {},
+                        config={"callbacks": [callback_handler], "stream_mode": "values"},
+                    ):
+                        if hasattr(chunk, "content") and chunk.content:
+                            full_response += chunk.content
+                            yield chunk.content
+
+            elif enable_web_search:
+                # Use Agent with Serper tool for regular conversations
+                model_to_use = assistant_model or None
+                print(f"💬 [STREAMING] Using chat model with Serper: {model_to_use or 'default'}")
+                
+                # Get model WITHOUT binding tools in config (we bind manually for agent)
+                optimized_llm = StudyGuruConfig.MODELS.get_chat_model(
+                    temperature=0.1,
+                    max_tokens=max_tokens,
+                    model_name=model_to_use,
+                    subscription_plan=subscription_plan,
+                    streaming=True,
+                    web_search=False # Important: Don't bind in config
+                )
+
+                # Setup Serper tool
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content."
+                )
+                tools = [serper_tool]
+
+                # Create Agent
+                agent = create_tool_calling_agent(optimized_llm, tools, prompt)
+                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+                # Stream events
+                full_response = ""
+                async for event in agent_executor.astream_events({}, version="v1", config={"callbacks": [callback_handler]}):
+                    kind = event["event"]
+                    if kind == "on_chat_model_stream":
+                        chunk = event["data"]["chunk"]
+                        if hasattr(chunk, "content") and chunk.content:
+                            full_response += chunk.content
+                            yield chunk.content
+
             else:
-                # Use chat model for regular conversations with speed optimizations
+                # Fallback logic (legacy)
                 model_to_use = assistant_model or None
                 print(
                     f"💬 [STREAMING] Requested chat model: {model_to_use or 'default (auto-select)'}"
@@ -835,46 +943,30 @@ class LangChainService:
                     subscription_plan=subscription_plan,
                     streaming=True,  # Ensure streaming is enabled
                 )
-                # Log actual model being used - use requested model name (it's what we're actually using)
-                # Try to get from instance, but fallback to requested name
-                actual_model = (
-                    getattr(optimized_llm, "model_name", None)
-                    or getattr(optimized_llm, "model", None)
-                    or model_to_use
-                    or "default"
-                )
-                print(
-                    f"✅ [STREAMING] Using chat model: {actual_model} (temperature=0.1, max_tokens={optimized_max_tokens}, simple_query={is_simple_query})"
-                )
+                
                 chain = prompt | optimized_llm
 
-            # Stream response using direct model streaming
-            full_response = ""
+                # Stream response using direct model streaming
+                full_response = ""
 
-            # Use the model's streaming capability directly
-            if hasattr(optimized_llm, "astream"):
-
-                # Try direct streaming from the model
-                messages = prompt.format_messages()
-                async for chunk in optimized_llm.astream(
-                    messages,
-                    config={"callbacks": [callback_handler]},
-                ):
-                    if hasattr(chunk, "content") and chunk.content:
-
-                        full_response += chunk.content
-                        yield chunk.content
-            else:
-
-                # Fallback: Use chain streaming with proper configuration
-                async for chunk in chain.astream(
-                    {},
-                    config={"callbacks": [callback_handler], "stream_mode": "values"},
-                ):
-                    if hasattr(chunk, "content") and chunk.content:
-
-                        full_response += chunk.content
-                        yield chunk.content
+                # Use the model's streaming capability directly
+                if hasattr(optimized_llm, "astream"):
+                    messages = prompt.format_messages()
+                    async for chunk in optimized_llm.astream(
+                        messages,
+                        config={"callbacks": [callback_handler]},
+                    ):
+                        if hasattr(chunk, "content") and chunk.content:
+                            full_response += chunk.content
+                            yield chunk.content
+                else:
+                    async for chunk in chain.astream(
+                        {},
+                        config={"callbacks": [callback_handler], "stream_mode": "values"},
+                    ):
+                        if hasattr(chunk, "content") and chunk.content:
+                            full_response += chunk.content
+                            yield chunk.content
 
             # Store the final response and token usage in the callback handler
             callback_handler.final_response = full_response

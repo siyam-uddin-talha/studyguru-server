@@ -7,6 +7,7 @@ import asyncio
 import json
 import re
 import hashlib
+import requests
 from typing import Dict, Any, List, Optional, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -32,6 +33,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_community.utilities import GoogleSerperAPIWrapper
 
 # Google GenAI imports for ThinkingConfig
 try:
@@ -105,6 +107,7 @@ class WorkflowContext:
     user_id: str
     interaction_id: str
     input_analysis: InputAnalysis
+    original_message: str = ""  # Store the original user message
     pdf_results: List[ProcessingResult] = None
     web_search_results: ProcessingResult = None
     integration_result: ProcessingResult = None
@@ -402,6 +405,9 @@ class LangGraphWorkflowService:
         """Analyze input to determine processing strategy"""
         try:
             message = state.get("message", "")
+            print(
+                f"🔍 [ANALYZE INPUT] Message received: {message[:200]}... (length: {len(message)})"
+            )
             media_files = state.get("media_files", [])
             user_id = state.get("user_id", "")
 
@@ -415,6 +421,7 @@ class LangGraphWorkflowService:
                 user_id=user_id,
                 interaction_id=state.get("interaction_id", ""),
                 input_analysis=input_analysis,
+                original_message=message,  # Store original message for response generation
                 thinking_steps=[],
             )
 
@@ -423,6 +430,7 @@ class LangGraphWorkflowService:
             context.thinking_steps.append(thinking_step)
 
             return {
+                "message": message,  # Preserve message in state
                 "context": context,
                 "state": WorkflowState.ANALYZING_INPUT,
                 "thinking_steps": context.thinking_steps,
@@ -440,8 +448,11 @@ class LangGraphWorkflowService:
             context = state.get("context")
             media_files = state.get("media_files", [])
 
+            message = state.get("message", "")  # Preserve message
+
             if not context.input_analysis.has_pdfs:
                 return {
+                    "message": message,  # Preserve message in state
                     "context": context,
                     "state": WorkflowState.PROCESSING_PDFS,
                     "thinking_steps": context.thinking_steps,
@@ -473,6 +484,7 @@ class LangGraphWorkflowService:
                 context.thinking_steps.append(thinking_step)
 
             return {
+                "message": message,  # Preserve message in state
                 "context": context,
                 "state": WorkflowState.PROCESSING_PDFS,
                 "thinking_steps": context.thinking_steps,
@@ -485,21 +497,47 @@ class LangGraphWorkflowService:
             }
 
     async def _search_web_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Search web if needed"""
+        """Search web and scrape URLs if needed"""
         try:
             context = state.get("context")
             message = state.get("message", "")
 
+            print(f"🌐 [WEB SEARCH NODE] Called with message: {message[:100]}...")
+            print(
+                f"🌐 [WEB SEARCH NODE] requires_web_search: {context.input_analysis.requires_web_search}"
+            )
+
             if not context.input_analysis.requires_web_search:
+                print(f"⚠️ [WEB SEARCH NODE] Skipping - web search not required")
                 return {
                     "context": context,
                     "state": WorkflowState.SEARCHING_WEB,
                     "thinking_steps": context.thinking_steps,
                 }
 
+            # Extract URLs from message - improved regex to handle all URL formats
+            # Match http:// or https:// followed by any non-whitespace characters
+            url_pattern = r"https?://[^\s]+"
+            urls_in_message = re.findall(url_pattern, message)
+
+            # Also try a more lenient pattern if first one fails
+            if not urls_in_message:
+                url_pattern_alt = r'https?://[^\s\n\r<>"]+'
+                urls_in_message = re.findall(url_pattern_alt, message)
+
+            print(f"🔗 [WEB SEARCH NODE] Message length: {len(message)} chars")
+            print(f"🔗 [WEB SEARCH NODE] Message preview: {message[:200]}")
+            print(
+                f"🔗 [WEB SEARCH NODE] Extracted {len(urls_in_message)} URL(s): {urls_in_message}"
+            )
+
             # Add thinking step
-            thinking_step = "🌐 Searching web for current information..."
-            context.thinking_steps.append(thinking_step)
+            if urls_in_message:
+                thinking_step = f"🔗 Found {len(urls_in_message)} URL(s) to analyze..."
+                context.thinking_steps.append(thinking_step)
+            else:
+                thinking_step = "🌐 Searching web for current information..."
+                context.thinking_steps.append(thinking_step)
 
             # Extract search queries from PDF content if available
             search_queries = []
@@ -512,18 +550,32 @@ class LangGraphWorkflowService:
                         )
                         search_queries.extend(topics)
 
-            # Add original message as search query
-            search_queries.append(message)
+            # Clean message to get search query (remove URLs)
+            clean_message = re.sub(url_pattern, "", message).strip()
+            if clean_message and len(clean_message) > 5:  # Relaxed length check
+                search_queries.append(clean_message)
 
-            # Perform web search
-            web_search_result = await self._perform_web_search(search_queries, context)
+            # Add specific query for the URL content if no other queries
+            if urls_in_message and not search_queries:
+                search_queries.append("summary of " + urls_in_message[0])
+
+            # Perform web search with URLs
+            web_search_result = await self._perform_web_search(
+                queries=search_queries, context=context, urls=urls_in_message
+            )
             context.web_search_results = web_search_result
 
             # Add thinking step
-            thinking_step = f"✅ Found {len(web_search_result.metadata.get('sources', []))} relevant sources"
+            if web_search_result.success:
+                urls_scraped = web_search_result.metadata.get("urls_scraped", 0)
+                searches_done = web_search_result.metadata.get("searches_performed", 0)
+                thinking_step = f"✅ Retrieved content: {urls_scraped} URL(s) scraped, {searches_done} search(es) performed"
+            else:
+                thinking_step = f"⚠️ Web search had issues: {web_search_result.error}"
             context.thinking_steps.append(thinking_step)
 
             return {
+                "message": message,  # Preserve message in state
                 "context": context,
                 "state": WorkflowState.SEARCHING_WEB,
                 "thinking_steps": context.thinking_steps,
@@ -572,6 +624,12 @@ class LangGraphWorkflowService:
     async def _generate_summary_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate final comprehensive summary"""
         try:
+            # Check for existing errors in state
+            if "error" in state:
+                print(
+                    f"⚠️ [GENERATE SUMMARY NODE] Found existing error in state: {state.get('error')}"
+                )
+
             context = state.get("context")
 
             # Add thinking step
@@ -582,38 +640,85 @@ class LangGraphWorkflowService:
             summary_result = await self._generate_final_summary(context)
             context.final_summary = summary_result
 
-            # Calculate totals
+            # Debug logging
+            print(f"🔍 [GENERATE SUMMARY NODE] summary_result received:")
+            print(f"   Type: {type(summary_result)}")
+            print(f"   Success: {summary_result.success if summary_result else 'None'}")
+            print(
+                f"   Content length: {len(summary_result.content) if summary_result and summary_result.content else 0}"
+            )
+            if summary_result and summary_result.content:
+                print(f"   Content preview: {summary_result.content[:200]}")
+
+            # Calculate totals - properly flatten the list of results
+            all_results = []
+
+            # Add PDF results (already a list)
+            if context.pdf_results:
+                all_results.extend(context.pdf_results)
+
+            # Add web search result (single object)
+            if context.web_search_results:
+                all_results.append(context.web_search_results)
+
+            # Add integration result (single object)
+            if context.integration_result:
+                all_results.append(context.integration_result)
+
+            # Add final summary (single object)
+            if context.final_summary:
+                all_results.append(context.final_summary)
+
+            # Calculate total tokens from all ProcessingResult objects
             context.total_tokens = sum(
-                [
-                    result.tokens_used
-                    for result in [
-                        context.pdf_results or [],
-                        (
-                            [context.web_search_results]
-                            if context.web_search_results
-                            else []
-                        ),
-                        (
-                            [context.integration_result]
-                            if context.integration_result
-                            else []
-                        ),
-                        [context.final_summary] if context.final_summary else [],
-                    ]
-                ]
+                result.tokens_used
+                for result in all_results
+                if result and hasattr(result, "tokens_used")
             )
 
             # Add thinking step
             thinking_step = f"✅ Summary generated successfully ({context.total_tokens} tokens used)"
             context.thinking_steps.append(thinking_step)
 
-            return {
+            # Debug logging
+            final_content = (
+                summary_result.content
+                if summary_result and summary_result.content
+                else ""
+            )
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] summary_result type: {type(summary_result)}"
+            )
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] summary_result.success: {summary_result.success if summary_result else 'N/A'}"
+            )
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] final_content length: {len(final_content)}"
+            )
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] final_content preview: {final_content[:200]}"
+            )
+
+            # Return successful result - don't include error key to avoid state merge issues
+            message = state.get("message", "")  # Preserve message
+            return_dict = {
+                "message": message,  # Preserve message in state
                 "context": context,
                 "state": WorkflowState.COMPLETED,
                 "thinking_steps": context.thinking_steps,
-                "final_result": summary_result.content,
+                "final_result": final_content,
                 "total_tokens": context.total_tokens,
             }
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] About to return with keys: {list(return_dict.keys())}"
+            )
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] final_result in return: {len(return_dict.get('final_result', ''))} chars"
+            )
+            print(
+                f"🔍 [GENERATE SUMMARY NODE] final_result preview: {return_dict.get('final_result', '')[:200]}"
+            )
+            return return_dict
 
         except Exception as e:
             return {
@@ -708,64 +813,222 @@ class LangGraphWorkflowService:
         topics = [word for word in words if len(word) > 3 and word not in stop_words]
         return list(set(topics))[:5]  # Return top 5 unique topics
 
-    async def _perform_web_search(
-        self, queries: List[str], context: WorkflowContext
-    ) -> ProcessingResult:
-        """Perform web search using Gemini's native search"""
-        start_time = datetime.now()
-
+    async def _scrape_url_with_serper(self, url: str) -> Optional[str]:
+        """Scrape a URL using Serper's scrape API"""
         try:
-            # Use web search model with thinking config
-            thinking_config = ThinkingConfigManager.get_thinking_config(
-                context.input_analysis.complexity_level, "web_search"
+            if not settings.SERPER_API_KEY:
+                print("⚠️ SERPER_API_KEY not set, cannot scrape URL")
+                return None
+
+            print(f"🔗 [SCRAPE] Attempting to scrape: {url}")
+            scrape_url = "https://scrape.serper.dev"
+            payload = json.dumps({"url": url})
+            headers = {
+                "X-API-KEY": settings.SERPER_API_KEY,
+                "Content-Type": "application/json",
+            }
+
+            # Run in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    scrape_url, headers=headers, data=payload, timeout=30
+                ),
             )
 
-            # Get web search model
-            if StudyGuruConfig.MODELS._is_gemini_model():
-                model = StudyGuruConfig.MODELS.get_web_search_model()
-            else:
-                # Fallback to regular chat model
-                model = StudyGuruConfig.MODELS.get_chat_model(web_search=True)
+            print(f"🔗 [SCRAPE] Response status: {response.status_code}")
 
-            # Validate queries
-            if not queries or not any(query.strip() for query in queries):
+            if response.status_code == 200:
+                result = response.json()
+                # Extract text content from the response
+                text_content = result.get("text", "")
+                title = result.get("title", "")
+
+                print(f"🔗 [SCRAPE] Title: {title[:100] if title else 'None'}")
+                print(f"🔗 [SCRAPE] Content length: {len(text_content)} chars")
+
+                if text_content:
+                    return f"Title: {title}\n\nContent:\n{text_content[:10000]}"  # Limit content length
+                else:
+                    print(
+                        f"⚠️ [SCRAPE] No text content in response. Keys: {list(result.keys())}"
+                    )
+
+            print(
+                f"⚠️ Serper scrape failed with status {response.status_code}: {response.text[:200]}"
+            )
+            return None
+
+        except Exception as e:
+            print(f"⚠️ Error scraping URL {url}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return None
+
+    async def _search_with_serper(self, query: str) -> Optional[str]:
+        """Search using Serper's search API"""
+        try:
+            if not settings.SERPER_API_KEY:
+                print("⚠️ SERPER_API_KEY not set, cannot search")
+                return None
+
+            search_url = "https://google.serper.dev/search"
+            payload = json.dumps({"q": query, "num": 3})
+            headers = {
+                "X-API-KEY": settings.SERPER_API_KEY,
+                "Content-Type": "application/json",
+            }
+
+            # Run in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    search_url, headers=headers, data=payload, timeout=30
+                ),
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+
+                # Debug logging
+                # print(f"🔍 [SEARCH] Raw result keys: {list(result.keys())}")
+
+                # Format organic results
+                formatted_results = []
+
+                # Add answer box if available
+                if "answerBox" in result:
+                    answer_box = result["answerBox"]
+                    if "answer" in answer_box:
+                        formatted_results.append(f"Answer: {answer_box['answer']}")
+                    elif "snippet" in answer_box:
+                        formatted_results.append(f"Answer: {answer_box['snippet']}")
+
+                # Add knowledge graph if available
+                if "knowledgeGraph" in result:
+                    kg = result["knowledgeGraph"]
+                    if "description" in kg:
+                        formatted_results.append(f"Overview: {kg['description']}")
+
+                # Add organic results
+                organic = result.get("organic", [])
+                if not organic:
+                    print(f"⚠️ [SEARCH] No organic results found for query: {query}")
+
+                for item in organic[:5]:
+                    title = item.get("title", "")
+                    snippet = item.get("snippet", "")
+                    link = item.get("link", "")
+
+                    # Include result if it has title and link, even without snippet
+                    if title and link:
+                        formatted_results.append(
+                            f"• {title}\n  Snippet: {snippet or 'No snippet available'}\n  Source: {link}"
+                        )
+
+                if formatted_results:
+                    return "\n\n".join(formatted_results)
+                else:
+                    print(
+                        f"⚠️ [SEARCH] No formatted results extracted for query: {query}"
+                    )
+
+            print(f"⚠️ Serper search failed with status {response.status_code}")
+            if response.status_code != 200:
+                print(f"⚠️ Response text: {response.text[:200]}")
+            return None
+
+        except Exception as e:
+            print(f"⚠️ Error searching with Serper: {e}")
+            return None
+
+    async def _perform_web_search(
+        self, queries: List[str], context: WorkflowContext, urls: List[str] = None
+    ) -> ProcessingResult:
+        """Perform web search and URL scraping using Serper API"""
+        start_time = datetime.now()
+
+        print(f"🔍 [PERFORM WEB SEARCH] Called with:")
+        print(f"   URLs: {urls}")
+        print(f"   Queries: {queries}")
+
+        try:
+            all_results = []
+
+            # First, scrape any URLs provided
+            if urls:
+                print(f"🔗 [PERFORM WEB SEARCH] Scraping {len(urls)} URLs...")
+                for url in urls[:3]:  # Limit to 3 URLs
+                    scraped_content = await self._scrape_url_with_serper(url)
+                    if scraped_content:
+                        # Format content without URL in header to avoid confusion
+                        # The content is already retrieved, so we don't need to mention the URL
+                        all_results.append(f"📄 Retrieved Content:\n{scraped_content}")
+                        print(f"✅ Successfully scraped: {url}")
+                    else:
+                        print(
+                            f"⚠️ Failed to scrape: {url}. Attempting to search for it instead..."
+                        )
+                        # Fallback: Search for the URL to get snippet/title
+                        search_result = await self._search_with_serper(url)
+                        if search_result:
+                            all_results.append(
+                                f"🔍 Retrieved Information:\n{search_result}"
+                            )
+                            print(f"✅ Found search results for URL: {url}")
+                        else:
+                            print(f"❌ Failed to search for URL: {url}")
+
+            # Then, perform searches for queries (if no URLs or need more context)
+            if queries and (not urls or not all_results):
+                print(f"🔍 Searching for {len(queries)} queries...")
+                for query in queries[:3]:  # Limit to 3 queries
+                    if query.strip() and not query.startswith("http"):
+                        search_result = await self._search_with_serper(query)
+                        if search_result:
+                            all_results.append(
+                                f"🔍 Additional Information:\n{search_result}"
+                            )
+
+            if not all_results:
+                print(f"❌ [PERFORM WEB SEARCH] No results retrieved")
                 return ProcessingResult(
                     success=False,
-                    error="No valid search queries provided",
+                    error="No content could be retrieved from URLs or search",
                     processing_time=(datetime.now() - start_time).total_seconds(),
                 )
 
-            # Create search prompt
-            search_prompt = f"""
-            Search for current information related to: {', '.join(queries)}
-            
-            Provide comprehensive, up-to-date information with source citations.
-            Focus on educational content and recent developments.
-            """
-
-            # Validate prompt is not empty
-            if not search_prompt.strip():
-                return ProcessingResult(
-                    success=False,
-                    error="Empty search prompt generated",
-                    processing_time=(datetime.now() - start_time).total_seconds(),
-                )
-
-            # Perform search
-            response = await model.ainvoke([HumanMessage(content=search_prompt)])
-
+            combined_results = "\n\n---\n\n".join(all_results)
             processing_time = (datetime.now() - start_time).total_seconds()
+
+            print(f"✅ [PERFORM WEB SEARCH] Completed:")
+            print(f"   Success: True")
+            print(f"   Content length: {len(combined_results)} chars")
+            print(f"   Results count: {len(all_results)}")
+            print(f"   Processing time: {processing_time:.2f}s")
 
             return ProcessingResult(
                 success=True,
-                content=response.content,
-                metadata={"sources": queries, "search_type": "web"},
-                tokens_used=len(response.content.split()),
+                content=combined_results,
+                metadata={
+                    "sources": (urls or [])
+                    + [q for q in (queries or []) if not q.startswith("http")],
+                    "search_type": "serper",
+                    "urls_scraped": len([r for r in all_results if r.startswith("📄")]),
+                    "searches_performed": len(
+                        [r for r in all_results if r.startswith("🔍")]
+                    ),
+                },
+                tokens_used=len(combined_results.split()),
                 processing_time=processing_time,
             )
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
+            print(f"❌ Web search/scrape error: {e}")
             return ProcessingResult(
                 success=False, error=str(e), processing_time=processing_time
             )
@@ -838,63 +1101,128 @@ class LangGraphWorkflowService:
     async def _generate_final_summary(
         self, context: WorkflowContext
     ) -> ProcessingResult:
-        """Generate final comprehensive summary"""
+        """Generate final comprehensive summary based on user query and gathered content"""
         start_time = datetime.now()
 
         try:
-            # Use thinking config for complex summaries
-            thinking_config = ThinkingConfigManager.get_thinking_config(
-                context.input_analysis.complexity_level, "comprehensive_summarization"
-            )
-
             # Get appropriate model
             model = StudyGuruConfig.MODELS.get_chat_model()
 
-            # Prepare summary content
-            summary_content = ""
-            if context.integration_result and context.integration_result.success:
-                summary_content = context.integration_result.content
-            else:
-                # Fallback to individual sources
-                content_parts = []
-                if context.pdf_results:
-                    for pdf_result in context.pdf_results:
-                        if pdf_result.success and pdf_result.content:
-                            content_parts.append(pdf_result.content)
-                if (
-                    context.web_search_results
-                    and context.web_search_results.success
-                    and context.web_search_results.content
-                ):
-                    content_parts.append(context.web_search_results.content)
-                summary_content = "\n\n".join(content_parts)
+            # Prepare summary content from all sources
+            content_parts = []
 
-            # Validate that we have content to summarize
+            # Add integration result if available
+            if context.integration_result and context.integration_result.success:
+                content_parts.append(
+                    f"Integrated Analysis:\n{context.integration_result.content}"
+                )
+
+            # Add PDF results
+            if context.pdf_results:
+                for pdf_result in context.pdf_results:
+                    if pdf_result.success and pdf_result.content:
+                        content_parts.append(f"Document Content:\n{pdf_result.content}")
+
+            # Add web search/scrape results (already retrieved - no URL needed)
+            if (
+                context.web_search_results
+                and context.web_search_results.success
+                and context.web_search_results.content
+            ):
+                # Remove any URL references from the content header
+                content_text = context.web_search_results.content
+                # Clean up any "Content from URL:" headers that might be in the content
+                content_text = re.sub(
+                    r"📄 Content from https?://[^\n]+\n",
+                    "📄 Retrieved Content:\n",
+                    content_text,
+                )
+                content_parts.append(f"Retrieved Content:\n{content_text}")
+
+            summary_content = "\n\n---\n\n".join(content_parts)
+
+            # Debug logging
+            print(f"🔍 [SUMMARY] Content parts: {len(content_parts)}")
+            print(f"🔍 [SUMMARY] Total content length: {len(summary_content)} chars")
+
+            # If no content was gathered, provide a helpful message
             if not summary_content or not summary_content.strip():
+                # Still try to respond based on the original message
+                original_message = (
+                    context.original_message
+                    if hasattr(context, "original_message")
+                    else ""
+                )
+
+                # Check if there are URLs in the message that couldn't be scraped
+                if context.input_analysis.has_links:
+                    error_response = (
+                        "I apologize, but I was unable to retrieve content from the provided URL(s). "
+                        "This could be due to:\n"
+                        "1. The website blocking automated access\n"
+                        "2. The page requiring authentication\n"
+                        "3. Network connectivity issues\n\n"
+                        "Please try:\n"
+                        "- Copying and pasting the relevant text directly\n"
+                        "- Providing a different link to the same content\n"
+                        "- Describing the topic you'd like to learn about"
+                    )
+                else:
+                    error_response = "I couldn't find any content to analyze. Please provide more details about what you'd like to learn."
+
                 return ProcessingResult(
-                    success=False,
-                    error="No content available for summarization",
+                    success=True,  # Return success=True so the response is shown
+                    content=error_response,
                     processing_time=(datetime.now() - start_time).total_seconds(),
                 )
 
-            # Create summary prompt
-            summary_prompt = f"""
-            Create a comprehensive summary of the following information:
-            
-            {summary_content}
-            
-            The summary should be:
-            1. Well-structured and easy to understand
-            2. Include key insights and findings
-            3. Highlight important connections between sources
-            4. Be educational and informative
-            5. Include relevant citations where appropriate
-            """
+            # Get the user's original question/request
+            user_query = ""
+            if hasattr(context, "original_message") and context.original_message:
+                # Extract the question part (remove URLs)
+                url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+                user_query = re.sub(url_pattern, "", context.original_message).strip()
+
+            # Create summary prompt that addresses the user's question
+            # IMPORTANT: The content below is already retrieved/scraped - do NOT mention inability to access URLs
+            if user_query:
+                summary_prompt = f"""You have been provided with content that has already been retrieved for you. Use this content to answer the user's question.
+
+User's Question: {user_query}
+
+Retrieved Content (already available - use this directly):
+{summary_content}
+
+Please provide a comprehensive, educational response that:
+1. Directly answers the user's question using the provided content
+2. Is well-structured and easy to understand
+3. Includes key insights and findings from the content
+4. Cites relevant sources when appropriate
+5. Is informative and helpful for learning
+
+IMPORTANT: The content above is already retrieved and available to you. Do NOT mention that you cannot access URLs or websites - you already have the content."""
+            else:
+                summary_prompt = f"""You have been provided with content that has already been retrieved for you. Please summarize and explain it in an educational way.
+
+Retrieved Content (already available - use this directly):
+{summary_content}
+
+The response should be:
+1. Well-structured and easy to understand
+2. Include key insights and findings from the provided content
+3. Be educational and informative
+4. Cite sources where appropriate
+
+IMPORTANT: The content above is already retrieved and available to you. Do NOT mention that you cannot access URLs or websites - you already have the content."""
 
             # Generate summary
+            print(f"🚀 [SUMMARY] Generating response...")
             response = await model.ainvoke([HumanMessage(content=summary_prompt)])
 
             processing_time = (datetime.now() - start_time).total_seconds()
+            print(
+                f"✅ [SUMMARY] Response generated: {len(response.content)} chars in {processing_time:.2f}s"
+            )
 
             return ProcessingResult(
                 success=True,
@@ -906,6 +1234,7 @@ class LangGraphWorkflowService:
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
+            print(f"❌ [SUMMARY] Error: {e}")
             return ProcessingResult(
                 success=False, error=str(e), processing_time=processing_time
             )
@@ -944,9 +1273,38 @@ class LangGraphWorkflowService:
             config = {"configurable": {"thread_id": thread_id}}
             result = await self.workflow_graph.ainvoke(initial_state, config=config)
 
+            # Debug logging
+            print(f"🔍 [EXECUTE WORKFLOW] Result keys: {list(result.keys())}")
+            if "error" in result:
+                print(f"❌ [EXECUTE WORKFLOW] ERROR DETECTED: {result.get('error')}")
+                print(f"❌ [EXECUTE WORKFLOW] Error state: {result.get('state')}")
+            print(
+                f"🔍 [EXECUTE WORKFLOW] final_result type: {type(result.get('final_result'))}"
+            )
+            print(
+                f"🔍 [EXECUTE WORKFLOW] final_result length: {len(str(result.get('final_result', '')))}"
+            )
+            print(
+                f"🔍 [EXECUTE WORKFLOW] final_result preview: {str(result.get('final_result', ''))[:200]}"
+            )
+            print(f"🔍 [EXECUTE WORKFLOW] state value: {result.get('state')}")
+
+            # Extract final_result - check multiple possible locations
+            final_result = result.get("final_result", "")
+
+            # Fallback: try to get from context if final_result is empty
+            if not final_result:
+                context = result.get("context")
+                if context and hasattr(context, "final_summary"):
+                    if context.final_summary and context.final_summary.content:
+                        final_result = context.final_summary.content
+                        print(
+                            f"✅ [EXECUTE WORKFLOW] Extracted result from context.final_summary: {len(final_result)} chars"
+                        )
+
             return {
-                "success": True,
-                "result": result.get("final_result", ""),
+                "success": True if final_result else False,
+                "result": final_result,
                 "thinking_steps": result.get("thinking_steps", []),
                 "total_tokens": result.get("total_tokens", 0),
                 "workflow_state": result.get("state", WorkflowState.COMPLETED),

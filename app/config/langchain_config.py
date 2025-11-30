@@ -14,8 +14,9 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
-# Import native Google Search tool
-from google.genai.types import Tool, GoogleSearch
+# Import Serper tool
+from langchain_community.utilities import GoogleSerperAPIWrapper
+from langchain_core.tools import Tool
 
 
 from app.config.cache_manager import cache_manager
@@ -505,6 +506,11 @@ class StudyGuruModels:
         """
         cache = StudyGuruModels._get_cache()
 
+        # Initialize model_kwargs for thinking config
+        model_kwargs = {}
+        if thinking_config:
+            model_kwargs.update(thinking_config)
+
         # Clean model name (remove type suffixes for validation and mapping)
         clean_model_name = model_name
         if model_name:
@@ -546,16 +552,12 @@ class StudyGuruModels:
                     "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
                 )
 
-            # Apply thinking config for Kimi models
-            model_kwargs = {}
-            if thinking_config:
-                # Moonshot AI supports similar parameters to OpenAI
-                if "reasoning_effort" in thinking_config:
-                    model_kwargs["reasoning_effort"] = thinking_config[
-                        "reasoning_effort"
-                    ]
+            # Filter model_kwargs for Kimi models (only reasoning_effort supported)
+            kimi_kwargs = {}
+            if "reasoning_effort" in model_kwargs:
+                kimi_kwargs["reasoning_effort"] = model_kwargs["reasoning_effort"]
 
-            return ChatOpenAI(
+            llm = ChatOpenAI(
                 model=actual_model,
                 temperature=temperature,
                 openai_api_key=settings.MOONSHOT_API_KEY,
@@ -564,41 +566,52 @@ class StudyGuruModels:
                 request_timeout=120,
                 streaming=streaming,
                 cache=cache,
-                **model_kwargs,
+                **kimi_kwargs,
             )
 
+            if web_search:
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content.",
+                )
+                return llm.bind_tools([serper_tool])
+
+            return llm
+
         if is_gemini or (model_name and actual_model.startswith("gemini")):
-            # Prepare tools list for web search
-            tools = []
-            if web_search and Tool is not None and GoogleSearch is not None:
-                grounding_tool = Tool(google_search=GoogleSearch())
-                tools = [grounding_tool]
-
-            # Apply thinking config if provided
-            model_kwargs = {}
-            if thinking_config:
-                model_kwargs.update(thinking_config)
-
-            return ChatGoogleGenerativeAI(
+            # Create base Gemini model
+            llm = ChatGoogleGenerativeAI(
                 model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
                 request_timeout=120,
                 cache=cache,
-                tools=tools,  # Include web search tool if enabled
                 **model_kwargs,
             )
 
-        # GPT models
-        # Apply thinking config for GPT models
-        model_kwargs = {}
-        if thinking_config:
-            # For GPT models, use reasoning_effort parameter
-            if "reasoning_effort" in thinking_config:
-                model_kwargs["reasoning_effort"] = thinking_config["reasoning_effort"]
+            # Bind tools if web search is enabled
+            if web_search:
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content.",
+                )
+                return llm.bind_tools([serper_tool])
 
-        return ChatOpenAI(
+            return llm
+
+        # GPT models
+        # Filter model_kwargs for GPT models (only reasoning_effort supported)
+        gpt_kwargs = {}
+        if "reasoning_effort" in model_kwargs:
+            gpt_kwargs["reasoning_effort"] = model_kwargs["reasoning_effort"]
+
+        # Create base GPT model
+        llm = ChatOpenAI(
             model=actual_model,
             temperature=temperature,
             openai_api_key=settings.OPENAI_API_KEY,
@@ -606,8 +619,20 @@ class StudyGuruModels:
             request_timeout=120,
             streaming=streaming,
             cache=cache,
-            **model_kwargs,
+            **gpt_kwargs,
         )
+
+        # Bind tools if web search is enabled
+        if web_search:
+            search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+            serper_tool = Tool(
+                name="google_search",
+                func=search.run,
+                description="Useful for searching the internet for current information, facts, and educational content.",
+            )
+            return llm.bind_tools([serper_tool])
+
+        return llm
 
     @staticmethod
     def get_vision_model(
@@ -627,6 +652,11 @@ class StudyGuruModels:
                        Can also include type suffix like 'gpt-4.1-visualize' or 'kimi-k2-visualize'
             subscription_plan: User's subscription plan for access validation
         """
+        # Initialize model_kwargs for thinking config
+        model_kwargs = {}
+        if thinking_config:
+            model_kwargs.update(thinking_config)
+
         # Clean model name (remove type suffixes for validation and mapping)
         clean_model_name = model_name
         if model_name:
@@ -666,16 +696,12 @@ class StudyGuruModels:
                     "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
                 )
 
-            # Apply thinking config for Kimi models
-            model_kwargs = {}
-            if thinking_config:
-                # Moonshot AI supports similar parameters to OpenAI
-                if "reasoning_effort" in thinking_config:
-                    model_kwargs["reasoning_effort"] = thinking_config[
-                        "reasoning_effort"
-                    ]
+            # Filter model_kwargs for Kimi models (only reasoning_effort supported)
+            kimi_kwargs = {}
+            if "reasoning_effort" in model_kwargs:
+                kimi_kwargs["reasoning_effort"] = model_kwargs["reasoning_effort"]
 
-            return ChatOpenAI(
+            llm = ChatOpenAI(
                 model=actual_model,
                 temperature=temperature,
                 openai_api_key=settings.MOONSHOT_API_KEY,
@@ -684,44 +710,51 @@ class StudyGuruModels:
                 request_timeout=120,
                 streaming=streaming,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
-                **model_kwargs,
+                **kimi_kwargs,
             )
 
+            if web_search:
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content.",
+                )
+                return llm.bind_tools([serper_tool])
+
+            return llm
+
         if is_gemini or (model_name and actual_model.startswith("gemini")):
-            # Prepare tools list for web search
-            tools = []
-            if web_search and Tool is not None and GoogleSearch is not None:
-                grounding_tool = Tool(google_search=GoogleSearch())
-                tools = [grounding_tool]
-
-            # Apply thinking config if provided
-            model_kwargs = {}
-            if thinking_config:
-                model_kwargs.update(thinking_config)
-
             # Gemini with vision capabilities
-            return ChatGoogleGenerativeAI(
+            llm = ChatGoogleGenerativeAI(
                 model=actual_model,
                 temperature=temperature,
                 google_api_key=settings.GOOGLE_API_KEY,
                 max_output_tokens=max_tokens,
                 request_timeout=120,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
-                tools=tools,  # Include web search tool if enabled
                 **model_kwargs,
             )
+
+            # Bind tools if web search is enabled
+            if web_search:
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content.",
+                )
+                return llm.bind_tools([serper_tool])
+
+            return llm
         else:
-            # Apply thinking config for GPT models
-            model_kwargs = {}
-            if thinking_config:
-                # For GPT models, use reasoning_effort parameter
-                if "reasoning_effort" in thinking_config:
-                    model_kwargs["reasoning_effort"] = thinking_config[
-                        "reasoning_effort"
-                    ]
+            # Filter model_kwargs for GPT models (only reasoning_effort supported)
+            gpt_kwargs = {}
+            if "reasoning_effort" in model_kwargs:
+                gpt_kwargs["reasoning_effort"] = model_kwargs["reasoning_effort"]
 
             # GPT models
-            return ChatOpenAI(
+            llm = ChatOpenAI(
                 model=actual_model,
                 temperature=temperature,
                 openai_api_key=settings.OPENAI_API_KEY,
@@ -729,8 +762,19 @@ class StudyGuruModels:
                 request_timeout=120,
                 streaming=streaming,
                 cache=cache_manager.get_response_cache(),  # Enable response caching
-                **model_kwargs,
+                **gpt_kwargs,
             )
+
+            if web_search:
+                search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+                serper_tool = Tool(
+                    name="google_search",
+                    func=search.run,
+                    description="Useful for searching the internet for current information, facts, and educational content.",
+                )
+                return llm.bind_tools([serper_tool])
+
+            return llm
 
     @staticmethod
     def get_guardrail_model(
@@ -1018,28 +1062,106 @@ class StudyGuruModels:
 
     @staticmethod
     def get_web_search_model(
-        temperature: float = 0.2, max_tokens: int = 5000, streaming: bool = True
+        temperature: float = 0.2,
+        max_tokens: int = 5000,
+        streaming: bool = True,
+        model_name: Optional[str] = None,
+        subscription_plan: Optional[str] = None,
     ):
-        """Get configured model with Google Search tool integration - Gemini only"""
-        if not StudyGuruModels._is_gemini_model():
+        """Get configured model with Serper Google Search tool integration - works with all models
+
+        Args:
+            model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
+                       Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
+                       If not provided, uses default assistant model based on LLM_MODEL setting
+            subscription_plan: User's subscription plan for access validation
+        """
+        if not settings.SERPER_API_KEY:
             raise ValueError(
-                "Web search functionality is only available with Gemini models"
+                "SERPER_API_KEY is required for web search functionality. Please set it in your environment variables."
             )
 
-        # Define the native grounding tool
-        grounding_tool = Tool(google_search=GoogleSearch())
+        cache = StudyGuruModels._get_cache()
 
-        # Initialize the model and pass it the tool
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
-            temperature=temperature,
-            google_api_key=settings.GOOGLE_API_KEY,
-            max_output_tokens=max_tokens,
-            request_timeout=120,
-            cache=cache_manager.get_response_cache(),
-            tools=[grounding_tool],  # This enables native "AUTO WEBSEARCH"
-            streaming=streaming,
+        # Clean model name (remove type suffixes for validation and mapping)
+        clean_model_name = model_name
+        if model_name:
+            # Remove type suffixes for validation
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+
+        # Validate model access if subscription plan provided
+        if model_name and subscription_plan:
+            if not validate_model_access(model_name, subscription_plan):
+                raise ValueError(
+                    f"Access denied: User with {subscription_plan} subscription does not have access to model: {model_name}"
+                )
+
+        # Determine the model to use
+        if model_name:
+            # Use specified model - map to actual model name
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+            is_kimi = actual_model.startswith("kimi")
+        else:
+            # Fall back to default behavior
+            is_gemini = StudyGuruModels._is_gemini_model()
+            is_kimi = False
+            actual_model = (
+                "gemini-2.5-pro"
+                if is_gemini
+                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
+            )
+
+        # Create base model
+        if is_kimi or (model_name and actual_model.startswith("kimi")):
+            if not settings.MOONSHOT_API_KEY:
+                raise ValueError(
+                    "MOONSHOT_API_KEY is required for Kimi models. Please set it in your environment variables."
+                )
+            llm = ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.MOONSHOT_API_KEY,
+                base_url="https://api.moonshot.ai/v1",
+                max_tokens=max_tokens,
+                request_timeout=120,
+                streaming=streaming,
+                cache=cache,
+            )
+        elif is_gemini or (model_name and actual_model.startswith("gemini")):
+            llm = ChatGoogleGenerativeAI(
+                model=actual_model,
+                temperature=temperature,
+                google_api_key=settings.GOOGLE_API_KEY,
+                max_output_tokens=max_tokens,
+                request_timeout=120,
+                cache=cache,
+                streaming=streaming,
+            )
+        else:
+            llm = ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                openai_api_key=settings.OPENAI_API_KEY,
+                max_tokens=max_tokens,
+                request_timeout=120,
+                streaming=streaming,
+                cache=cache,
+            )
+
+        # Bind Serper search tool
+        search = GoogleSerperAPIWrapper(serper_api_key=settings.SERPER_API_KEY)
+        serper_tool = Tool(
+            name="google_search",
+            func=search.run,
+            description="Useful for searching the internet for current information, facts, and educational content.",
         )
+        return llm.bind_tools([serper_tool])
 
     @staticmethod
     def get_model_with_context_cache(
