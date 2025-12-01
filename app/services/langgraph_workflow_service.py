@@ -918,7 +918,7 @@ class LangGraphWorkflowService:
                 if not organic:
                     print(f"⚠️ [SEARCH] No organic results found for query: {query}")
 
-                for item in organic[:5]:
+                for item in organic[:3]:
                     title = item.get("title", "")
                     snippet = item.get("snippet", "")
                     link = item.get("link", "")

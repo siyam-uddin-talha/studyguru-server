@@ -927,6 +927,10 @@ class LangChainService:
 
                 # Create Agent
                 agent = create_tool_calling_agent(optimized_llm, tools, prompt)
+                # NOTE: verbose=True outputs debug messages to console (e.g., "> Entering new None chain...", 
+                # "Invoking: `google_search`"). These appear in blue in terminal but are NOT part of the 
+                # response stream - they're filtered out. Only on_chat_model_stream events (actual AI 
+                # response content) are yielded to the client.
                 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
                 # Stream events
@@ -935,6 +939,9 @@ class LangChainService:
                     {}, version="v1", config={"callbacks": [callback_handler]}
                 ):
                     kind = event["event"]
+                    # Only yield actual AI response content (on_chat_model_stream events)
+                    # Debug messages like "Invoking: google_search" are console prints only
+                    # and are NOT part of the response stream
                     if kind == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
                         if hasattr(chunk, "content") and chunk.content:
