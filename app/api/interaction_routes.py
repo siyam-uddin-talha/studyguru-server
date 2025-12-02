@@ -269,13 +269,10 @@ async def _update_title_background(
                                 }
                             )
                         )
-                        print(f"✅ Title sent through websocket: '{interaction.title}'")
-                    except Exception as ws_error:
-                        print(f"⚠️ Failed to send title through websocket: {ws_error}")
 
-                print(
-                    f"✅ Background title generation completed and saved: '{interaction.title}'"
-                )
+                    except Exception as ws_error:
+                        pass
+
             else:
                 print(f"⚠️ Interaction {interaction_id} not found for title generation")
     except Exception as title_error:

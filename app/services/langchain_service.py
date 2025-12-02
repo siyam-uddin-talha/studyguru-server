@@ -927,9 +927,9 @@ class LangChainService:
 
                 # Create Agent
                 agent = create_tool_calling_agent(optimized_llm, tools, prompt)
-                # NOTE: verbose=True outputs debug messages to console (e.g., "> Entering new None chain...", 
-                # "Invoking: `google_search`"). These appear in blue in terminal but are NOT part of the 
-                # response stream - they're filtered out. Only on_chat_model_stream events (actual AI 
+                # NOTE: verbose=True outputs debug messages to console (e.g., "> Entering new None chain...",
+                # "Invoking: `google_search`"). These appear in blue in terminal but are NOT part of the
+                # response stream - they're filtered out. Only on_chat_model_stream events (actual AI
                 # response content) are yielded to the client.
                 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
@@ -1559,13 +1559,28 @@ class LangChainService:
             callback_handler = StudyGuruCallbackHandler()
 
             # Use the improved title generation chain with robust error handling
-            from app.config.langchain_config import StudyGuruChains
+            from app.config.langchain_config import (
+                StudyGuruChains,
+                StudyGuruPrompts,
+                StudyGuruModels,
+                MarkdownJsonOutputParser,
+            )
+            from langchain_core.output_parsers import StrOutputParser
 
-            # Use the improved chain that handles GPT-5 JSON issues (use dynamic model if provided)
-            title_chain = StudyGuruChains.get_title_generation_chain(
+            # Get the model and prompt separately so we can capture raw output
+            model = StudyGuruModels.get_title_model(
+                temperature=0.3,
+                max_tokens=300,
                 model_name=assistant_model,
                 subscription_plan=subscription_plan,
             )
+            prompt = StudyGuruPrompts.TITLE_GENERATION
+            parser = MarkdownJsonOutputParser()  # Use the same parser as the chain
+
+            # Create a chain without parser to get raw output first
+            raw_chain = prompt | model | StrOutputParser()
+            # Create chain with parser for normal flow
+            title_chain = prompt | model | parser
 
             # Generate title with multiple fallback attempts and increased timeout
             result = None
@@ -1573,7 +1588,7 @@ class LangChainService:
             json_parse_error = False
             for attempt in range(3):  # Try up to 3 times
                 try:
-                    # Use asyncio.wait_for to add timeout protection
+                    # Try parsing with the full chain first
                     chain_result = await asyncio.wait_for(
                         title_chain.ainvoke(
                             {
@@ -1586,10 +1601,11 @@ class LangChainService:
                     )
 
                     # Store raw response for debugging and fallback extraction
-                    if isinstance(chain_result, str):
-                        raw_response = chain_result
-                    elif isinstance(chain_result, dict):
-                        raw_response = json.dumps(chain_result)
+                    if not raw_response:
+                        if isinstance(chain_result, str):
+                            raw_response = chain_result
+                        elif isinstance(chain_result, dict):
+                            raw_response = json.dumps(chain_result)
 
                     # Validate result
                     if (
@@ -1598,6 +1614,9 @@ class LangChainService:
                         and chain_result.get("title")
                     ):
                         result = chain_result
+                        print(
+                            f"✅ Successfully parsed title: {chain_result.get('title')}"
+                        )
                         break
                     else:
                         # Try to parse as dict if it's a string
@@ -1606,6 +1625,9 @@ class LangChainService:
                                 parsed = json.loads(chain_result)
                                 if isinstance(parsed, dict) and parsed.get("title"):
                                     result = parsed
+                                    print(
+                                        f"✅ Successfully parsed title from string: {parsed.get('title')}"
+                                    )
                                     break
                             except:
                                 pass
@@ -1629,34 +1651,93 @@ class LangChainService:
                         "json" in error_str
                         or "parse" in error_str
                         or "output_parsing" in error_str
+                        or "could not parse json" in error_str
                     ):
                         json_parse_error = True
-                        # Try to extract raw response from error if available
-                        if hasattr(chain_error, "response") or hasattr(
-                            chain_error, "text"
-                        ):
+                        # If parsing failed, get raw response for manual parsing
+                        if not raw_response:
                             try:
-                                error_text = getattr(
-                                    chain_error,
-                                    "response",
-                                    getattr(chain_error, "text", ""),
+                                print(
+                                    f"🔍 Parsing failed, fetching raw output for manual parsing (attempt {attempt + 1})..."
                                 )
-                                if error_text:
-                                    raw_response = str(error_text)
-                            except:
-                                pass
+                                raw_chain_result = await asyncio.wait_for(
+                                    raw_chain.ainvoke(
+                                        {
+                                            "message": limited_message,
+                                            "response_preview": limited_response,
+                                        },
+                                        config={"callbacks": [callback_handler]},
+                                    ),
+                                    timeout=25.0,
+                                )
+                                raw_response = (
+                                    raw_chain_result
+                                    if isinstance(raw_chain_result, str)
+                                    else str(raw_chain_result)
+                                )
+                                print(f"🔍 Raw model output: {raw_response[:200]}...")
 
-                        # Only log on last attempt to reduce noise
+                                # Try manual parsing with the raw response
+                                try:
+                                    parsed_result = parser.parse(raw_response)
+                                    if isinstance(
+                                        parsed_result, dict
+                                    ) and parsed_result.get("title"):
+                                        result = parsed_result
+                                        print(
+                                            f"✅ Successfully parsed title from raw response: {parsed_result.get('title')}"
+                                        )
+                                        break
+                                except Exception as manual_parse_error:
+                                    print(
+                                        f"🔍 Manual parsing also failed: {manual_parse_error}"
+                                    )
+                            except Exception as raw_error:
+                                print(f"⚠️ Failed to get raw output: {raw_error}")
+                                # Try to extract raw response from error if available
+                                if hasattr(chain_error, "response") or hasattr(
+                                    chain_error, "text"
+                                ):
+                                    try:
+                                        error_text = getattr(
+                                            chain_error,
+                                            "response",
+                                            getattr(chain_error, "text", ""),
+                                        )
+                                        if error_text:
+                                            raw_response = str(error_text)
+                                    except:
+                                        pass
+                                # Also try to extract from error message
+                                if not raw_response and "preview" in error_str:
+                                    try:
+                                        # Extract preview from error message
+                                        preview_match = re.search(
+                                            r"Preview:\s*(.+?)(?:\.\.\.|$)",
+                                            str(chain_error),
+                                            re.IGNORECASE,
+                                        )
+                                        if preview_match:
+                                            raw_response = preview_match.group(1)
+                                    except:
+                                        pass
+
+                        # Log with more detail
                         if attempt == 2:
                             print(
                                 f"⚠️ Title generation failed: JSON parsing error after 3 attempts"
                             )
+                            print(f"🔍 Error type: {type(chain_error).__name__}")
+                            print(f"🔍 Error message: {str(chain_error)[:300]}")
                             if raw_response:
-                                print(f"🔍 Raw response preview: {raw_response[:200]}")
+                                print(f"🔍 Raw response preview: {raw_response[:300]}")
+                            else:
+                                print(f"⚠️ No raw response captured")
                     else:
                         # Log non-JSON errors
                         if attempt == 2:  # Only log on last attempt
                             print(f"⚠️ Title generation failed: {chain_error}")
+                            print(f"🔍 Error type: {type(chain_error).__name__}")
 
                     if attempt < 2:  # Don't sleep on last attempt
                         await asyncio.sleep(0.5)  # Brief delay before retry
@@ -1676,30 +1757,90 @@ class LangChainService:
             # If JSON parsing failed but we have raw response, try to extract title from text
             if not title and raw_response:
                 try:
-                    # Try to extract title from raw text using regex
-                    # Look for "title": "..." pattern
-                    title_match = re.search(
-                        r'"title"\s*:\s*"([^"]+)"', raw_response, re.IGNORECASE
-                    )
-                    if title_match:
-                        title = title_match.group(1).strip()[:50]
-                        print(f"✅ Extracted title from raw response: {title}")
+                    # First, try to manually parse with the parser
+                    try:
+                        parsed_result = parser.parse(raw_response)
+                        if isinstance(parsed_result, dict) and parsed_result.get(
+                            "title"
+                        ):
+                            title = (
+                                parsed_result.get("title", "")[:50]
+                                if parsed_result.get("title")
+                                else None
+                            )
+                            summary_title = (
+                                parsed_result.get("summary_title", "")[:100]
+                                if parsed_result.get("summary_title")
+                                else None
+                            )
+                            print(
+                                f"✅ Successfully parsed title from raw response using parser: {title}"
+                            )
+                    except Exception as parse_error:
+                        print(
+                            f"🔍 Manual parser failed, trying regex extraction: {parse_error}"
+                        )
 
-                    # Look for "summary_title": "..." pattern
-                    summary_match = re.search(
-                        r'"summary_title"\s*:\s*"([^"]+)"', raw_response, re.IGNORECASE
-                    )
-                    if summary_match:
-                        summary_title = summary_match.group(1).strip()[:100]
-
-                    # If still no title, try to find any quoted string that might be a title
+                    # If manual parsing failed, try regex extraction
                     if not title:
-                        # Look for any quoted string that's reasonable length
-                        quoted_strings = re.findall(r'"([^"]{10,50})"', raw_response)
-                        if quoted_strings:
-                            # Use the first reasonable string as title
-                            title = quoted_strings[0].strip()[:50]
-                            print(f"✅ Extracted title from quoted string: {title}")
+                        # Try to extract title from raw text using regex
+                        # Look for "title": "..." pattern (handle escaped quotes)
+                        title_match = re.search(
+                            r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                            raw_response,
+                            re.IGNORECASE | re.DOTALL,
+                        )
+                        if title_match:
+                            title = (
+                                title_match.group(1)
+                                .replace('\\"', '"')
+                                .replace("\\n", " ")
+                                .strip()[:50]
+                            )
+                            print(
+                                f"✅ Extracted title from raw response via regex: {title}"
+                            )
+
+                        # Look for "summary_title": "..." pattern
+                        if not summary_title:
+                            summary_match = re.search(
+                                r'"summary_title"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                                raw_response,
+                                re.IGNORECASE | re.DOTALL,
+                            )
+                            if summary_match:
+                                summary_title = (
+                                    summary_match.group(1)
+                                    .replace('\\"', '"')
+                                    .replace("\\n", " ")
+                                    .strip()[:100]
+                                )
+
+                        # If still no title, try to find any quoted string that might be a title
+                        if not title:
+                            # Look for any quoted string that's reasonable length (handle escaped quotes)
+                            quoted_strings = re.findall(
+                                r'"((?:[^"\\]|\\.){10,50})"', raw_response
+                            )
+                            if quoted_strings:
+                                # Use the first reasonable string as title, prefer ones that look like titles
+                                for qs in quoted_strings:
+                                    clean_qs = (
+                                        qs.replace('\\"', '"')
+                                        .replace("\\n", " ")
+                                        .strip()
+                                    )
+                                    # Skip if it looks like a key name
+                                    if not clean_qs.lower() in [
+                                        "title",
+                                        "summary_title",
+                                        "summary",
+                                    ]:
+                                        title = clean_qs[:50]
+                                        print(
+                                            f"✅ Extracted title from quoted string: {title}"
+                                        )
+                                        break
                 except Exception as extract_error:
                     print(
                         f"⚠️ Failed to extract title from raw response: {extract_error}"

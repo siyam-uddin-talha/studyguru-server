@@ -48,6 +48,95 @@ except ImportError:
 # Local imports
 from app.config.langchain_config import StudyGuruConfig
 from app.services.langchain_service import langchain_service
+
+
+def normalize_markdown_format(content: str) -> str:
+    """
+    Normalize markdown format from different LLMs to a consistent format.
+    Converts formats like:
+    - "1) Title" or "1. Title" → "### 1. **Title**"
+    - Ensures consistent header and list formatting
+    """
+    if not content:
+        return content
+
+    lines = content.split("\n")
+    normalized_lines = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Skip empty lines
+        if not line:
+            normalized_lines.append("")
+            i += 1
+            continue
+
+        # Check for numbered items with parenthesis: "1) Title" (Gemini format)
+        paren_match = re.match(r"^(\d+)\)\s*(.+)$", line)
+        if paren_match:
+            number = paren_match.group(1)
+            title = paren_match.group(2).strip()
+            # Remove existing markdown formatting to avoid double bold
+            title = title.replace("**", "").strip()
+            # Add bold formatting
+            normalized_lines.append(f"### {number}. **{title}**")
+            i += 1
+            continue
+
+        # Check for numbered items with period at start of line: "1. Title" (but not headers)
+        # Only convert if it's not already a header (doesn't start with #)
+        period_match = re.match(r"^(\d+)\.\s+(.+)$", line)
+        if period_match and not line.startswith("#"):
+            number = period_match.group(1)
+            title = period_match.group(2).strip()
+
+            # Check if this looks like a main item by checking next lines for detail patterns
+            is_main_item = False
+            look_ahead_lines = 5  # Check next 5 lines
+            if i + 1 < len(lines):
+                next_lines_text = "\n".join(
+                    lines[i + 1 : i + look_ahead_lines + 1]
+                ).lower()
+                # Check for common detail patterns
+                detail_patterns = [
+                    "**date:**",
+                    "**agency:**",
+                    "**details:**",
+                    "**what's new:**",
+                    "**official",
+                    "**discovery date:**",
+                    "**agency/mission:**",
+                    "date:",
+                    "agency:",
+                    "details:",
+                    "what's new:",
+                ]
+                if any(pattern in next_lines_text for pattern in detail_patterns):
+                    is_main_item = True
+                # Also check if title is substantial (more than 10 chars) and starts with capital
+                elif len(title) > 10 and title[0].isupper():
+                    is_main_item = True
+
+            # Convert to header format if it's a main item
+            if is_main_item:
+                # Clean up existing markdown in title
+                clean_title = title.replace("**", "").strip()
+                normalized_lines.append(f"### {number}. **{clean_title}**")
+            else:
+                # Keep as is for sub-items
+                normalized_lines.append(lines[i])
+            i += 1
+            continue
+
+        # Keep other lines as is
+        normalized_lines.append(lines[i])
+        i += 1
+
+    return "\n".join(normalized_lines)
+
+
 from app.services.context_service import context_service
 from app.core.config import settings
 
@@ -527,14 +616,6 @@ class LangGraphWorkflowService:
                 f"🌐 [WEB SEARCH NODE] requires_web_search: {context.input_analysis.requires_web_search}"
             )
 
-            if not context.input_analysis.requires_web_search:
-                print(f"⚠️ [WEB SEARCH NODE] Skipping - web search not required")
-                return {
-                    "context": context,
-                    "state": WorkflowState.SEARCHING_WEB,
-                    "thinking_steps": context.thinking_steps,
-                }
-
             # Extract URLs from message - improved regex to handle all URL formats
             # Match http:// or https:// followed by any non-whitespace characters
             url_pattern = r"https?://[^\s]+"
@@ -551,12 +632,23 @@ class LangGraphWorkflowService:
                 f"🔗 [WEB SEARCH NODE] Extracted {len(urls_in_message)} URL(s): {urls_in_message}"
             )
 
+            # If no URLs and web search not required, skip
+            if not urls_in_message and not context.input_analysis.requires_web_search:
+                print(
+                    f"⚠️ [WEB SEARCH NODE] Skipping - no URLs and web search not required"
+                )
+                return {
+                    "context": context,
+                    "state": WorkflowState.SEARCHING_WEB,
+                    "thinking_steps": context.thinking_steps,
+                }
+
             # Add thinking step
             if urls_in_message:
-                thinking_step = f"🔗 Found {len(urls_in_message)} URL(s) to analyze..."
+                thinking_step = f"Found {len(urls_in_message)} URL(s) to analyze..."
                 context.thinking_steps.append(thinking_step)
             else:
-                thinking_step = "🌐 Searching web for current information..."
+                thinking_step = "Searching web for current information..."
                 context.thinking_steps.append(thinking_step)
 
             # Extract search queries from PDF content if available
@@ -574,6 +666,14 @@ class LangGraphWorkflowService:
             clean_message = re.sub(url_pattern, "", message).strip()
             if clean_message and len(clean_message) > 5:  # Relaxed length check
                 search_queries.append(clean_message)
+
+            # If web search is required but no queries extracted yet, use the full message
+            if context.input_analysis.requires_web_search and not search_queries:
+                if message and len(message.strip()) > 5:
+                    search_queries.append(message.strip())
+                    print(
+                        f"🔍 [WEB SEARCH NODE] Using full message as search query: {message[:100]}..."
+                    )
 
             # Add specific query for the URL content if no other queries
             if urls_in_message and not search_queries:
@@ -887,15 +987,19 @@ class LangGraphWorkflowService:
             traceback.print_exc()
             return None
 
-    async def _search_with_serper(self, query: str) -> Optional[str]:
-        """Search using Serper's search API"""
+    async def _search_with_serper(self, query: str) -> Tuple[Optional[str], List[str]]:
+        """Search using Serper's search API
+        Returns: (formatted_results_string, list_of_source_links)
+        """
         try:
             if not settings.SERPER_API_KEY:
-
-                return None
+                print("⚠️ SERPER_API_KEY not set, cannot perform web search")
+                return None, []
 
             search_url = "https://google.serper.dev/search"
-            payload = json.dumps({"q": query, "num": 3})
+            payload = json.dumps(
+                {"q": query, "num": 10}
+            )  # Get more results to extract more links
             headers = {
                 "X-API-KEY": settings.SERPER_API_KEY,
                 "Content-Type": "application/json",
@@ -918,6 +1022,7 @@ class LangGraphWorkflowService:
 
                 # Format organic results
                 formatted_results = []
+                source_links = []
 
                 # Add answer box if available
                 if "answerBox" in result:
@@ -942,28 +1047,36 @@ class LangGraphWorkflowService:
                     title = item.get("title", "")
                     snippet = item.get("snippet", "")
                     link = item.get("link", "")
+                    date = item.get("date", "")
 
                     # Include result if it has title and link, even without snippet
                     if title and link:
+                        # Collect all source links
+                        if link not in source_links:
+                            source_links.append(link)
+
+                        # Format with date if available, make link prominent
+                        date_str = f" ({date})" if date else ""
                         formatted_results.append(
-                            f"• {title}\n  Snippet: {snippet or 'No snippet available'}\n  Source: {link}"
+                            f"• {title}{date_str}\n  Snippet: {snippet or 'No snippet available'}\n  🔗 Source Link: {link}"
                         )
 
                 if formatted_results:
-                    return "\n\n".join(formatted_results)
+                    return "\n\n".join(formatted_results), source_links
                 else:
                     print(
                         f"⚠️ [SEARCH] No formatted results extracted for query: {query}"
                     )
+                    return None, []
 
             print(f"⚠️ Serper search failed with status {response.status_code}")
             if response.status_code != 200:
                 print(f"⚠️ Response text: {response.text[:200]}")
-            return None
+            return None, []
 
         except Exception as e:
             print(f"⚠️ Error searching with Serper: {e}")
-            return None
+            return None, []
 
     async def _perform_web_search(
         self, queries: List[str], context: WorkflowContext, urls: List[str] = None
@@ -1004,10 +1117,17 @@ class LangGraphWorkflowService:
                             f"⚠️ Failed to scrape: {url}. Attempting to search for it instead..."
                         )
                         # Fallback: Search for the URL to get snippet/title
-                        search_result = await self._search_with_serper(url)
+                        search_result, source_links = await self._search_with_serper(
+                            url
+                        )
                         if search_result:
                             # Store search result for URL replacement
                             url_to_content[url] = search_result
+
+                            # Collect source links
+                            for link in source_links:
+                                if link not in all_source_links:
+                                    all_source_links.append(link)
 
                             if url_count > 1:
                                 all_results.append(
@@ -1021,16 +1141,33 @@ class LangGraphWorkflowService:
                         else:
                             print(f"❌ Failed to search for URL: {url}")
 
-            # Then, perform searches for queries (if no URLs or need more context)
-            if queries and (not urls or not all_results):
+            # Collect all source links from searches
+            all_source_links = []
+
+            # Add scraped URLs to source links
+            if urls:
+                all_source_links.extend(urls[:3])
+
+            # Then, perform searches for queries
+            # Always search if queries are provided (even if URLs were scraped, queries provide additional context)
+            if queries:
                 print(f"🔍 Searching for {len(queries)} queries...")
-                for query in queries[:3]:  # Limit to 3 queries
+                for query in queries[:5]:  # Limit to 5 queries for better coverage
                     if query.strip() and not query.startswith("http"):
-                        search_result = await self._search_with_serper(query)
+                        search_result, source_links = await self._search_with_serper(
+                            query
+                        )
                         if search_result:
                             all_results.append(
                                 f"🔍 Additional Information:\n{search_result}"
                             )
+                            # Collect source links from search results
+                            for link in source_links:
+                                if link not in all_source_links:
+                                    all_source_links.append(link)
+                            print(f"✅ Found search results for query: {query[:50]}...")
+                        else:
+                            print(f"⚠️ No results for query: {query[:50]}...")
 
             if not all_results:
                 print(f"❌ [PERFORM WEB SEARCH] No results retrieved")
@@ -1061,6 +1198,7 @@ class LangGraphWorkflowService:
                         [r for r in all_results if r.startswith("🔍")]
                     ),
                     "url_to_content": url_to_content,  # Store URL-to-content mapping for prompt replacement
+                    "source_links": all_source_links,  # Store all source links from search results
                 },
                 tokens_used=len(combined_results.split()),
                 processing_time=processing_time,
@@ -1180,10 +1318,6 @@ class LangGraphWorkflowService:
 
         summary_content = "\n\n---\n\n".join(content_parts)
 
-        # If no content was gathered, provide a helpful message
-        if not summary_content or not summary_content.strip():
-            return None, False
-
         # Get the user's original question/request and replace URLs with their content
         user_query = ""
         if hasattr(context, "original_message") and context.original_message:
@@ -1220,10 +1354,30 @@ class LangGraphWorkflowService:
             user_query = re.sub(r"\n\s*\n\s*\n+", "\n\n", user_query).strip()
             user_query = re.sub(r"\n\s*\n", "\n", user_query).strip()
 
-        # Create prompt: user query with URLs replaced by content, plus any PDF/integration results
+        # Create prompt: user query with URLs replaced by content, plus any PDF/integration/web search results
         if user_query:
-            # Add PDF and integration results if available (but not web search results since URLs are already replaced)
+            # Add PDF, integration, and web search results if available
             additional_content = []
+
+            # Add web search results if available (for search queries without URLs)
+            if (
+                context.web_search_results
+                and context.web_search_results.success
+                and context.web_search_results.content
+            ):
+                # Check if URLs were in the original message (if so, they were replaced and web search results are already in the query)
+                # If no URLs in original message, these are search query results that need to be included
+                if not context.input_analysis.has_links:
+                    content_text = context.web_search_results.content
+                    content_text = re.sub(
+                        r"📄 Content from https?://[^\n]+\n",
+                        "📄 Retrieved Content:\n",
+                        content_text,
+                    )
+                    additional_content.append(f"Web Search Results:\n{content_text}")
+                    print(
+                        f"✅ [PREPARE PROMPT] Added web search results to prompt ({len(content_text)} chars)"
+                    )
 
             # Add integration result if available
             if context.integration_result and context.integration_result.success:
@@ -1239,6 +1393,28 @@ class LangGraphWorkflowService:
                             f"Document Content:\n{pdf_result.content}"
                         )
 
+            # Extract source links from web search results if available
+            source_links_instruction = ""
+            source_links_list = []
+            if (
+                context.web_search_results
+                and context.web_search_results.metadata
+                and "source_links" in context.web_search_results.metadata
+            ):
+                source_links_list = context.web_search_results.metadata.get(
+                    "source_links", []
+                )
+                if source_links_list:
+                    links_text = "\n".join(
+                        [f"  - {link}" for link in source_links_list]
+                    )
+                    source_links_instruction = f"""
+
+IMPORTANT: Please include all source links in your response. The following source links were found:
+{links_text}
+
+Make sure to reference these links when discussing the information from these sources."""
+
             # Combine user query with additional content
             if additional_content:
                 summary_prompt = f"""{user_query}
@@ -1246,14 +1422,33 @@ class LangGraphWorkflowService:
 ---
 
 Additional Sources:
-{chr(10).join(additional_content)}"""
+{chr(10).join(additional_content)}{source_links_instruction}"""
             else:
-                summary_prompt = user_query
+                summary_prompt = f"""{user_query}{source_links_instruction}"""
+
+            # Debug logging
+            print(
+                f"📝 [PREPARE PROMPT] Final prompt length: {len(summary_prompt)} chars"
+            )
+            print(f"📝 [PREPARE PROMPT] Prompt preview: {summary_prompt[:300]}...")
+            if context.web_search_results and context.web_search_results.success:
+                print(
+                    f"📝 [PREPARE PROMPT] Web search results available: {len(context.web_search_results.content)} chars"
+                )
+                print(
+                    f"📝 [PREPARE PROMPT] Web search results in prompt: {'Web Search Results:' in summary_prompt}"
+                )
+
+            # Check if prompt has meaningful content (not just whitespace)
+            if summary_prompt and summary_prompt.strip():
+                return summary_prompt, True
         else:
             # Fallback: use summary_content if no user query
-            summary_prompt = summary_content
+            if summary_content and summary_content.strip():
+                return summary_content, True
 
-        return summary_prompt, True
+        # If no content was gathered, return False
+        return None, False
 
     async def _generate_final_summary(
         self, context: WorkflowContext
@@ -1302,13 +1497,53 @@ Additional Sources:
             print(f"🚀 [SUMMARY] Generating response...")
             response = await model.ainvoke([HumanMessage(content=summary_prompt)])
 
+            # Get source links from web search results
+            source_links_list = []
+            if (
+                context.web_search_results
+                and context.web_search_results.metadata
+                and "source_links" in context.web_search_results.metadata
+            ):
+                source_links_list = context.web_search_results.metadata.get(
+                    "source_links", []
+                )
+
+            # Check if response already contains links (basic check)
+            response_content = response.content
+            links_included = False
+            if source_links_list:
+                # Check if at least some links are mentioned in the response
+                links_found = sum(
+                    1 for link in source_links_list if link in response_content
+                )
+                links_included = links_found >= min(
+                    2, len(source_links_list)
+                )  # At least 2 links or all if less than 2
+
+            # Append source links section if not already included
+            if source_links_list and not links_included:
+                links_section = "\n\n---\n\n**Source Links:**\n"
+                for i, link in enumerate(source_links_list, 1):
+                    links_section += f"{i}. {link}\n"
+                response_content = response_content + links_section
+                print(
+                    f"✅ [SUMMARY] Appended {len(source_links_list)} source links to response"
+                )
+
+            # Normalize markdown format to ensure consistency across different LLMs
+            response_content = normalize_markdown_format(response_content)
+            print(f"✅ [SUMMARY] Normalized markdown format")
+
             processing_time = (datetime.now() - start_time).total_seconds()
 
             return ProcessingResult(
                 success=True,
-                content=response.content,
-                metadata={"summary_type": "comprehensive"},
-                tokens_used=len(response.content.split()),
+                content=response_content,
+                metadata={
+                    "summary_type": "comprehensive",
+                    "source_links": source_links_list,
+                },
+                tokens_used=len(response_content.split()),
                 processing_time=processing_time,
             )
 
@@ -1361,20 +1596,37 @@ Additional Sources:
                     yield error_response[i : i + chunk_size]
                 return
 
+            # Get source links from web search results
+            source_links_list = []
+            if (
+                context.web_search_results
+                and context.web_search_results.metadata
+                and "source_links" in context.web_search_results.metadata
+            ):
+                source_links_list = context.web_search_results.metadata.get(
+                    "source_links", []
+                )
+
             # Stream summary using model's astream (like generate_conversation_response_streaming)
             print(f"🚀 [SUMMARY STREAMING] Generating response...")
             messages = [HumanMessage(content=summary_prompt)]
+
+            # Accumulate response to check for links and normalize
+            accumulated_response = ""
+            chunks_buffer = []
 
             # Use model's native streaming if available
             if hasattr(model, "astream"):
                 async for chunk in model.astream(messages):
                     if hasattr(chunk, "content") and chunk.content:
-                        yield chunk.content
+                        accumulated_response += chunk.content
+                        chunks_buffer.append(chunk.content)
             elif hasattr(model, "stream"):
                 # Some models use 'stream' instead of 'astream'
                 async for chunk in model.stream(messages):
                     if hasattr(chunk, "content") and chunk.content:
-                        yield chunk.content
+                        accumulated_response += chunk.content
+                        chunks_buffer.append(chunk.content)
             else:
                 # Fallback: if model doesn't support streaming, use ainvoke and chunk manually
                 print(
@@ -1382,9 +1634,40 @@ Additional Sources:
                 )
                 response = await model.ainvoke(messages)
                 if response.content:
+                    accumulated_response = response.content
+                    chunks_buffer = [response.content]
+
+            # Normalize markdown format for accumulated response
+            # For streaming, we normalize the full response and re-stream it
+            if accumulated_response:
+                normalized_response = normalize_markdown_format(accumulated_response)
+                if normalized_response != accumulated_response:
+                    print(f"✅ [SUMMARY STREAMING] Normalized markdown format")
+                    accumulated_response = normalized_response
+
+                # Always stream the (potentially normalized) accumulated response chunk by chunk
+                chunk_size = 50
+                for i in range(0, len(accumulated_response), chunk_size):
+                    yield accumulated_response[i : i + chunk_size]
+
+            # Append source links if not already included
+            if source_links_list:
+                links_found = sum(
+                    1 for link in source_links_list if link in accumulated_response
+                )
+                links_included = links_found >= min(2, len(source_links_list))
+
+                if not links_included:
+                    links_section = "\n\n---\n\n**Source Links:**\n"
+                    for i, link in enumerate(source_links_list, 1):
+                        links_section += f"{i}. {link}\n"
+                    # Stream the links section
                     chunk_size = 50
-                    for i in range(0, len(response.content), chunk_size):
-                        yield response.content[i : i + chunk_size]
+                    for i in range(0, len(links_section), chunk_size):
+                        yield links_section[i : i + chunk_size]
+                    print(
+                        f"✅ [SUMMARY STREAMING] Appended {len(source_links_list)} source links to response"
+                    )
 
         except Exception as e:
             print(f"❌ [SUMMARY STREAMING] Error: {e}")

@@ -18,6 +18,85 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 import asyncio
 
+
+def normalize_markdown_format(content: str) -> str:
+    """
+    Normalize markdown format from different LLMs to a consistent format.
+    Converts formats like:
+    - "1) Title" or "1. Title" → "### 1. **Title**"
+    - Ensures consistent header and list formatting
+    """
+    if not content or not isinstance(content, str):
+        return content
+
+    lines = content.split("\n")
+    normalized_lines = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Skip empty lines
+        if not line:
+            normalized_lines.append("")
+            i += 1
+            continue
+
+        # Check for numbered items with parenthesis: "1) Title" (Gemini format)
+        paren_match = re.match(r"^(\d+)\)\s*(.+)$", line)
+        if paren_match:
+            number = paren_match.group(1)
+            title = paren_match.group(2).strip()
+            # Remove existing markdown formatting to avoid double bold
+            title = title.replace("**", "").strip()
+            # Add bold formatting
+            normalized_lines.append(f"### {number}. **{title}**")
+            i += 1
+            continue
+
+        # Check for numbered items with period at start of line: "1. Title" (but not headers)
+        # Only convert if it's not already a header (doesn't start with #)
+        period_match = re.match(r"^(\d+)\.\s+(.+)$", line)
+        if period_match and not line.startswith("#"):
+            number = period_match.group(1)
+            title = period_match.group(2).strip()
+
+            # Check if this looks like a main item (starts with capital, has substantial content)
+            # and the next few lines contain details (like **Date:**, **Agency:**, etc.)
+            is_main_item = False
+            if i + 1 < len(lines):
+                next_lines = "\n".join(lines[i + 1 : i + 4]).lower()
+                if any(
+                    keyword in next_lines
+                    for keyword in [
+                        "**date:**",
+                        "**agency:**",
+                        "**details:**",
+                        "**what's new:**",
+                        "**official",
+                        "**discovery date:**",
+                    ]
+                ):
+                    is_main_item = True
+
+            # Convert to header format if it's a main item
+            if is_main_item:
+                # Clean up existing markdown in title
+                clean_title = title.replace("**", "").strip()
+                normalized_lines.append(f"### {number}. **{clean_title}**")
+            else:
+                # Keep as is for sub-items
+                normalized_lines.append(lines[i])
+            i += 1
+            continue
+
+        # Keep other lines as is
+        normalized_lines.append(lines[i])
+        i += 1
+
+    return "\n".join(normalized_lines)
+
+
 # Global task tracking for AI generation cancellation
 active_generation_tasks: Dict[str, asyncio.Task] = {}
 
@@ -2065,6 +2144,9 @@ def _process_ai_content_fast(content_text) -> tuple[str, str]:
             )
             ai_result_content = ai_result_content.replace("\\\\", "")
             ai_result_content = ai_result_content.replace("\\ ", " ")
+
+            # Normalize markdown format for consistency across different LLMs
+            ai_result_content = normalize_markdown_format(ai_result_content)
 
     except (json.JSONDecodeError, KeyError, TypeError):
         pass

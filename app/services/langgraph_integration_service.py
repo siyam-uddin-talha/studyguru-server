@@ -158,15 +158,38 @@ class LangGraphIntegrationService:
             keyword in (message or "").lower() for keyword in analytical_keywords
         )
 
+        # Check for web search keywords - use LangGraph for web search requests
+        web_search_keywords = [
+            "search the web",
+            "search the internet",
+            "find information about",
+            "look up",
+            "web search",
+            "latest",
+            "current",
+            "recent",
+            "2024",
+            "2025",
+            "news",
+            "discoveries",
+            "announcements",
+            "press release",
+        ]
+        has_web_search_keywords = any(
+            keyword in (message or "").lower() for keyword in web_search_keywords
+        )
+
         # Debug logging
         print(
-            f"🔍 [LANGGRAPH DECISION] has_pdfs={has_pdfs}, has_links={has_links}, has_multiple_files={has_multiple_files}, has_analytical_keywords={has_analytical_keywords}"
+            f"🔍 [LANGGRAPH DECISION] has_pdfs={has_pdfs}, has_links={has_links}, has_multiple_files={has_multiple_files}, has_analytical_keywords={has_analytical_keywords}, has_web_search_keywords={has_web_search_keywords}"
         )
 
         # Use LangGraph for complex scenarios
         # URLs always need LangGraph for web scraping/searching
+        # Web search requests should use LangGraph to use Serper directly
         should_use = (
             has_links  # URLs need web scraping - always use LangGraph
+            or has_web_search_keywords  # Web search requests - use LangGraph with Serper
             or (has_pdfs and has_links)  # PDFs + links
             or (has_pdfs and has_multiple_files)  # Multiple PDFs
             or (has_links and has_analytical_keywords)  # Links + analysis
