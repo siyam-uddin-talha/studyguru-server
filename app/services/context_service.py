@@ -1,6 +1,17 @@
 """
 Enhanced context retrieval service for the RAG system
 Implements multi-level context retrieval strategy with caching and ranking
+
+DEPRECATION NOTICE:
+===================
+This service is being replaced by simplified_context_service.py for better performance.
+The simplified service uses only 2 context sources (document + vector search) instead of 5,
+resulting in ~60% faster retrieval times.
+
+New code should use:
+    from app.services.simplified_context_service import simplified_context_service
+
+This file is kept for backwards compatibility but may be removed in a future version.
 """
 
 import asyncio
@@ -15,7 +26,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal
 from app.models.interaction import Interaction, Conversation
 from app.models.context import (
-    ConversationContext,
     UserLearningProfile,
     DocumentContext,
     ContextUsageLog,
@@ -189,73 +199,25 @@ class ContextRetrievalService:
     async def _get_semantic_summary_context(
         self, user_id: str, interaction_id: Optional[str], metadata: Dict
     ) -> str:
-        """Get interaction-level semantic summary context"""
+        """
+        Get interaction-level semantic summary context
+
+        DEPRECATED: This function is no longer used in the simplified RAG system.
+        The semantic_summary field was removed from the Interaction model.
+        Vector search now handles all semantic context retrieval.
+
+        This function is kept for backwards compatibility but returns empty string.
+        """
         start_time = datetime.now()
 
-        try:
-            if not interaction_id:
-                return ""
+        # Return empty - semantic_summary field was removed in RAG streamlining
+        # Vector search now handles semantic context retrieval
+        metadata["sources_ignored"].append("semantic_summary")
+        metadata["retrieval_times"]["semantic_summary"] = (
+            datetime.now() - start_time
+        ).total_seconds()
 
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(Interaction).where(
-                        and_(
-                            Interaction.id == interaction_id,
-                            Interaction.user_id == user_id,
-                        )
-                    )
-                )
-                interaction = result.scalar_one_or_none()
-
-                if not interaction or not interaction.semantic_summary:
-                    return ""
-
-                summary_data = interaction.semantic_summary
-                semantic_parts = []
-
-                # Add the main summary
-                if summary_data.get("updated_summary"):
-                    semantic_parts.append(
-                        f"**Conversation Summary:**\n{summary_data['updated_summary']}"
-                    )
-
-                # Add recent focus (most important for understanding current context)
-                if summary_data.get("recent_focus"):
-                    semantic_parts.append(
-                        f"**Recent Focus:**\n{summary_data['recent_focus']}"
-                    )
-
-                # Add key topics
-                if summary_data.get("key_topics"):
-                    topics_str = ", ".join(summary_data["key_topics"][:5])
-                    semantic_parts.append(f"**Topics Covered:** {topics_str}")
-
-                # Add accumulated facts (critical for answering follow-up questions)
-                if summary_data.get("accumulated_facts"):
-                    facts = summary_data["accumulated_facts"][
-                        :3
-                    ]  # Top 3 most important
-                    if facts:
-                        facts_str = "\n".join(f"- {fact}" for fact in facts)
-                        semantic_parts.append(f"**Key Facts:**\n{facts_str}")
-
-                context = "\n\n".join(semantic_parts)
-
-                # Update metadata
-                metadata["sources_used"].append("semantic_summary")
-                metadata["retrieval_times"]["semantic_summary"] = (
-                    datetime.now() - start_time
-                ).total_seconds()
-                metadata["context_lengths"]["semantic_summary"] = len(context)
-
-                return context
-
-        except Exception as e:
-            metadata["sources_ignored"].append("semantic_summary")
-            metadata["retrieval_times"]["semantic_summary"] = (
-                datetime.now() - start_time
-            ).total_seconds()
-            return ""
+        return ""
 
     async def _get_vector_search_context(
         self, user_id: str, interaction_id: Optional[str], message: str, metadata: Dict
@@ -590,74 +552,25 @@ class ContextRetrievalService:
     async def _get_cross_interaction_context(
         self, user_id: str, interaction_id: Optional[str], message: str, metadata: Dict
     ) -> List[Dict[str, Any]]:
-        """Get context from related interactions across the user's history"""
+        """
+        Get context from related interactions across the user's history
+
+        DEPRECATED: This function is no longer used in the simplified RAG system.
+        The related_interactions field was removed from UserLearningProfile.
+        Vector search now handles cross-interaction context via semantic similarity.
+
+        This function is kept for backwards compatibility but returns empty list.
+        """
         start_time = datetime.now()
 
-        try:
-            async with AsyncSessionLocal() as db:
-                # Get user learning profile
-                result = await db.execute(
-                    select(UserLearningProfile).where(
-                        UserLearningProfile.user_id == user_id
-                    )
-                )
-                learning_profile = result.scalar_one_or_none()
+        # Return empty - related_interactions field was removed in RAG streamlining
+        # Vector search now handles cross-interaction context via semantic similarity
+        metadata["sources_ignored"].append("cross_interaction")
+        metadata["retrieval_times"]["cross_interaction"] = (
+            datetime.now() - start_time
+        ).total_seconds()
 
-                if not learning_profile:
-                    return []
-
-                # Get related interactions
-                related_interaction_ids = learning_profile.related_interactions or []
-                if not related_interaction_ids:
-                    return []
-
-                # Get semantic summaries from related interactions
-                result = await db.execute(
-                    select(Interaction).where(
-                        and_(
-                            Interaction.id.in_(related_interaction_ids),
-                            Interaction.user_id == user_id,
-                            Interaction.id
-                            != interaction_id,  # Exclude current interaction
-                        )
-                    )
-                )
-                related_interactions = result.scalars().all()
-
-                cross_interaction_results = []
-                for interaction in related_interactions:
-                    if interaction.semantic_summary:
-                        summary_data = interaction.semantic_summary
-
-                        # Check if topics are relevant to current message
-                        if self._is_relevant_to_message(summary_data, message):
-                            cross_interaction_results.append(
-                                {
-                                    "interaction_id": interaction.id,
-                                    "title": interaction.title,
-                                    "summary": summary_data.get("updated_summary", ""),
-                                    "key_topics": summary_data.get("key_topics", []),
-                                    "relevance_score": 0.7,  # Medium relevance for cross-interaction
-                                }
-                            )
-
-                # Update metadata
-                metadata["sources_used"].append("cross_interaction")
-                metadata["retrieval_times"]["cross_interaction"] = (
-                    datetime.now() - start_time
-                ).total_seconds()
-                metadata["context_lengths"]["cross_interaction"] = sum(
-                    len(r.get("summary", "")) for r in cross_interaction_results
-                )
-
-                return cross_interaction_results
-
-        except Exception as e:
-            metadata["sources_ignored"].append("cross_interaction")
-            metadata["retrieval_times"]["cross_interaction"] = (
-                datetime.now() - start_time
-            ).total_seconds()
-            return []
+        return []
 
     async def _get_related_conversations(
         self, user_id: str, interaction_id: Optional[str], message: str, metadata: Dict

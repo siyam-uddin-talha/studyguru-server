@@ -1,5 +1,9 @@
 """
 Context-related database models for enhanced RAG system
+
+Note: ConversationContext class was removed in the RAG streamlining.
+Vector search now handles all context retrieval (simpler, faster).
+See simplified_context_service.py for the new implementation.
 """
 
 from sqlalchemy import (
@@ -20,56 +24,9 @@ from app.core.database import Base
 import uuid
 
 
-class ConversationContext(Base):
-    """
-    Table to store preprocessed context snapshots for faster retrieval
-    """
-
-    __tablename__ = "conversation_context"
-
-    id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
-    interaction_id = Column(String(191), ForeignKey("interaction.id"), nullable=False)
-    user_id = Column(String(191), ForeignKey("user.id"), nullable=False)
-
-    # Context snapshot data
-    context_type = Column(
-        String(50), nullable=False
-    )  # 'semantic_summary', 'vector_search', 'document_content', 'cross_interaction'
-    context_data = Column(JSON, nullable=False)  # The actual context content
-    context_hash = Column(
-        String(64), nullable=False
-    )  # Hash of the context for deduplication
-
-    # Metadata for context ranking and relevance
-    relevance_score = Column(Float, nullable=True, default=0.0)
-    recency_score = Column(Float, nullable=True, default=0.0)
-    importance_score = Column(Float, nullable=True, default=0.0)
-
-    # Content metadata
-    content_length = Column(Integer, nullable=True)
-    topic_tags = Column(JSON, nullable=True)  # List of topic tags
-    question_numbers = Column(
-        JSON, nullable=True
-    )  # List of question numbers referenced
-
-    # Timestamps
-    created_at = Column(DateTime, default=func.now(), nullable=True)
-    updated_at = Column(
-        DateTime, default=func.now(), onupdate=func.now(), nullable=True
-    )
-    expires_at = Column(DateTime, nullable=True)  # For temporary context
-
-    # Relationships
-    interaction = relationship("Interaction")
-    user = relationship("User")
-
-    # Indexes for faster queries
-    __table_args__ = (
-        Index("idx_context_user_interaction", "user_id", "interaction_id"),
-        Index("idx_context_type_hash", "context_type", "context_hash"),
-        Index("idx_context_relevance", "relevance_score", "recency_score"),
-        Index("idx_context_created", "created_at"),
-    )
+# Note: ConversationContext table was REMOVED in RAG streamlining migration
+# The table was created but never used in actual retrieval.
+# Vector search now handles all semantic context retrieval.
 
 
 class UserLearningProfile(Base):
@@ -109,8 +66,10 @@ class UserLearningProfile(Base):
         JSON, nullable=True
     )  # Time patterns when user is most active
 
-    # Cross-interaction references
-    related_interactions = Column(JSON, nullable=True)  # IDs of related interactions
+    # Note: related_interactions field was REMOVED in RAG streamlining
+    # Cross-interaction context adds complexity without clear benefit
+    # Vector search now handles semantic similarity across interactions
+
     topic_clusters = Column(JSON, nullable=True)  # Clusters of related topics
 
     # Timestamps

@@ -78,6 +78,10 @@ class VectorOptimizationService:
     async def hybrid_search(self, search_query: SearchQuery) -> List[SearchResult]:
         """
         Perform hybrid search combining semantic similarity and keyword matching
+
+        Optimizations available via SearchQuery flags:
+        - use_query_expansion=False: Skip query expansion for faster search
+        - top_k=5: Reduced from default 10 for less noise
         """
         start_time = time.time()
 
@@ -91,12 +95,13 @@ class VectorOptimizationService:
                     for result in cached_result.get("results", [])
                 ]
 
-            # Step 1: Query expansion
-            expanded_queries = (
-                await self._expand_query(search_query)
-                if search_query.use_query_expansion
-                else [search_query.query]
-            )
+            # Step 1: Query expansion (can be disabled for faster search)
+            if search_query.use_query_expansion:
+                expanded_queries = await self._expand_query(search_query)
+            else:
+                # Simplified mode: use original query only
+                expanded_queries = [search_query.query]
+                print(f"🔍 [SIMPLIFIED MODE] Using original query only (no expansion)")
 
             # Step 2: Parallel semantic and keyword searches
             semantic_results = await self._semantic_search(
@@ -121,8 +126,9 @@ class VectorOptimizationService:
             )
 
             search_time = time.time() - start_time
+            mode = "simplified" if not search_query.use_query_expansion else "full"
             print(
-                f"🔍 Hybrid search completed in {search_time:.2f}s, found {len(final_results)} results"
+                f"🔍 Hybrid search [{mode}] completed in {search_time:.2f}s, found {len(final_results)} results"
             )
 
             return final_results

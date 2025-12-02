@@ -46,10 +46,8 @@ class Interaction(Base):
     summary_title = Column(String(500), nullable=True)
     is_pinned = Column(Boolean, nullable=False, default=False)
 
-    # Semantic summary for long-term context (stores running summary of all conversations)
-    semantic_summary = Column(
-        JSON, nullable=True
-    )  # Structure: {"updated_summary": str, "key_topics": [], "recent_focus": str, "accumulated_facts": []}
+    # Note: semantic_summary field was removed in RAG streamlining
+    # Vector search now handles all context retrieval (simpler, faster)
 
     created_at = Column(DateTime, default=func.now(), nullable=True)
     updated_at = Column(

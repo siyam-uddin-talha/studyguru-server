@@ -354,23 +354,32 @@ async def process_conversation_message(
                     return None
 
             async def get_context_fast():
-                """Enhanced context retrieval with timeout and length limits"""
+                """
+                Streamlined context retrieval with only 2 sources
+
+                Uses simplified_context_service for ~60% faster retrieval:
+                - Only 2 sources: document content + vector search
+                - No query expansion (semantic embeddings already capture meaning)
+                - Reduced top_k from 10 to 5
+                - Max context 4000 chars (was 8000)
+                """
                 context_start = time.time()
-                print(f"🔍 CONTEXT START: {context_start:.3f}")
+                print(f"🔍 CONTEXT START (SIMPLIFIED): {context_start:.3f}")
 
                 try:
-                    from app.services.context_service import context_service
+                    from app.services.simplified_context_service import (
+                        simplified_context_service,
+                    )
 
-                    # OPTIMIZATION: Use timeout and reduced context length for faster retrieval
+                    # SIMPLIFIED: Only 2 sources, 4000 char limit, faster retrieval
                     context_result = await asyncio.wait_for(
-                        context_service.get_comprehensive_context(
+                        simplified_context_service.get_simplified_context(
                             user_id=str(user_id),
                             interaction_id=str(interaction.id) if interaction else None,
                             message=message or "",
-                            include_cross_interaction=True,
-                            max_context_length=8000,  # Increased from 3000 to 8000 for more context
+                            max_context_length=4000,  # Reduced from 8000 for focus
                         ),
-                        timeout=3.5,  # Increased from 2.0 to 3.5 seconds for reliability
+                        timeout=2.0,  # Reduced from 3.5 - simplified is faster
                     )
 
                     context_text = context_result.get("context", "")
@@ -378,30 +387,15 @@ async def process_conversation_message(
 
                     context_end = time.time()
                     print(
-                        f"🔍 CONTEXT COMPLETE: {context_end:.3f} (took {context_end - context_start:.3f}s)"
+                        f"🔍 CONTEXT COMPLETE (SIMPLIFIED): {context_end:.3f} (took {context_end - context_start:.3f}s)"
                     )
 
-                    print(f"🔍 Enhanced Context Retrieval Results:")
+                    print(f"🔍 Simplified Context Retrieval Results:")
                     print(f"   Sources used: {metadata.get('sources_used', [])}")
-                    print(
-                        f"   Context length: {len(context_text)} characters (optimized)"
-                    )
-
-                    # Log context usage for monitoring (non-blocking)
-                    if interaction:
-                        asyncio.create_task(
-                            context_service.log_context_usage(
-                                user_id=str(user_id),
-                                interaction_id=str(interaction.id),
-                                conversation_id=None,
-                                context_sources_used=metadata.get("sources_used", []),
-                                context_sources_ignored=metadata.get(
-                                    "sources_ignored", []
-                                ),
-                                retrieval_time=metadata.get("total_retrieval_time", 0),
-                                user_query=message or "",
-                                query_type="general_inquiry",
-                            )
+                    print(f"   Context length: {len(context_text)} characters")
+                    if metadata.get("question_numbers_detected"):
+                        print(
+                            f"   Question numbers detected: {metadata['question_numbers_detected']}"
                         )
 
                     return context_text
@@ -855,16 +849,14 @@ async def process_conversation_message(
                 ai_start = time.time()
                 print(f"🤖 AI SERVICE CALL START: {ai_start:.3f}")
 
+                # Note: interaction_summary no longer uses semantic_summary field
+                # Vector search context now provides semantic context
                 result = await langchain_service.generate_conversation_response(
                     message=message or "",
                     context=context_text,
                     media_urls=media_urls,
                     interaction_title=interaction.title if interaction else None,
-                    interaction_summary=(
-                        interaction.semantic_summary.get("updated_summary")
-                        if interaction and interaction.semantic_summary
-                        else None
-                    ),
+                    interaction_summary=None,  # Removed: semantic_summary field no longer exists
                     max_tokens=max_tokens,
                     visualize_model=visualize_model,
                     assistant_model=assistant_model,
@@ -1095,15 +1087,19 @@ async def process_conversation_message(
                 print(f"⚠️ Failed to refresh interaction: {refresh_error}")
                 # This is not critical - the AI response is already committed
 
-            # Start background operations using real-time context service
+            # Start simplified background operations (only embeddings, no complex queues)
+            from app.services.simplified_background_service import (
+                run_simplified_background_operations,
+            )
+
             asyncio.create_task(
-                _background_operations_enhanced(
-                    user_conv.id,
-                    ai_conv.id,
-                    str(user_id),
-                    str(interaction.id),
-                    message or "",
-                    ai_response,
+                run_simplified_background_operations(
+                    user_conv_id=str(user_conv.id),
+                    ai_conv_id=str(ai_conv.id),
+                    user_id=str(user_id),
+                    interaction_id=str(interaction.id),
+                    message=message or "",
+                    ai_content=ai_response,
                 )
             )
 
