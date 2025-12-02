@@ -18,8 +18,6 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = getenv("ENVIRONMENT", "development")
     DISABLE_LOGS: bool = getenv("DISABLE_LOGS", "true").lower() == "false"
 
-    LLM_MODEL: str = getenv("LLM_MODEL", "gemini")  # gpt OR gemini
-
     # Database
     DATABASE_URL: str = getenv(
         "DATABASE_URL",

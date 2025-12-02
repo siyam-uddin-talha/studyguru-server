@@ -266,11 +266,10 @@ TYPE DETECTION:
 - "other": Mixed/unclear
 
 RULES:
-1. Detect language
-2. MCQ: Extract ALL questions separately
-   - Add "options" ONLY if A/B/C/D choices exist
-   - "answer": option letter OR direct solution
-3. Written: Organized explanatory content
+- MCQ: Extract ALL questions separately
+  - Add "options" ONLY if A/B/C/D choices exist
+  - "answer": option letter OR direct solution
+- Written: Organized explanatory content
 
 JSON FORMAT:
 
@@ -297,13 +296,10 @@ Return valid JSON only.""",
             (
                 "system",
                 """Check if content is educational.
-
-ACCEPT: Textbooks, worksheets, math, notes, quizzes, exams, homework, diagrams, equations, scientific content. Educational content with faces = ACCEPT. Empty/minimal = ACCEPT.
-Simple greetings,  Conversation starters (eg: hi, how are you) = ACCEPT.
 REJECT: Selfies, social media, inappropriate material, personal photos.
 
 JSON only:
-Accept: {{"is_violation": false, "violation_type": null, "reasoning": "[brief]"}}
+Accept: {{"is_violation": false}}
 Reject: {{"is_violation": true, "violation_type": "non_educational_content", "reasoning": "[why]"}}""",
             ),
             ("human", "{content}"),
@@ -427,14 +423,9 @@ Valid JSON only. NO markdown blocks.
                 "system",
                 """StudyGuru AI - MCQ expert.
 
-Create 5-10 high-quality MCQs: test understanding not memorization, clear questions, exactly 4 options (a,b,c,d), one correct answer, plausible distractors, educational explanations, proper notation, varied difficulty.
-
 Valid JSON only:
 {{
     "type": "mcq",
-    "language": "English",
-    "title": "Topic – Multiple Choice Questions",
-    "summary_title": "Solved MCQs with answers",
     "_result": {{
         "questions": [
             {{
@@ -476,13 +467,6 @@ Use web search to enhance your educational responses with current, accurate info
 
 class StudyGuruModels:
     """Model configurations - supports GPT, Gemini, and Moonshot AI (Kimi)"""
-
-    USE_FALLBACK_MODELS = False
-
-    @staticmethod
-    @lru_cache(maxsize=1)
-    def _is_gemini_model() -> bool:
-        return settings.LLM_MODEL.lower() == "gemini"
 
     @staticmethod
     def _get_cache():
@@ -539,14 +523,10 @@ class StudyGuruModels:
             is_gemini = actual_model.startswith("gemini")
             is_kimi = actual_model.startswith("kimi")
         else:
-            # Fall back to default behavior
-            is_gemini = StudyGuruModels._is_gemini_model()
+            # Default to gpt-5 when no model specified
+            is_gemini = False
             is_kimi = False
-            actual_model = (
-                "gemini-2.5-pro"
-                if is_gemini
-                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
-            )
+            actual_model = "gpt-5"
 
         # Moonshot AI (Kimi) models - use OpenAI-compatible API
         if is_kimi or (model_name and actual_model.startswith("kimi")):
@@ -684,13 +664,10 @@ class StudyGuruModels:
             is_gemini = actual_model.startswith("gemini")
             is_kimi = actual_model.startswith("kimi")
         else:
-            is_gemini = StudyGuruModels._is_gemini_model()
+            # Default to gpt-5 when no model specified
+            is_gemini = False
             is_kimi = False
-            actual_model = (
-                "gemini-2.5-pro"
-                if is_gemini
-                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
-            )
+            actual_model = "gpt-5"
 
         # Moonshot AI (Kimi) models - use OpenAI-compatible API
         if is_kimi or (model_name and actual_model.startswith("kimi")):
@@ -792,7 +769,7 @@ class StudyGuruModels:
         Args:
             model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
                        Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
-                       If not provided, uses default assistant model based on LLM_MODEL setting
+                       If not provided, defaults to gpt-5
             subscription_plan: User's subscription plan for access validation
         """
         cache = StudyGuruModels._get_cache()
@@ -822,18 +799,10 @@ class StudyGuruModels:
             is_gemini = actual_model.startswith("gemini")
             is_kimi = actual_model.startswith("kimi")
         else:
-            # Fall back to default behavior
-            is_gemini = StudyGuruModels._is_gemini_model()
+            # Default to gpt-5-mini when no model specified
+            is_gemini = False
             is_kimi = False
-            actual_model = (
-                "gemini-2.5-flash"
-                if is_gemini
-                else (
-                    "gpt-4.1-mini"
-                    if StudyGuruModels.USE_FALLBACK_MODELS
-                    else "gpt-5-mini"
-                )
-            )
+            actual_model = "gpt-5-mini"
 
         # Moonshot AI (Kimi) models
         if is_kimi or (model_name and actual_model.startswith("kimi")):
@@ -883,7 +852,7 @@ class StudyGuruModels:
         Args:
             model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
                        Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
-                       If not provided, uses default assistant model based on LLM_MODEL setting
+                       If not provided, defaults to gpt-5
             subscription_plan: User's subscription plan for access validation
         """
         cache = StudyGuruModels._get_cache()
@@ -913,14 +882,10 @@ class StudyGuruModels:
             is_gemini = actual_model.startswith("gemini")
             is_kimi = actual_model.startswith("kimi")
         else:
-            # Fall back to default behavior
-            is_gemini = StudyGuruModels._is_gemini_model()
+            # Default to gpt-5 when no model specified
+            is_gemini = False
             is_kimi = False
-            actual_model = (
-                "gemini-2.5-pro"
-                if is_gemini
-                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
-            )
+            actual_model = "gpt-5"
 
         # Moonshot AI (Kimi) models
         if is_kimi or (model_name and actual_model.startswith("kimi")):
@@ -959,9 +924,28 @@ class StudyGuruModels:
 
     @staticmethod
     @lru_cache(maxsize=1)
-    def get_embeddings_model():
-        """Get embeddings model with caching"""
-        if StudyGuruModels._is_gemini_model():
+    def get_embeddings_model(model_name: Optional[str] = None):
+        """Get embeddings model with caching
+
+        Args:
+            model_name: Optional model name to determine embedding type.
+                       If None, defaults to OpenAI embeddings.
+        """
+        # Determine embedding type from model_name if provided
+        if model_name:
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+        else:
+            # Default to OpenAI embeddings when no model specified
+            is_gemini = False
+
+        if is_gemini:
             base = GoogleGenerativeAIEmbeddings(
                 model="models/embedding-001", google_api_key=settings.GOOGLE_API_KEY
             )
@@ -985,7 +969,7 @@ class StudyGuruModels:
         Args:
             model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
                        Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
-                       If not provided, uses default assistant model based on LLM_MODEL setting
+                       If not provided, defaults to gpt-5
             subscription_plan: User's subscription plan for access validation
         """
         cache = StudyGuruModels._get_cache()
@@ -1015,18 +999,10 @@ class StudyGuruModels:
             is_gemini = actual_model.startswith("gemini")
             is_kimi = actual_model.startswith("kimi")
         else:
-            # Fall back to default behavior
-            is_gemini = StudyGuruModels._is_gemini_model()
+            # Default to gpt-5-mini when no model specified
+            is_gemini = False
             is_kimi = False
-            actual_model = (
-                "gemini-2.5-flash"
-                if is_gemini
-                else (
-                    "gpt-4.1-mini"
-                    if StudyGuruModels.USE_FALLBACK_MODELS
-                    else "gpt-5-mini"
-                )
-            )
+            actual_model = "gpt-5-mini"
 
         # Moonshot AI (Kimi) models
         if is_kimi or (model_name and actual_model.startswith("kimi")):
@@ -1076,7 +1052,7 @@ class StudyGuruModels:
         Args:
             model_name: Specific model to use (e.g., 'gemini-2.5-pro', 'gpt-4.1', 'gpt-5', 'kimi-k2-thinking')
                        Can also include type suffix like 'gemini-2.5-pro-assistant' or 'kimi-k2-assistant'
-                       If not provided, uses default assistant model based on LLM_MODEL setting
+                       If not provided, defaults to gpt-5
             subscription_plan: User's subscription plan for access validation
         """
         if not settings.SERPER_API_KEY:
@@ -1111,14 +1087,10 @@ class StudyGuruModels:
             is_gemini = actual_model.startswith("gemini")
             is_kimi = actual_model.startswith("kimi")
         else:
-            # Fall back to default behavior
-            is_gemini = StudyGuruModels._is_gemini_model()
+            # Default to gpt-5 when no model specified
+            is_gemini = False
             is_kimi = False
-            actual_model = (
-                "gemini-2.5-pro"
-                if is_gemini
-                else ("gpt-4.1" if StudyGuruModels.USE_FALLBACK_MODELS else "gpt-5")
-            )
+            actual_model = "gpt-5"
 
         # Create base model
         if is_kimi or (model_name and actual_model.startswith("kimi")):
@@ -1165,91 +1137,6 @@ class StudyGuruModels:
             description="Useful for searching the internet for current information, facts, and educational content.",
         )
         return llm.bind_tools([serper_tool])
-
-    @staticmethod
-    def get_model_with_context_cache(
-        model_type: str = "chat",
-        temperature: float = 0.2,
-        max_tokens: int = 5000,
-        cached_content: Optional[Any] = None,
-    ):
-        """
-        Get model with context caching for large documents
-
-        Args:
-            model_type: Type of model ("chat", "vision", "guardrail", "reasoning", "title")
-            temperature: Model temperature
-            max_tokens: Maximum output tokens
-            cached_content: Pre-cached content for context caching
-
-        Returns:
-            Model instance with context caching enabled
-        """
-        if StudyGuruModels._is_gemini_model() and cached_content:
-            # Use context caching for Gemini models
-            if model_type == "chat":
-                return ChatGoogleGenerativeAI(
-                    model="gemini-2.5-pro",
-                    temperature=temperature,
-                    google_api_key=settings.GOOGLE_API_KEY,
-                    max_output_tokens=max_tokens,
-                    cache=cache_manager.get_response_cache(),
-                    cache_context=cached_content,  # Enable context caching
-                )
-            elif model_type == "vision":
-                return ChatGoogleGenerativeAI(
-                    model="gemini-2.5-pro",
-                    temperature=temperature,
-                    google_api_key=settings.GOOGLE_API_KEY,
-                    max_output_tokens=max_tokens,
-                    request_timeout=120,
-                    cache=cache_manager.get_response_cache(),
-                    cache_context=cached_content,  # Enable context caching
-                )
-            elif model_type == "guardrail":
-                return ChatGoogleGenerativeAI(
-                    model="gemini-2.5-flash",
-                    temperature=temperature,
-                    google_api_key=settings.GOOGLE_API_KEY,
-                    max_output_tokens=max_tokens,
-                    request_timeout=15,
-                    cache=cache_manager.get_response_cache(),
-                    cache_context=cached_content,  # Enable context caching
-                )
-            elif model_type == "reasoning":
-                return ChatGoogleGenerativeAI(
-                    model="gemini-2.5-pro",
-                    temperature=temperature,
-                    google_api_key=settings.GOOGLE_API_KEY,
-                    max_output_tokens=max_tokens,
-                    request_timeout=120,
-                    cache=cache_manager.get_response_cache(),
-                    cache_context=cached_content,  # Enable context caching
-                )
-            elif model_type == "title":
-                return ChatGoogleGenerativeAI(
-                    model="gemini-2.5-flash",
-                    temperature=temperature,
-                    google_api_key=settings.GOOGLE_API_KEY,
-                    max_output_tokens=max_tokens,
-                    request_timeout=10,
-                    cache=cache_manager.get_response_cache(),
-                    cache_context=cached_content,  # Enable context caching
-                )
-
-        # Fallback to regular model without context caching
-        if model_type == "chat":
-            return StudyGuruModels.get_chat_model(temperature, max_tokens)
-        elif model_type == "vision":
-            return StudyGuruModels.get_vision_model(temperature, max_tokens)
-        elif model_type == "guardrail":
-            return StudyGuruModels.get_guardrail_model(temperature, max_tokens)
-        elif model_type == "reasoning":
-            return StudyGuruModels.get_complex_reasoning_model(temperature, max_tokens)
-        elif model_type == "title":
-            return StudyGuruModels.get_title_model(temperature, max_tokens)
-        else:
-            return StudyGuruModels.get_chat_model(temperature, max_tokens)
 
 
 class StudyGuruVectorStore:
@@ -1358,9 +1245,27 @@ class StudyGuruChains:
         return StudyGuruPrompts.TITLE_GENERATION | model | parser
 
     @staticmethod
-    def get_conversation_summarization_chain():
-        """Get conversation summarization chain with increased token limits"""
-        if StudyGuruModels._is_gemini_model():
+    def get_conversation_summarization_chain(model_name: Optional[str] = None):
+        """Get conversation summarization chain with increased token limits
+
+        Args:
+            model_name: Optional model name to use. If None, defaults to gpt-4.1-mini.
+        """
+        # Determine model type from model_name if provided
+        if model_name:
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+        else:
+            # Default to GPT model
+            is_gemini = False
+
+        if is_gemini:
             # Gemini 2.5 Flash for cost efficiency
             model = ChatGoogleGenerativeAI(
                 model="gemini-2.5-flash",  # Fast and cost-effective model
@@ -1384,9 +1289,27 @@ class StudyGuruChains:
         return StudyGuruPrompts.CONVERSATION_SUMMARIZATION | model | parser
 
     @staticmethod
-    def get_interaction_summary_update_chain():
-        """Get interaction summary update chain with increased token limits"""
-        if StudyGuruModels._is_gemini_model():
+    def get_interaction_summary_update_chain(model_name: Optional[str] = None):
+        """Get interaction summary update chain with increased token limits
+
+        Args:
+            model_name: Optional model name to use. If None, defaults to gpt-4.1-mini.
+        """
+        # Determine model type from model_name if provided
+        if model_name:
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+        else:
+            # Default to GPT model
+            is_gemini = False
+
+        if is_gemini:
             # Gemini 2.5 Flash for cost efficiency
             model = ChatGoogleGenerativeAI(
                 model="gemini-2.5-flash",  # Fast and cost-effective model
@@ -1428,13 +1351,6 @@ class StudyGuruChains:
         )
         parser = MarkdownJsonOutputParser()  # Use robust parser for MCQ generation
         return StudyGuruPrompts.MCQ_GENERATION | model | parser
-
-    @staticmethod
-    def get_web_search_chain():
-        """Get web search conversation chain with Google Search tool integration"""
-        model = StudyGuruModels.get_web_search_model()
-        parser = StrOutputParser()
-        return StudyGuruPrompts.WEB_SEARCH_CONVERSATION | model | parser
 
 
 class StudyGuruConfig:

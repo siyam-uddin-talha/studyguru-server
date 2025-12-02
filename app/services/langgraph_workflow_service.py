@@ -141,13 +141,33 @@ class ThinkingConfigManager:
 
     @staticmethod
     def get_thinking_config(
-        complexity: ComplexityLevel, task_type: str
+        complexity: ComplexityLevel, task_type: str, model_name: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Get appropriate thinking configuration"""
+        """Get appropriate thinking configuration
+
+        Args:
+            complexity: Task complexity level
+            task_type: Type of task
+            model_name: Optional model name to determine if Gemini thinking config should be used
+        """
         if not ThinkingConfigManager.should_use_thinking(complexity, task_type):
             return None
 
-        if StudyGuruConfig.MODELS._is_gemini_model() and GENAI_AVAILABLE:
+        # Check if model_name indicates a Gemini model
+        is_gemini = False
+        if model_name:
+            clean_model_name = (
+                model_name.replace("-visualize", "")
+                .replace("-assistant", "")
+                .replace("-plus", "")
+                .replace("-elite", "")
+            )
+            from app.config.langchain_config import MODEL_MAPPING
+
+            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
+            is_gemini = actual_model.startswith("gemini")
+
+        if is_gemini and GENAI_AVAILABLE:
             return {
                 "thinking_config": {
                     "include_thoughts": True,
@@ -157,7 +177,7 @@ class ThinkingConfigManager:
                 }
             }
         else:
-            # For GPT models, we'll use reasoning effort parameter
+            # For GPT and other models, we'll use reasoning effort parameter
             return {
                 "reasoning_effort": (
                     "high" if complexity == ComplexityLevel.ANALYTICAL else "medium"
@@ -871,7 +891,7 @@ class LangGraphWorkflowService:
         """Search using Serper's search API"""
         try:
             if not settings.SERPER_API_KEY:
-                print("⚠️ SERPER_API_KEY not set, cannot search")
+
                 return None
 
             search_url = "https://google.serper.dev/search"
@@ -957,6 +977,7 @@ class LangGraphWorkflowService:
 
         try:
             all_results = []
+            url_to_content = {}  # Map URLs to their scraped content for replacement
 
             # First, scrape any URLs provided
             if urls:
@@ -965,6 +986,9 @@ class LangGraphWorkflowService:
                 for idx, url in enumerate(urls[:3], 1):
                     scraped_content = await self._scrape_url_with_serper(url)
                     if scraped_content:
+                        # Store content for URL replacement (without headers)
+                        url_to_content[url] = scraped_content
+
                         # Format content with numbering if multiple URLs
                         if url_count > 1:
                             all_results.append(
@@ -982,6 +1006,9 @@ class LangGraphWorkflowService:
                         # Fallback: Search for the URL to get snippet/title
                         search_result = await self._search_with_serper(url)
                         if search_result:
+                            # Store search result for URL replacement
+                            url_to_content[url] = search_result
+
                             if url_count > 1:
                                 all_results.append(
                                     f"🔍 Retrieved Information (Source {idx} of {url_count}):\n{search_result}"
@@ -1033,6 +1060,7 @@ class LangGraphWorkflowService:
                     "searches_performed": len(
                         [r for r in all_results if r.startswith("🔍")]
                     ),
+                    "url_to_content": url_to_content,  # Store URL-to-content mapping for prompt replacement
                 },
                 tokens_used=len(combined_results.split()),
                 processing_time=processing_time,
@@ -1152,29 +1180,77 @@ class LangGraphWorkflowService:
 
         summary_content = "\n\n---\n\n".join(content_parts)
 
-        # Debug logging
-        print(f"🔍 [SUMMARY] Content parts: {len(content_parts)}")
-        print(f"🔍 [SUMMARY] Total content length: {len(summary_content)} chars")
-
         # If no content was gathered, provide a helpful message
         if not summary_content or not summary_content.strip():
             return None, False
 
-        # Get the user's original question/request (remove URLs)
+        # Get the user's original question/request and replace URLs with their content
         user_query = ""
         if hasattr(context, "original_message") and context.original_message:
-            # Extract the question part (remove URLs)
-            url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-            user_query = re.sub(url_pattern, "", context.original_message).strip()
+            user_query = context.original_message
+
+            # Get URL-to-content mapping from web search results
+            url_to_content = {}
+            if (
+                context.web_search_results
+                and context.web_search_results.metadata
+                and "url_to_content" in context.web_search_results.metadata
+            ):
+                url_to_content = context.web_search_results.metadata.get(
+                    "url_to_content", {}
+                )
+
+            # Replace each URL in the message with its corresponding content
+            if url_to_content:
+                url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+                urls_found = re.findall(url_pattern, user_query)
+
+                for url in urls_found:
+                    if url in url_to_content:
+                        # Replace URL with its content (wrap in a clear block)
+                        content = url_to_content[url]
+                        user_query = user_query.replace(url, f"\n\n{content}\n\n")
+                        print(f"✅ Replaced URL in prompt: {url[:50]}...")
+                    else:
+                        # URL was not successfully scraped, remove it
+                        user_query = user_query.replace(url, "").strip()
+                        print(f"⚠️ Removed unscraped URL from prompt: {url[:50]}...")
+
             # Clean up extra whitespace/newlines
+            user_query = re.sub(r"\n\s*\n\s*\n+", "\n\n", user_query).strip()
             user_query = re.sub(r"\n\s*\n", "\n", user_query).strip()
 
-        # Create simple prompt: content + user question (no URLs in prompt)
+        # Create prompt: user query with URLs replaced by content, plus any PDF/integration results
         if user_query:
-            summary_prompt = f"""{summary_content}
+            # Add PDF and integration results if available (but not web search results since URLs are already replaced)
+            additional_content = []
 
-{user_query}"""
+            # Add integration result if available
+            if context.integration_result and context.integration_result.success:
+                additional_content.append(
+                    f"Additional Analysis:\n{context.integration_result.content}"
+                )
+
+            # Add PDF results
+            if context.pdf_results:
+                for pdf_result in context.pdf_results:
+                    if pdf_result.success and pdf_result.content:
+                        additional_content.append(
+                            f"Document Content:\n{pdf_result.content}"
+                        )
+
+            # Combine user query with additional content
+            if additional_content:
+                summary_prompt = f"""{user_query}
+
+---
+
+Additional Sources:
+{chr(10).join(additional_content)}"""
+            else:
+                summary_prompt = user_query
         else:
+            # Fallback: use summary_content if no user query
             summary_prompt = summary_content
 
         return summary_prompt, True

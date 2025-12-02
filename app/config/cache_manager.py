@@ -37,8 +37,9 @@ class StudyGuruCacheManager:
             # Set global cache
             set_llm_cache(self.response_cache)
 
-        if settings.ENABLE_CONTEXT_CACHING and settings.LLM_MODEL.lower() == "gemini":
+        if settings.ENABLE_CONTEXT_CACHING:
             # Context caching will be handled by the model's cache_context parameter
+            # Context caching is supported for Gemini models when model_name is provided
             # No separate cache manager needed for Gemini context caching
             self.context_cache_manager = None
 
