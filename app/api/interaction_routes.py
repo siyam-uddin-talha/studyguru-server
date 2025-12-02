@@ -35,26 +35,178 @@ from app.config.langchain_config import StudyGuruConfig
 interaction_router = APIRouter()
 
 
-# Helper function to send thinking status updates
+# Progressive thinking status manager
+class ProgressiveThinkingStatus:
+    """Manages progressive thinking status updates with automatic message progression"""
+
+    def __init__(self, websocket: WebSocket):
+        self.websocket = websocket
+        self.active_statuses: Dict[str, asyncio.Task] = {}
+        self.status_start_times: Dict[str, float] = {}
+        self.status_message_indices: Dict[str, int] = {}
+
+    async def start_progressive_status(
+        self,
+        status_type: str,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """Start a progressive thinking status that auto-advances messages"""
+        # Cancel any existing status of the same type
+        if status_type in self.active_statuses:
+            self.active_statuses[status_type].cancel()
+
+        # Get messages for this status type
+        status_config = THINKING_STATUSES.get(status_type)
+        if not status_config:
+            print(f"⚠️ Unknown thinking status type: {status_type}")
+            return
+
+        messages = status_config.get("messages", [])
+        if not messages:
+            print(f"⚠️ No messages configured for status type: {status_type}")
+            return
+
+        # Initialize state
+        self.status_start_times[status_type] = asyncio.get_event_loop().time()
+        self.status_message_indices[status_type] = 0
+
+        # Send first message immediately
+        await self._send_status_message(status_type, messages[0], details)
+
+        # Start background task for progressive updates
+        self.active_statuses[status_type] = asyncio.create_task(
+            self._progressive_update_loop(status_type, messages, details)
+        )
+
+    async def _progressive_update_loop(
+        self,
+        status_type: str,
+        messages: List[str],
+        details: Optional[Dict[str, Any]],
+    ):
+        """Background loop that progresses through messages every 2 seconds"""
+        try:
+            while True:
+                await asyncio.sleep(2.0)  # Wait 2 seconds before next message
+
+                # Check if status is still active
+                if status_type not in self.status_start_times:
+                    break
+
+                # Get current message index
+                current_index = self.status_message_indices.get(status_type, 0)
+
+                # Move to next message if available
+                if current_index < len(messages) - 1:
+                    next_index = current_index + 1
+                    self.status_message_indices[status_type] = next_index
+                    await self._send_status_message(
+                        status_type, messages[next_index], details
+                    )
+                else:
+                    # Reached last message, keep showing it
+                    break
+        except asyncio.CancelledError:
+            # Status was cancelled (replaced by new status)
+            pass
+        except Exception as e:
+            print(f"⚠️ Progressive status update error: {e}")
+
+    async def _send_status_message(
+        self,
+        status_type: str,
+        message: str,
+        details: Optional[Dict[str, Any]],
+    ):
+        """Send a single thinking status message"""
+        try:
+            status_data = {
+                "type": "thinking",
+                "status_type": status_type,
+                "message": message,
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+            if details:
+                status_data["details"] = details
+            else:
+                # Get default details from THINKING_STATUSES
+                status_config = THINKING_STATUSES.get(status_type)
+                if status_config:
+                    status_data["details"] = status_config.get("details", {})
+
+            await self.websocket.send_text(json.dumps(status_data))
+            print(f"🧠 Sent thinking status: {status_type} - {message}")
+        except Exception as e:
+            print(f"⚠️ Failed to send thinking status: {e}")
+
+    async def stop_status(self, status_type: str):
+        """Stop a progressive thinking status"""
+        if status_type in self.active_statuses:
+            self.active_statuses[status_type].cancel()
+            del self.active_statuses[status_type]
+        if status_type in self.status_start_times:
+            del self.status_start_times[status_type]
+        if status_type in self.status_message_indices:
+            del self.status_message_indices[status_type]
+
+    async def stop_all(self):
+        """Stop all active progressive thinking statuses"""
+        for status_type in list(self.active_statuses.keys()):
+            await self.stop_status(status_type)
+
+
+# Helper function to send thinking status updates (backward compatible)
 async def send_thinking_status(
     websocket: WebSocket,
     status_type: str,
-    message: str,
+    message: Optional[str] = None,
     details: Optional[Dict[str, Any]] = None,
+    progressive: bool = True,
 ):
-    """Send thinking status update to WebSocket client"""
-    try:
-        status_data = {
-            "type": "thinking",
-            "status_type": status_type,
-            "message": message,
-            "timestamp": asyncio.get_event_loop().time(),
-        }
-        if details:
-            status_data["details"] = details
+    """
+    Send thinking status update to WebSocket client
 
-        await websocket.send_text(json.dumps(status_data))
-        print(f"🧠 Sent thinking status: {status_type} - {message}")
+    Args:
+        websocket: WebSocket connection
+        status_type: Type of thinking status
+        message: Optional message (if None, uses first message from THINKING_STATUSES)
+        details: Optional details dictionary
+        progressive: If True, uses progressive status updates (default: True)
+    """
+    try:
+        if progressive:
+            # Use progressive status manager
+            if not hasattr(websocket, "_progressive_thinking"):
+                websocket._progressive_thinking = ProgressiveThinkingStatus(websocket)
+
+            await websocket._progressive_thinking.start_progressive_status(
+                status_type, details
+            )
+        else:
+            # Legacy single message mode
+            if message is None:
+                status_config = THINKING_STATUSES.get(status_type)
+                if status_config:
+                    messages = status_config.get("messages", [])
+                    message = messages[0] if messages else f"{status_type}..."
+                else:
+                    message = f"{status_type}..."
+
+            status_data = {
+                "type": "thinking",
+                "status_type": status_type,
+                "message": message,
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+            if details:
+                status_data["details"] = details
+            else:
+                status_config = THINKING_STATUSES.get(status_type)
+                if status_config:
+                    status_data["details"] = status_config.get("details", {})
+
+            await websocket.send_text(json.dumps(status_data))
+            print(f"🧠 Sent thinking status: {status_type} - {message}")
     except Exception as e:
         print(f"⚠️ Failed to send thinking status: {e}")
 
@@ -133,38 +285,75 @@ async def _update_title_background(
         traceback.print_exc()
 
 
-# Thinking status types and messages
+# Thinking status types and messages with progressive updates
 THINKING_STATUSES = {
     "analyzing": {
-        "message": "Analyzing your question...",
+        "messages": [
+            "Analyzing your question...",
+            "Understanding the context and requirements...",
+            "Breaking down the key components...",
+        ],
         "details": {"stage": "input_analysis"},
     },
     "searching_context": {
-        "message": "Searching through your previous conversations for context...",
+        "messages": [
+            "Searching through your previous conversations for context...",
+            "Reviewing relevant past discussions...",
+            "Gathering contextual information...",
+        ],
         "details": {"stage": "context_retrieval"},
     },
     "checking_guardrails": {
-        "message": "Checking content safety...",
+        "messages": [
+            "Checking content safety...",
+            "Verifying compliance with guidelines...",
+            "Ensuring appropriate content...",
+        ],
         "details": {"stage": "safety_check"},
     },
     "preparing_response": {
-        "message": "Preparing my response...",
+        "messages": [
+            "Preparing my response...",
+            "Structuring the information...",
+            "Organizing key points...",
+            "Finalizing the details...",
+            "Almost ready...",
+        ],
         "details": {"stage": "response_preparation"},
     },
     "searching_web": {
-        "message": "Searching the web for current information...",
+        "messages": [
+            "Searching the web for current information...",
+            "Gathering up-to-date sources...",
+            "Verifying information accuracy...",
+            "Compiling relevant findings...",
+        ],
         "details": {"stage": "web_search"},
     },
     "generating": {
-        "message": "Generating response...",
+        "messages": [
+            "Generating response...",
+            "Crafting detailed answer...",
+            "Refining the content...",
+            "Polishing the response...",
+            "Finalizing output...",
+        ],
         "details": {"stage": "ai_generation"},
     },
     "processing_media": {
-        "message": "Processing your uploaded files...",
+        "messages": [
+            "Processing your uploaded files...",
+            "Analyzing file contents...",
+            "Extracting relevant information...",
+        ],
         "details": {"stage": "media_processing"},
     },
     # "saving": {
-    #     "message": "Saving our conversation...",
+    #     "messages": [
+    #         "Saving our conversation...",
+    #         "Storing the interaction...",
+    #         "Updating records...",
+    #     ],
     #     "details": {"stage": "database_save"},
     # },
 }
@@ -373,9 +562,6 @@ async def websocket_stream_conversation(websocket: WebSocket):
             print(
                 f"   💬 Assistant Model: {assistant_model or 'default (auto-select)'}"
             )
-            print(f"   📝 Message: {message[:100] if message else 'No message'}")
-            print(f"   📎 Media Files: {len(media_files) if media_files else 0}")
-            print(f"   🔍 Payload keys: {list(payload.keys())}")  # Debug payload keys
 
             # Validate input
             if not message or not message.strip():
@@ -393,11 +579,7 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     return
 
             # Send initial thinking status
-            print("🧠 Sending initial thinking status...")
-            await send_thinking_status(
-                websocket, "analyzing", THINKING_STATUSES["analyzing"]["message"]
-            )
-            print("🧠 Initial thinking status sent")
+            await send_thinking_status(websocket, "analyzing")
 
             # Handle interaction setup (same logic as do_conversation)
             interaction = None
@@ -464,12 +646,10 @@ async def websocket_stream_conversation(websocket: WebSocket):
             # Process media files if present (optimized with single query)
             media_objects = []
             if media_files:
-                # Send thinking status for media processing
-                await send_thinking_status(
-                    websocket,
-                    "processing_media",
-                    THINKING_STATUSES["processing_media"]["message"],
-                )
+                # Stop previous status and send thinking status for media processing
+                if hasattr(websocket, "_progressive_thinking"):
+                    await websocket._progressive_thinking.stop_status("analyzing")
+                await send_thinking_status(websocket, "processing_media")
 
                 # Extract all media IDs
                 media_ids = [
@@ -523,11 +703,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
             # Create parallel tasks
             async def run_guardrails_async():
                 try:
-                    await send_thinking_status(
-                        websocket,
-                        "checking_guardrails",
-                        THINKING_STATUSES["checking_guardrails"]["message"],
-                    )
+                    # Stop previous statuses
+                    if hasattr(websocket, "_progressive_thinking"):
+                        await websocket._progressive_thinking.stop_status("analyzing")
+                        await websocket._progressive_thinking.stop_status(
+                            "processing_media"
+                        )
+                    await send_thinking_status(websocket, "checking_guardrails")
                     media_urls = []
                     if media_files:
                         for media_file in media_files:
@@ -553,11 +735,13 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     print(f"🔍 [CONTEXT] Query: '{message or ''}'")
                     print(f"🔍 [CONTEXT] User ID: {current_user.id}")
 
-                    await send_thinking_status(
-                        websocket,
-                        "searching_context",
-                        THINKING_STATUSES["searching_context"]["message"],
-                    )
+                    # Stop previous statuses
+                    if hasattr(websocket, "_progressive_thinking"):
+                        await websocket._progressive_thinking.stop_status("analyzing")
+                        await websocket._progressive_thinking.stop_status(
+                            "processing_media"
+                        )
+                    await send_thinking_status(websocket, "searching_context")
                     if interaction_id:
                         try:
                             # OPTIMIZATION: Increased timeout for reliability
@@ -717,12 +901,10 @@ async def websocket_stream_conversation(websocket: WebSocket):
             if is_mindmap_request:
                 print(f"🗺️ WEBSOCKET MINDMAP GENERATOR MODE ACTIVATED (with context)")
                 try:
-                    # Send thinking status
-                    await send_thinking_status(
-                        websocket,
-                        "generating",
-                        "Generating personalized mindmap structure...",
-                    )
+                    # Stop previous statuses and send thinking status
+                    if hasattr(websocket, "_progressive_thinking"):
+                        await websocket._progressive_thinking.stop_all()
+                    await send_thinking_status(websocket, "generating")
 
                     # Extract topic
                     topic = extract_topic_from_message(message)
@@ -828,17 +1010,14 @@ async def websocket_stream_conversation(websocket: WebSocket):
             full_response = ""
             print(f"🚀 Starting WebSocket streaming response generation...")
 
-            # Send thinking status for response preparation
-            await send_thinking_status(
-                websocket,
-                "preparing_response",
-                THINKING_STATUSES["preparing_response"]["message"],
-            )
+            # Stop previous statuses
+            if hasattr(websocket, "_progressive_thinking"):
+                await websocket._progressive_thinking.stop_all()
 
-            # Send thinking status for AI generation (immediately, no delay)
-            await send_thinking_status(
-                websocket, "generating", THINKING_STATUSES["generating"]["message"]
-            )
+            # Send thinking status for response preparation
+            await send_thinking_status(websocket, "preparing_response")
+
+            # Note: generating status will be sent by langgraph workflow if needed
 
             # Combine retrieved context with custom provided context
             final_context = context_text or ""
@@ -1017,6 +1196,10 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 print(f"⚠️ Database operations failed: {db_error}")
                 # Continue - the streaming was successful even if DB operations failed
 
+            # Stop all thinking statuses before sending completion
+            if hasattr(websocket, "_progressive_thinking"):
+                await websocket._progressive_thinking.stop_all()
+
             # Send completion event
             await websocket.send_text(
                 json.dumps(
@@ -1066,6 +1249,9 @@ async def websocket_stream_conversation(websocket: WebSocket):
             pass
     finally:
         try:
+            # Stop all thinking statuses before closing
+            if hasattr(websocket, "_progressive_thinking"):
+                await websocket._progressive_thinking.stop_all()
             # Small delay before closing to allow any pending title generation messages
             await asyncio.sleep(0.5)
             await websocket.close()

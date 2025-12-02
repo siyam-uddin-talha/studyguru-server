@@ -353,6 +353,9 @@ class LangGraphIntegrationService:
     ):
         """Stream workflow execution with thinking steps"""
 
+        # Import thinking status helper
+        from app.api.interaction_routes import send_thinking_status, THINKING_STATUSES
+
         # Prepare media files
         workflow_media_files = []
         if media_files:
@@ -368,24 +371,83 @@ class LangGraphIntegrationService:
 
         # Execute workflow with streaming
         try:
-            # Send initial thinking step
+            # Send initial thinking step via websocket if available
+            if websocket:
+                # Stop any previous statuses
+                if hasattr(websocket, "_progressive_thinking"):
+                    await websocket._progressive_thinking.stop_all()
+                await send_thinking_status(websocket, "preparing_response")
+
+            # Also yield thinking step for compatibility
             yield {
                 "type": "thinking",
                 "content": "🔍 Analyzing your request...",
                 "thinking_steps": ["🔍 Analyzing your request..."],
             }
 
-            # Execute workflow
+            # Execute workflow with thinking status updates
             # Note: workflow_service currently manages its own context retrieval
             # We might want to pass the context here in the future if supported
-            workflow_result = await self.workflow_service.execute_workflow(
-                message=message or "",
-                media_files=workflow_media_files,
-                user_id=str(user.id),
-                interaction_id=str(interaction.id) if interaction else "",
+
+            # Start workflow execution in background and monitor progress
+            workflow_task = asyncio.create_task(
+                self.workflow_service.execute_workflow(
+                    message=message or "",
+                    media_files=workflow_media_files,
+                    user_id=str(user.id),
+                    interaction_id=str(interaction.id) if interaction else "",
+                )
             )
 
+            # Monitor workflow progress and send thinking statuses
+            workflow_start_time = asyncio.get_event_loop().time()
+
+            # Send searching_web status if workflow takes longer (indicates web search)
+            search_status_sent = False
+
+            # Wait for workflow with periodic status updates
+            while not workflow_task.done():
+                await asyncio.sleep(0.5)  # Check every 0.5 seconds
+
+                elapsed = asyncio.get_event_loop().time() - workflow_start_time
+
+                # If workflow is taking longer, send appropriate thinking statuses
+                if websocket:
+                    if elapsed > 3.0 and not search_status_sent:
+                        # Likely doing web search - check if message contains URLs or web search keywords
+                        message_lower = (message or "").lower()
+                        has_urls = "http" in message_lower or "www." in message_lower
+                        if has_urls:
+                            # Stop previous status and send searching_web status
+                            if hasattr(websocket, "_progressive_thinking"):
+                                await websocket._progressive_thinking.stop_status(
+                                    "preparing_response"
+                                )
+                            await send_thinking_status(websocket, "searching_web")
+                            search_status_sent = True
+                            yield {
+                                "type": "thinking",
+                                "content": "Searching the web for current information...",
+                                "thinking_steps": [
+                                    "Searching the web for current information..."
+                                ],
+                            }
+
+            # Get workflow result
+            workflow_result = await workflow_task
+
             if workflow_result["success"]:
+                # Stop previous thinking statuses
+                if websocket and hasattr(websocket, "_progressive_thinking"):
+                    await websocket._progressive_thinking.stop_status(
+                        "preparing_response"
+                    )
+                    await websocket._progressive_thinking.stop_status("searching_web")
+
+                # Send generating status for final response generation
+                if websocket:
+                    await send_thinking_status(websocket, "generating")
+
                 # Stream thinking steps
                 thinking_steps = workflow_result.get("thinking_steps", [])
                 for step in thinking_steps:
@@ -405,13 +467,26 @@ class LangGraphIntegrationService:
                     print(
                         f"🚀 [LANGGRAPH STREAMING] Streaming final summary from model..."
                     )
-                    async for (
-                        chunk
-                    ) in self.workflow_service._generate_final_summary_streaming(
-                        context
-                    ):
-                        yield chunk
-                    print(f"✅ [LANGGRAPH STREAMING] Streaming complete")
+                    try:
+                        async for (
+                            chunk
+                        ) in self.workflow_service._generate_final_summary_streaming(
+                            context
+                        ):
+                            yield chunk
+                        print(f"✅ [LANGGRAPH STREAMING] Streaming complete")
+                    except Exception as stream_error:
+                        print(
+                            f"⚠️ [LANGGRAPH STREAMING] Streaming error: {stream_error}"
+                        )
+                        # Fallback to result text streaming
+                        final_content = workflow_result.get("result", "")
+                        if final_content:
+                            chunk_size = 100
+                            for i in range(0, len(final_content), chunk_size):
+                                chunk = final_content[i : i + chunk_size]
+                                yield chunk
+                                await asyncio.sleep(0.01)
                 else:
                     # Fallback: stream final result as token chunks if context not available
                     final_content = workflow_result.get("result", "")
