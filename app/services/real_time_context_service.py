@@ -16,13 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal
 from app.models.interaction import Interaction, Conversation
 from app.models.context import (
-    ConversationContext,
     UserLearningProfile,
     DocumentContext,
     ContextUsageLog,
 )
 from app.services.langchain_service import langchain_service
-from app.services.semantic_summary_service import semantic_summary_service
+
+# Note: semantic_summary_service import removed - deprecated in RAG streamlining
 from app.services.vector_optimization_service import vector_optimization_service
 
 
@@ -176,67 +176,13 @@ class RealTimeContextService:
             return False
 
     async def _update_semantic_summary(self, task: ContextUpdateTask) -> bool:
-        """Update semantic summary with consistency checks"""
-        try:
-            payload = task.payload
-            user_message = payload.get("user_message", "")
-            ai_response = payload.get("ai_response", "")
-
-            async with AsyncSessionLocal() as db:
-                # Get current interaction
-                result = await db.execute(
-                    select(Interaction).where(Interaction.id == task.interaction_id)
-                )
-                interaction = result.scalar_one_or_none()
-
-                if not interaction:
-                    print(f"⚠️ Interaction not found: {task.interaction_id}")
-                    return False
-
-                # Get current summary
-                current_summary = interaction.semantic_summary
-
-                # Update using semantic summary service
-                try:
-                    updated_summary = (
-                        await semantic_summary_service.update_interaction_summary(
-                            current_summary=current_summary,
-                            new_user_message=user_message,
-                            new_ai_response=ai_response,
-                        )
-                    )
-                except Exception as summary_error:
-                    print(f"⚠️ Error updating semantic summary: {summary_error}")
-                    # Use fallback summary
-                    updated_summary = semantic_summary_service._get_fallback_summary(
-                        user_message, ai_response
-                    )
-
-                # Validate summary before saving
-                if not self._validate_semantic_summary(updated_summary):
-                    print(f"⚠️ Invalid semantic summary generated, using fallback")
-                    updated_summary = semantic_summary_service._get_fallback_summary(
-                        user_message, ai_response
-                    )
-
-                # Save with transaction
-                interaction.semantic_summary = updated_summary
-                interaction.updated_at = datetime.now()
-
-                await db.commit()
-
-                # Verify the update was saved correctly
-                await db.refresh(interaction)
-                if interaction.semantic_summary != updated_summary:
-                    print(f"⚠️ Semantic summary not saved correctly")
-                    return False
-
-                # print(f"✅ Semantic summary updated successfully")  # Removed for cleaner logs
-                return True
-
-        except Exception as e:
-            print(f"❌ Semantic summary update failed: {e}")
-            return False
+        """
+        DEPRECATED: Semantic summaries were removed in RAG streamlining.
+        This function now returns True as a no-op for backwards compatibility.
+        Vector search handles all context retrieval.
+        """
+        print("⚠️ Semantic summary update skipped (field removed in RAG streamlining)")
+        return True
 
     async def _update_embedding(self, task: ContextUpdateTask) -> bool:
         """Update embeddings with enhanced metadata"""
@@ -379,36 +325,17 @@ class RealTimeContextService:
             return False
 
     async def _update_conversation_context(self, task: ContextUpdateTask) -> bool:
-        """Update conversation context cache"""
-        try:
-            payload = task.payload
-            context_data = payload.get("context_data", {})
+        """
+        Update conversation context cache
 
-            async with AsyncSessionLocal() as db:
-                # Create or update conversation context
-                context = ConversationContext(
-                    interaction_id=task.interaction_id,
-                    user_id=task.user_id,
-                    context_type="conversation_cache",
-                    context_data=context_data,
-                    context_hash=self._calculate_context_hash(context_data),
-                    relevance_score=context_data.get("relevance_score", 0.8),
-                    recency_score=1.0,  # Fresh context
-                    importance_score=context_data.get("importance_score", 0.7),
-                    content_length=len(str(context_data)),
-                    created_at=datetime.now(),
-                    expires_at=datetime.now() + timedelta(hours=24),
-                )
-
-                db.add(context)
-                await db.commit()
-
-                print(f"✅ Conversation context updated successfully")
-                return True
-
-        except Exception as e:
-            print(f"❌ Conversation context update failed: {e}")
-            return False
+        DEPRECATED: ConversationContext table was removed in RAG streamlining.
+        This function now returns True as a no-op for backwards compatibility.
+        Vector search handles all context retrieval.
+        """
+        print(
+            f"⚠️ Conversation context update skipped (table removed in RAG streamlining)"
+        )
+        return True
 
     def _validate_semantic_summary(self, summary: Dict[str, Any]) -> bool:
         """Validate semantic summary structure and content"""
@@ -517,12 +444,8 @@ class RealTimeContextService:
                     print(f"⚠️ Interaction not found: {interaction_id}")
                     return False
 
-                # Check semantic summary consistency
-                if not interaction.semantic_summary:
-                    print(
-                        f"⚠️ Missing semantic summary for interaction {interaction_id}"
-                    )
-                    return False
+                # Note: semantic_summary field was removed in RAG streamlining
+                # Vector search now handles all context retrieval
 
                 # Check document context consistency
                 doc_result = await db.execute(
@@ -535,23 +458,10 @@ class RealTimeContextService:
                 )
                 doc_contexts = doc_result.scalars().all()
 
-                # Check conversation context consistency
-                conv_result = await db.execute(
-                    select(ConversationContext).where(
-                        and_(
-                            ConversationContext.user_id == user_id,
-                            ConversationContext.interaction_id == interaction_id,
-                        )
-                    )
-                )
-                conv_contexts = conv_result.scalars().all()
+                # Note: ConversationContext table was removed in RAG streamlining
 
                 print(f"✅ Consistency check completed:")
-                print(
-                    f"   Semantic summary: {'✓' if interaction.semantic_summary else '✗'}"
-                )
                 print(f"   Document contexts: {len(doc_contexts)}")
-                print(f"   Conversation contexts: {len(conv_contexts)}")
 
                 return True
 
@@ -560,30 +470,14 @@ class RealTimeContextService:
             return False
 
     async def cleanup_expired_context(self, max_age_hours: int = 24) -> int:
-        """Clean up expired context data"""
-        try:
-            cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+        """
+        Clean up expired context data
 
-            async with AsyncSessionLocal() as db:
-                # Clean up expired conversation contexts
-                result = await db.execute(
-                    select(ConversationContext).where(
-                        ConversationContext.expires_at < datetime.now()
-                    )
-                )
-                expired_contexts = result.scalars().all()
-
-                for context in expired_contexts:
-                    await db.delete(context)
-
-                await db.commit()
-
-                print(f"✅ Cleaned up {len(expired_contexts)} expired context entries")
-                return len(expired_contexts)
-
-        except Exception as e:
-            print(f"❌ Context cleanup failed: {e}")
-            return 0
+        Note: ConversationContext table was removed in RAG streamlining.
+        This function now returns 0 as a no-op for backwards compatibility.
+        """
+        print(f"⚠️ Context cleanup skipped (ConversationContext table removed)")
+        return 0
 
 
 # Global instance

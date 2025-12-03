@@ -1241,7 +1241,38 @@ async def _background_operations_enhanced(
     message: str,
     ai_content: str,
 ):
-    """Enhanced background operations using real-time context service"""
+    """
+    DEPRECATED: Use run_simplified_background_operations instead.
+
+    This function was replaced by simplified_background_service in RAG streamlining.
+    Kept for backwards compatibility - redirects to simplified operations.
+    """
+    from app.services.simplified_background_service import (
+        run_simplified_background_operations,
+    )
+
+    return await run_simplified_background_operations(
+        user_conv_id=str(user_conv_id),
+        ai_conv_id=str(ai_conv_id),
+        user_id=user_id,
+        interaction_id=interaction_id,
+        message=message,
+        ai_content=ai_content,
+    )
+
+
+async def _background_operations_enhanced_legacy(
+    user_conv_id: int,
+    ai_conv_id: int,
+    user_id: str,
+    interaction_id: str,
+    message: str,
+    ai_content: str,
+):
+    """
+    LEGACY: Original implementation kept for reference only.
+    This function is NOT called - see _background_operations_enhanced above.
+    """
     import json  # Import json at the top of the function to avoid scope issues
 
     try:

@@ -1,5 +1,11 @@
 """
-Enhanced semantic summary service with validation and versioning
+DEPRECATED: Semantic Summary Service
+
+This service was used for creating and updating semantic summaries of conversations.
+It has been deprecated in the RAG streamlining - vector search now handles all
+context retrieval.
+
+All functions now return minimal fallback responses and do NOT call LLMs.
 """
 
 import json
@@ -11,12 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models.interaction import Interaction
-from app.models.context import ConversationContext
-from app.services.langchain_service import langchain_service
 
 
 class SemanticSummaryService:
-    """Enhanced semantic summary service with validation and versioning"""
+    """
+    DEPRECATED: This service is no longer used in the streamlined RAG system.
+    All functions return minimal fallback responses and do NOT call LLMs.
+    Vector search now handles all context retrieval.
+    """
 
     def __init__(self):
         self.max_summary_length = 500
@@ -27,7 +35,31 @@ class SemanticSummaryService:
         self, user_message: str, ai_response: str
     ) -> Dict[str, Any]:
         """
-        Create a semantic summary from a single conversation exchange with validation
+        DEPRECATED: Returns minimal fallback response without calling LLM.
+        Semantic summaries were removed in RAG streamlining.
+        """
+        print(
+            "⚠️ create_conversation_summary is DEPRECATED (RAG streamlining) - no LLM call"
+        )
+        return {
+            "key_facts": [],
+            "main_topics": [],
+            "semantic_summary": "",
+            "important_terms": [],
+            "context_for_future": "",
+            "question_numbers": [],
+            "learning_progress": "",
+            "potential_follow_ups": [],
+            "difficulty_level": "unknown",
+            "subject_area": "unknown",
+        }
+
+    async def _create_conversation_summary_legacy(
+        self, user_message: str, ai_response: str
+    ) -> Dict[str, Any]:
+        """
+        LEGACY: Original implementation kept for reference only.
+        This function is NOT called - see create_conversation_summary above.
         """
         try:
             # Use the enhanced conversation summarization chain
@@ -128,91 +160,26 @@ class SemanticSummaryService:
         new_ai_response: str,
     ) -> Dict[str, Any]:
         """
-        Update the running semantic summary with validation and versioning
+        DEPRECATED: Returns minimal fallback response without calling LLM.
+        Semantic summaries were removed in RAG streamlining.
         """
-        try:
-            # For first conversation, create initial summary
-            if not current_summary or not current_summary.get("updated_summary"):
-                conv_summary = await self.create_conversation_summary(
-                    new_user_message, new_ai_response
-                )
-
-                initial_summary = {
-                    "updated_summary": conv_summary.get("semantic_summary", ""),
-                    "key_topics": conv_summary.get("main_topics", []),
-                    "recent_focus": conv_summary.get("context_for_future", ""),
-                    "accumulated_facts": conv_summary.get("key_facts", []),
-                    "question_numbers": conv_summary.get("question_numbers", []),
-                    "learning_progression": conv_summary.get("learning_progress", ""),
-                    "difficulty_trend": conv_summary.get(
-                        "difficulty_level", "beginner"
-                    ),
-                    "learning_patterns": [],
-                    "struggling_areas": [],
-                    "mastered_concepts": [],
-                    "version": 1,
-                    "last_updated": datetime.now().isoformat(),
-                }
-
-                return self._validate_and_enhance_summary(initial_summary)
-
-            # Update existing summary using enhanced chain
-            from app.config.langchain_config import StudyGuruConfig
-
-            chain = StudyGuruConfig.CHAINS.get_interaction_summary_update_chain()
-
-            # Truncate inputs
-            current_summary_text = current_summary.get("updated_summary", "")[:1000]
-            new_user_truncated = (
-                new_user_message[:500]
-                if len(new_user_message) > 500
-                else new_user_message
-            )
-            # Handle both string and dict responses for truncation
-            if isinstance(new_ai_response, dict):
-                new_ai_truncated = str(new_ai_response)[:1000]
-            else:
-                new_ai_truncated = (
-                    new_ai_response[:1000]
-                    if len(new_ai_response) > 1000
-                    else new_ai_response
-                )
-
-            result = await chain.ainvoke(
-                {
-                    "current_summary": current_summary_text,
-                    "new_user_message": new_user_truncated,
-                    "new_ai_response": new_ai_truncated,
-                }
-            )
-
-            # Check if result is valid
-            if not result or not isinstance(result, dict):
-                print(
-                    f"⚠️ Invalid result from interaction summary update chain: {result}"
-                )
-                return current_summary or self._get_fallback_summary(
-                    new_user_message, new_ai_response
-                )
-
-            # Merge with existing summary data
-            updated_summary = {
-                **current_summary,  # Keep existing data
-                **result,  # Update with new data
-                "version": current_summary.get("version", 1) + 1,
-                "last_updated": datetime.now().isoformat(),
-            }
-
-            # Validate and enhance the updated summary
-            validated_summary = self._validate_and_enhance_summary(updated_summary)
-
-            return validated_summary
-
-        except Exception as e:
-            print(f"Error updating interaction summary: {e}")
-            return current_summary or self._get_fallback_summary(
-                new_user_message, new_ai_response
-            )
+        print(
+            "⚠️ update_interaction_summary is DEPRECATED (RAG streamlining) - no LLM call"
+        )
+        return current_summary or {
+            "updated_summary": "",
+            "key_topics": [],
+            "recent_focus": "",
+            "accumulated_facts": [],
+            "question_numbers": [],
+            "learning_progression": "",
+            "difficulty_trend": "unknown",
+            "learning_patterns": [],
+            "struggling_areas": [],
+            "mastered_concepts": [],
+            "version": 1,
+            "last_updated": datetime.now().isoformat(),
+        }
 
     def _validate_and_enhance_summary(self, summary: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -442,81 +409,26 @@ class SemanticSummaryService:
     ) -> List[Dict[str, Any]]:
         """
         Get version history of semantic summaries for an interaction
+
+        DEPRECATED: ConversationContext table was removed in RAG streamlining.
+        This function now returns an empty list for backwards compatibility.
         """
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(ConversationContext)
-                    .where(
-                        and_(
-                            ConversationContext.interaction_id == interaction_id,
-                            ConversationContext.context_type == "semantic_summary",
-                        )
-                    )
-                    .order_by(desc(ConversationContext.created_at))
-                    .limit(limit)
-                )
-
-                contexts = result.scalars().all()
-
-                version_history = []
-                for context in contexts:
-                    version_history.append(
-                        {
-                            "version": context.context_data.get("version", 1),
-                            "created_at": (
-                                context.created_at.isoformat()
-                                if context.created_at
-                                else ""
-                            ),
-                            "summary_preview": context.context_data.get(
-                                "updated_summary", ""
-                            )[:100]
-                            + "...",
-                            "topics_count": len(
-                                context.context_data.get("key_topics", [])
-                            ),
-                            "facts_count": len(
-                                context.context_data.get("accumulated_facts", [])
-                            ),
-                        }
-                    )
-
-                return version_history
-
-        except Exception as e:
-            print(f"Error getting summary version history: {e}")
-            return []
+        print(
+            f"⚠️ Summary version history unavailable (table removed in RAG streamlining)"
+        )
+        return []
 
     async def store_summary_version(
         self, interaction_id: str, user_id: str, summary_data: Dict[str, Any]
     ) -> bool:
         """
         Store a version of the semantic summary for history tracking
+
+        DEPRECATED: ConversationContext table was removed in RAG streamlining.
+        This function now returns True as a no-op for backwards compatibility.
         """
-        try:
-            async with AsyncSessionLocal() as db:
-                # Create context entry for version tracking
-                context_entry = ConversationContext(
-                    interaction_id=interaction_id,
-                    user_id=user_id,
-                    context_type="semantic_summary",
-                    context_data=summary_data,
-                    context_hash=self._generate_summary_hash(summary_data),
-                    content_length=len(summary_data.get("updated_summary", "")),
-                    topic_tags=summary_data.get("key_topics", []),
-                    question_numbers=summary_data.get("question_numbers", []),
-                    created_at=datetime.now(),
-                )
-
-                db.add(context_entry)
-                await db.commit()
-
-                return True
-
-        except Exception as e:
-            print(f"Error storing summary version: {e}")
-            return False
+        print(f"⚠️ Summary version storage skipped (table removed in RAG streamlining)")
+        return True
 
     def _generate_summary_hash(self, summary_data: Dict[str, Any]) -> str:
         """Generate a hash for the summary data"""

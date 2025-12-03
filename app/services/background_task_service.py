@@ -175,7 +175,6 @@ class BackgroundTaskService:
             from app.models.interaction import Interaction, Conversation
             from app.models.context import (
                 ContextUsageLog,
-                ConversationContext,
                 DocumentContext,
             )
             from app.models.interaction import InteractionShare, InteractionShareVisitor
@@ -262,7 +261,6 @@ class BackgroundTaskService:
             from app.models.interaction import Interaction, Conversation
             from app.models.context import (
                 ContextUsageLog,
-                ConversationContext,
                 DocumentContext,
             )
             from app.models.interaction import InteractionShare, InteractionShareVisitor
@@ -320,7 +318,6 @@ class BackgroundTaskService:
         try:
             from app.models.context import (
                 ContextUsageLog,
-                ConversationContext,
                 DocumentContext,
             )
             from app.models.interaction import InteractionShare, InteractionShareVisitor
@@ -335,14 +332,7 @@ class BackgroundTaskService:
             for log in context_logs.scalars():
                 await db.delete(log)
 
-            # Delete conversation contexts
-            conversation_contexts = await db.execute(
-                select(ConversationContext).where(
-                    ConversationContext.interaction_id == interaction_id
-                )
-            )
-            for context in conversation_contexts.scalars():
-                await db.delete(context)
+            # Note: ConversationContext table was removed in RAG streamlining
 
             # Delete document contexts
             document_contexts = await db.execute(

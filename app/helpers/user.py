@@ -108,7 +108,6 @@ async def merge_guest_account_data(
     )
     from app.models.subscription import PointTransaction, BillingLog
     from app.models.context import (
-        ConversationContext,
         UserLearningProfile,
         DocumentContext,
         ContextUsageLog,
@@ -136,12 +135,7 @@ async def merge_guest_account_data(
         .values(user_id=real_user.id)
     )
 
-    # Transfer conversation context
-    await db.execute(
-        update(ConversationContext)
-        .where(ConversationContext.user_id == guest_user.id)
-        .values(user_id=real_user.id)
-    )
+    # Note: ConversationContext table was removed in RAG streamlining
 
     # Transfer document context
     await db.execute(

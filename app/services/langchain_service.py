@@ -1885,52 +1885,34 @@ class LangChainService:
 
                 return fallback_result
 
+    # =========================================================================
+    # DEPRECATED FUNCTIONS - Removed in RAG Streamlining
+    # These functions were used for semantic summaries which are no longer used.
+    # Vector search now handles all context retrieval.
+    # =========================================================================
+
     async def summarize_conversation(
         self, user_message: str, ai_response: str
     ) -> Dict[str, Any]:
         """
-        Extract key facts and create a semantic summary from a single conversation exchange.
-
-        Returns a dictionary with:
-        - key_facts: List of important facts discussed
-        - main_topics: List of main topics covered
-        - semantic_summary: Concise summary of the conversation
-        - important_terms: List of important terms mentioned
-        - context_for_future: Context useful for future conversations
-        - question_numbers: List of question numbers referenced
-        - learning_progress: What the user has learned
-        - potential_follow_ups: Potential follow-up questions
-        - difficulty_level: Difficulty level of the content
-        - subject_area: Subject area of the content
+        DEPRECATED: This function is no longer used in the streamlined RAG system.
+        Semantic summaries were removed - vector search handles context retrieval.
+        
+        Returns a minimal fallback response for backwards compatibility.
         """
-        try:
-            from app.services.semantic_summary_service import semantic_summary_service
-
-            # Use the enhanced semantic summary service
-            result = await semantic_summary_service.create_conversation_summary(
-                user_message, ai_response
-            )
-
-            return result
-
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-
-            # Return minimal summary on error
-            return {
-                "key_facts": [],
-                "main_topics": ["General Discussion"],
-                "semantic_summary": "Educational conversation about various topics.",
-                "important_terms": [],
-                "context_for_future": "User is engaged in educational learning.",
-                "question_numbers": [],
-                "learning_progress": "Learning in progress",
-                "potential_follow_ups": [],
-                "difficulty_level": "beginner",
-                "subject_area": "other",
-            }
+        print("⚠️ summarize_conversation is DEPRECATED (RAG streamlining)")
+        return {
+            "key_facts": [],
+            "main_topics": [],
+            "semantic_summary": "",
+            "important_terms": [],
+            "context_for_future": "",
+            "question_numbers": [],
+            "learning_progress": "",
+            "potential_follow_ups": [],
+            "difficulty_level": "unknown",
+            "subject_area": "unknown",
+        }
 
     async def update_interaction_summary(
         self,
@@ -1939,60 +1921,26 @@ class LangChainService:
         new_ai_response: str,
     ) -> Dict[str, Any]:
         """
-        Update the running semantic summary of an interaction with a new conversation.
-
-        Args:
-            current_summary: The existing accumulated summary (or None for first conversation)
-            new_user_message: The latest user message
-            new_ai_response: The latest AI response
-
-        Returns a dictionary with:
-        - updated_summary: Comprehensive running summary
-        - key_topics: All important topics covered so far
-        - recent_focus: What the user has been focusing on recently
-        - accumulated_facts: Critical facts to remember
-        - question_numbers: All question numbers referenced
-        - learning_progression: How the user's understanding has evolved
-        - difficulty_trend: Current difficulty level
-        - learning_patterns: Patterns in user's learning
-        - struggling_areas: Areas where user needs help
-        - mastered_concepts: Concepts the user has mastered
-        - version: Version number of the summary
-        - last_updated: Timestamp of last update
+        DEPRECATED: This function is no longer used in the streamlined RAG system.
+        Semantic summaries were removed - vector search handles context retrieval.
+        
+        Returns a minimal fallback response for backwards compatibility.
         """
-        try:
-            from app.services.semantic_summary_service import semantic_summary_service
-
-            # Use the enhanced semantic summary service
-            result = await semantic_summary_service.update_interaction_summary(
-                current_summary, new_user_message, new_ai_response
-            )
-
-            return result
-
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-
-            # Return current summary unchanged on error
-            if current_summary:
-                return current_summary
-            else:
-                return {
-                    "updated_summary": "Educational conversation in progress.",
-                    "key_topics": ["General Discussion"],
-                    "recent_focus": "User learning",
-                    "accumulated_facts": [],
-                    "question_numbers": [],
-                    "learning_progression": "Learning in progress",
-                    "difficulty_trend": "beginner",
-                    "learning_patterns": [],
-                    "struggling_areas": [],
-                    "mastered_concepts": [],
-                    "version": 1,
-                    "last_updated": datetime.now().isoformat(),
-                }
+        print("⚠️ update_interaction_summary is DEPRECATED (RAG streamlining)")
+        return current_summary or {
+            "updated_summary": "",
+            "key_topics": [],
+            "recent_focus": "",
+            "accumulated_facts": [],
+            "question_numbers": [],
+            "learning_progression": "",
+            "difficulty_trend": "unknown",
+            "learning_patterns": [],
+            "struggling_areas": [],
+            "mastered_concepts": [],
+            "version": 1,
+            "last_updated": datetime.now().isoformat(),
+        }
 
     async def generate_mindmap(
         self,

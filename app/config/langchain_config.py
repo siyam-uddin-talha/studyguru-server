@@ -359,29 +359,20 @@ Do not include any markdown, code blocks, or additional text. Only return the JS
         ]
     )
 
+    # =========================================================================
+    # DEPRECATED PROMPTS - Removed in RAG Streamlining
+    # These prompts were used for semantic summaries which are no longer used.
+    # Vector search now handles all context retrieval.
+    # Kept for backwards compatibility but chains will raise NotImplementedError.
+    # =========================================================================
+
     CONVERSATION_SUMMARIZATION = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """Extract key facts from educational conversation.
-
-Extract: key facts, main concepts, problems solved, formulas/equations, question numbers, learning progress, areas needing help.
-
-CRITICAL: Valid JSON only. NO markdown blocks. Plain text, no LaTeX. Escaped strings. Default values if empty.
-
-JSON:
-{{
-    "key_facts": ["fact 1: info with context", "fact 2: concept with details"],
-    "main_topics": ["topic1", "topic2"],
-    "semantic_summary": "Detailed 3-4 sentence summary (min 50 chars)",
-    "important_terms": ["term1", "term2"],
-    "context_for_future": "Context for follow-ups",
-    "question_numbers": [1, 2, 3],
-    "learning_progress": "What user learned",
-    "potential_follow_ups": ["question 1", "question 2"],
-    "difficulty_level": "beginner|intermediate|advanced",
-    "subject_area": "math|science|language|other"
-}}""",
+                """DEPRECATED: This prompt is no longer used.
+Semantic summaries were removed in RAG streamlining.
+Vector search now handles all context retrieval.""",
             ),
             ("human", "User: {user_message}\n\nAI: {ai_response}"),
         ]
@@ -391,24 +382,9 @@ JSON:
         [
             (
                 "system",
-                """Maintain running summary of educational conversation.
-
-Update summary: incorporate new facts/topics, keep important context, remove redundant info, prioritize recent/relevant, under 500 words, track progress, identify patterns.
-
-Valid JSON only. NO markdown blocks.
-
-{{
-    "updated_summary": "Comprehensive running summary",
-    "key_topics": ["topics covered"],
-    "recent_focus": "Recent focus (last 2-3 exchanges)",
-    "accumulated_facts": ["critical facts for future"],
-    "question_numbers": [1, 2, 3],
-    "learning_progression": "How understanding evolved",
-    "difficulty_trend": "beginner|intermediate|advanced",
-    "learning_patterns": ["pattern1", "pattern2"],
-    "struggling_areas": ["area1", "area2"],
-    "mastered_concepts": ["concept1", "concept2"]
-}}""",
+                """DEPRECATED: This prompt is no longer used.
+Semantic summaries were removed in RAG streamlining.
+Vector search now handles all context retrieval.""",
             ),
             (
                 "human",
@@ -1244,93 +1220,39 @@ class StudyGuruChains:
         parser = MarkdownJsonOutputParser()  # Use robust parser for title generation
         return StudyGuruPrompts.TITLE_GENERATION | model | parser
 
+    # =========================================================================
+    # DEPRECATED CHAINS - Removed in RAG Streamlining
+    # These chains were used for semantic summaries which are no longer used.
+    # Vector search now handles all context retrieval.
+    # =========================================================================
+
     @staticmethod
     def get_conversation_summarization_chain(model_name: Optional[str] = None):
-        """Get conversation summarization chain with increased token limits
-
-        Args:
-            model_name: Optional model name to use. If None, defaults to gpt-4.1-mini.
         """
-        # Determine model type from model_name if provided
-        if model_name:
-            clean_model_name = (
-                model_name.replace("-visualize", "")
-                .replace("-assistant", "")
-                .replace("-plus", "")
-                .replace("-elite", "")
-            )
-            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
-            is_gemini = actual_model.startswith("gemini")
-        else:
-            # Default to GPT model
-            is_gemini = False
+        DEPRECATED: This chain is no longer used in the streamlined RAG system.
+        Semantic summaries were removed - vector search handles context retrieval.
 
-        if is_gemini:
-            # Gemini 2.5 Flash for cost efficiency
-            model = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",  # Fast and cost-effective model
-                temperature=0.2,
-                google_api_key=settings.GOOGLE_API_KEY,
-                max_output_tokens=2000,  # Aggressively increased to handle reasoning + output
-                request_timeout=45,  # Increased timeout for longer processing
-                cache=cache_manager.get_response_cache(),  # Enable response caching
-            )
-        else:
-            # Use GPT-4o-mini for better stability and disable reasoning to reserve tokens for output
-            model = ChatOpenAI(
-                model="gpt-4.1-mini",  # More reliable for JSON output
-                temperature=0.2,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=2000,  # Aggressively increased to handle reasoning + output
-                request_timeout=45,  # Increased timeout for longer processing
-                # model_kwargs={"response_format": {"type": "json_object"}},
-            )
-        parser = MarkdownJsonOutputParser()
-        return StudyGuruPrompts.CONVERSATION_SUMMARIZATION | model | parser
+        Raises NotImplementedError to prevent accidental LLM calls.
+        """
+        raise NotImplementedError(
+            "get_conversation_summarization_chain is DEPRECATED. "
+            "Semantic summaries were removed in RAG streamlining. "
+            "Vector search now handles all context retrieval."
+        )
 
     @staticmethod
     def get_interaction_summary_update_chain(model_name: Optional[str] = None):
-        """Get interaction summary update chain with increased token limits
-
-        Args:
-            model_name: Optional model name to use. If None, defaults to gpt-4.1-mini.
         """
-        # Determine model type from model_name if provided
-        if model_name:
-            clean_model_name = (
-                model_name.replace("-visualize", "")
-                .replace("-assistant", "")
-                .replace("-plus", "")
-                .replace("-elite", "")
-            )
-            actual_model = MODEL_MAPPING.get(clean_model_name, clean_model_name)
-            is_gemini = actual_model.startswith("gemini")
-        else:
-            # Default to GPT model
-            is_gemini = False
+        DEPRECATED: This chain is no longer used in the streamlined RAG system.
+        Semantic summaries were removed - vector search handles context retrieval.
 
-        if is_gemini:
-            # Gemini 2.5 Flash for cost efficiency
-            model = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",  # Fast and cost-effective model
-                temperature=0.2,
-                google_api_key=settings.GOOGLE_API_KEY,
-                max_output_tokens=1500,  # Aggressively increased to handle longer updates
-                request_timeout=45,  # Increased timeout
-                cache=cache_manager.get_response_cache(),  # Enable response caching
-            )
-        else:
-            # Use GPT-4o-mini for better stability and increased token limits
-            model = ChatOpenAI(
-                model="gpt-4.1-mini",  # More reliable for JSON output
-                temperature=0.2,
-                openai_api_key=settings.OPENAI_API_KEY,
-                max_tokens=1500,  # Aggressively increased to handle longer updates
-                request_timeout=45,  # Increased timeout
-                # model_kwargs={"response_format": {"type": "json_object"}},
-            )
-        parser = MarkdownJsonOutputParser()
-        return StudyGuruPrompts.INTERACTION_SUMMARY_UPDATE | model | parser
+        Raises NotImplementedError to prevent accidental LLM calls.
+        """
+        raise NotImplementedError(
+            "get_interaction_summary_update_chain is DEPRECATED. "
+            "Semantic summaries were removed in RAG streamlining. "
+            "Vector search now handles all context retrieval."
+        )
 
     @staticmethod
     def get_mcq_generation_chain(

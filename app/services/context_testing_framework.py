@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal
 from app.models.interaction import Interaction, Conversation
 from app.models.context import (
-    ConversationContext,
     UserLearningProfile,
     DocumentContext,
     ContextUsageLog,
