@@ -64,14 +64,28 @@ class ProgressiveThinkingStatus:
         messages = status_config.get("messages", [])
         if not messages:
             print(f"⚠️ No messages configured for status type: {status_type}")
-            return
+            # Fallback to a default message
+            messages = [f"{status_type.replace('_', ' ').title()}..."]
+
+        # Ensure all messages are non-empty strings
+        messages = [
+            (
+                msg
+                if msg and msg.strip()
+                else f"{status_type.replace('_', ' ').title()}..."
+            )
+            for msg in messages
+        ]
 
         # Initialize state
         self.status_start_times[status_type] = asyncio.get_event_loop().time()
         self.status_message_indices[status_type] = 0
 
-        # Send first message immediately
-        await self._send_status_message(status_type, messages[0], details)
+        # Send first message immediately (ensure it's not empty)
+        first_message = (
+            messages[0] if messages else f"{status_type.replace('_', ' ').title()}..."
+        )
+        await self._send_status_message(status_type, first_message, details)
 
         # Start background task for progressive updates
         self.active_statuses[status_type] = asyncio.create_task(
@@ -84,10 +98,10 @@ class ProgressiveThinkingStatus:
         messages: List[str],
         details: Optional[Dict[str, Any]],
     ):
-        """Background loop that progresses through messages every 2 seconds"""
+        """Background loop that progresses through messages every 5 seconds"""
         try:
             while True:
-                await asyncio.sleep(2.0)  # Wait 2 seconds before next message
+                await asyncio.sleep(5.0)  # Wait 5 seconds before next message
 
                 # Check if status is still active
                 if status_type not in self.status_start_times:
@@ -120,6 +134,19 @@ class ProgressiveThinkingStatus:
     ):
         """Send a single thinking status message"""
         try:
+            # Ensure message is never empty
+            if not message or not message.strip():
+                status_config = THINKING_STATUSES.get(status_type)
+                if status_config:
+                    messages = status_config.get("messages", [])
+                    message = (
+                        messages[0]
+                        if messages
+                        else f"{status_type.replace('_', ' ').title()}..."
+                    )
+                else:
+                    message = f"{status_type.replace('_', ' ').title()}..."
+
             status_data = {
                 "type": "thinking",
                 "status_type": status_type,
@@ -209,6 +236,44 @@ async def send_thinking_status(
             print(f"🧠 Sent thinking status: {status_type} - {message}")
     except Exception as e:
         print(f"⚠️ Failed to send thinking status: {e}")
+
+
+# Background function to deduct coins after successful response
+async def _deduct_coins_after_response(
+    db: AsyncSession,
+    user_id: str,
+    points_cost: int,
+    conversation_id: str,
+    interaction_id: str,
+):
+    """
+    Deduct coins from user account after successful response.
+    This runs in background to not block the response.
+    """
+    try:
+        from app.helpers.subscription import add_point_transaction_async
+        from app.core.database import AsyncSessionLocal
+
+        # Create a new database session for this operation
+        async with AsyncSessionLocal() as new_db:
+            try:
+                # Deduct points using the transaction system
+                await add_point_transaction_async(
+                    db=new_db,
+                    user_id=user_id,
+                    transaction_type="used",
+                    points=points_cost,
+                    description=f"Points used for interaction response",
+                    conversation_id=conversation_id,
+                )
+                print(
+                    f"✅ Successfully deducted {points_cost} coins for user {user_id}"
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to deduct coins: {e}")
+                # Log error but don't fail - the response was already successful
+    except Exception as e:
+        print(f"⚠️ Error in coin deduction background task: {e}")
 
 
 # Background function for non-blocking title generation
@@ -495,7 +560,12 @@ async def websocket_stream_conversation(websocket: WebSocket):
             message = payload.get("message", "")
             interaction_id = payload.get("interaction_id")
             media_files = payload.get("media_files", [])
-            max_tokens = payload.get("max_tokens", 5000)
+            # Calculate max_tokens server-side based on number of files
+            file_count = len(media_files) if media_files else 0
+            max_tokens = StudyGuruConfig.calculate_dynamic_tokens(file_count)
+            print(
+                f"🔢 Server-side token calculation: {file_count} files = {max_tokens} tokens"
+            )
             visualize_model = payload.get(
                 "visualize_model"
             )  # Model for document analysis
@@ -1101,6 +1171,14 @@ async def websocket_stream_conversation(websocket: WebSocket):
                 print("⚠️ No meaningful content received, skipping title generation")
                 full_response = "No response generated"
 
+            # Calculate points cost based on response length (estimate tokens: 1 token ≈ 4 characters)
+            # Include both user message and AI response for accurate cost calculation
+            estimated_tokens = max(
+                1,
+                len(full_response) // 4 + (len(message or "") // 4),
+            )
+            points_cost = StudyGuruConfig.calculate_points_cost(estimated_tokens)
+
             # Now save the AI response to database and handle background operations
             title_task = None  # Initialize title task variable
             try:
@@ -1171,6 +1249,26 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     )
                 )
 
+                # Update the conversation with calculated cost
+                ai_conv.points_cost = points_cost
+                ai_conv.tokens_used = estimated_tokens
+                await db.commit()
+
+                # Deduct coins from user account in background (after successful response)
+                # This runs asynchronously so it doesn't block the response
+                asyncio.create_task(
+                    _deduct_coins_after_response(
+                        db=db,
+                        user_id=str(current_user.id),
+                        points_cost=points_cost,
+                        conversation_id=str(ai_conv.id),
+                        interaction_id=str(interaction.id),
+                    )
+                )
+                print(
+                    f"✅ Coin deduction queued: {points_cost} points (estimated {estimated_tokens} tokens)"
+                )
+
                 # Start background operations (embeddings, semantic summary, etc.)
                 try:
                     from app.services.interaction import _background_operations_enhanced
@@ -1203,8 +1301,8 @@ async def websocket_stream_conversation(websocket: WebSocket):
                     {
                         "type": "completed",
                         "content": full_response,
-                        "tokens_used": 0,  # We don't have exact token count from streaming
-                        "points_cost": 1,  # Default cost
+                        "tokens_used": estimated_tokens,
+                        "points_cost": points_cost,
                         "timestamp": asyncio.get_event_loop().time(),
                     }
                 )
