@@ -10,6 +10,7 @@ from .interaction import Interaction
 from .pivot import Country
 from .media import Media
 from .rbac import Module, UserModulePermission
+from .goal import Goal, GoalProgress, GoalType, GoalPeriod, ChartType
 
 __all__ = [
     "User",
@@ -25,4 +26,9 @@ __all__ = [
     "Country",
     "Module",
     "UserModulePermission",
+    "Goal",
+    "GoalProgress",
+    "GoalType",
+    "GoalPeriod",
+    "ChartType",
 ]

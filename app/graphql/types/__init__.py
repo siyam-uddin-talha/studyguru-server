@@ -5,6 +5,7 @@ from .media import *
 from .settings import *
 from .interaction import *
 from .reward import *
+from .goal import *
 
 __all__ = [
     "DefaultResponse",
