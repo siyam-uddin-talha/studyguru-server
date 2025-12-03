@@ -46,6 +46,8 @@ async def init_db():
                 interaction,
                 context,
                 rbac,
+                goal,
+                note,
             )
 
             # Create tables if they don't exist

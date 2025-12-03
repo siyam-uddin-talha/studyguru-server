@@ -5,6 +5,10 @@ from .subscription import (
     PointTransaction,
     BillingLog,
     SubscriptionPlan,
+    UsageLimit,
+    UserUsage,
+    Model,
+    UseCase,
 )
 from .interaction import Interaction
 from .pivot import Country
@@ -21,6 +25,10 @@ __all__ = [
     "PointTransaction",
     "BillingLog",
     "SubscriptionPlan",
+    "UsageLimit",
+    "UserUsage",
+    "Model",
+    "UseCase",
     "Interaction",
     "Media",
     "Country",

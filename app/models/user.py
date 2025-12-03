@@ -92,3 +92,6 @@ class User(Base):
     )
     goals = relationship("Goal", back_populates="user")
     notes = relationship("Note", back_populates="user")
+    user_usage = relationship(
+        "UserUsage", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )

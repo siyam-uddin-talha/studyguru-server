@@ -5,6 +5,7 @@ from sqlalchemy import (
     Text,
     ForeignKey,
 )
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -18,7 +19,7 @@ class Note(Base):
     user_id = Column(String(191), ForeignKey("user.id"), nullable=False)
 
     title = Column(String(500), nullable=False, default="Untitled")
-    content = Column(Text, nullable=False)  # HTML content
+    content = Column(MEDIUMTEXT, nullable=False)  # HTML content
     preview = Column(Text, nullable=True)  # Plain text preview
     color = Column(String(50), nullable=False, default="#FDF2F8")
     text_color = Column(String(50), nullable=True)  # Optional text color
