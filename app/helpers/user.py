@@ -112,6 +112,8 @@ async def merge_guest_account_data(
         DocumentContext,
         ContextUsageLog,
     )
+    from app.models.goal import Goal
+    from app.models.note import Note
     from sqlalchemy import delete
 
     # Transfer all interactions (which includes conversations)
@@ -185,6 +187,16 @@ async def merge_guest_account_data(
         update(InteractionShareVisitor)
         .where(InteractionShareVisitor.visitor_user_id == guest_user.id)
         .values(visitor_user_id=real_user.id)
+    )
+
+    # Transfer goals
+    await db.execute(
+        update(Goal).where(Goal.user_id == guest_user.id).values(user_id=real_user.id)
+    )
+
+    # Transfer notes
+    await db.execute(
+        update(Note).where(Note.user_id == guest_user.id).values(user_id=real_user.id)
     )
 
     # Merge points (add guest points to real user)

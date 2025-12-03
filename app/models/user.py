@@ -91,3 +91,4 @@ class User(Base):
         "UserModulePermission", back_populates="user", cascade="all, delete-orphan"
     )
     goals = relationship("Goal", back_populates="user")
+    notes = relationship("Note", back_populates="user")

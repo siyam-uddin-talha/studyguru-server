@@ -11,6 +11,7 @@ from app.graphql.resolvers.interaction import InteractionQuery, InteractionMutat
 from app.graphql.resolvers.reward import RewardMutation
 from app.graphql.resolvers.admin import AdminQuery, AdminMutation
 from app.graphql.resolvers.goal import GoalQuery, GoalMutation
+from app.graphql.resolvers.note import NoteQuery, NoteMutation
 
 from app.helpers.auth import get_current_user_optional
 from app.models.user import User
@@ -26,7 +27,13 @@ class Context(BaseContext):
 
 @strawberry.type
 class Query(
-    AuthQuery, PublicQuery, SettingsQuery, InteractionQuery, AdminQuery, GoalQuery
+    AuthQuery,
+    PublicQuery,
+    SettingsQuery,
+    InteractionQuery,
+    AdminQuery,
+    GoalQuery,
+    NoteQuery,
 ):
     pass
 
@@ -39,6 +46,7 @@ class Mutation(
     RewardMutation,
     AdminMutation,
     GoalMutation,
+    NoteMutation,
 ):
     pass
 
