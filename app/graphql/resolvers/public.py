@@ -8,8 +8,11 @@ from app.graphql.types.subscription import (
     SubscriptionType,
     SubscriptionPlanEnum,
     UsageLimitType,
+    ModelsResponse,
+    ModelType,
 )
-from app.models.subscription import Subscription, SubscriptionPlan
+from app.models.subscription import Subscription, SubscriptionPlan, Model
+
 
 @strawberry.type
 class PublicQuery:
@@ -34,8 +37,10 @@ class PublicQuery:
                     id=sub.id,
                     subscription_name=sub.subscription_name,
                     usd_amount=sub.usd_amount,
-                    gbp_amount=sub.gbp_amount,
+                    bdt_amount=sub.bdt_amount,
                     subscription_plan=SubscriptionPlanEnum(sub.subscription_plan.value),
+                    points_per_month=sub.points_per_month,
+                    points_per_day=sub.points_per_day,
                     usage_limit=(
                         UsageLimitType(
                             id=sub.usage_limit.id,
@@ -51,4 +56,32 @@ class PublicQuery:
             success=True,
             message="Getting pricing successfully",
             subscriptions=subscription_types,
+        )
+
+    @strawberry.field
+    async def models(self, info) -> ModelsResponse:
+        context = info.context
+        db: AsyncSession = context.db
+
+        # Get all models ordered by display_order
+        result = await db.execute(select(Model).order_by(Model.display_order.asc()))
+        models = result.scalars().all()
+
+        model_types = []
+        for model in models:
+            model_types.append(
+                ModelType(
+                    id=model.id,
+                    display_name=model.display_name,
+                    use_case=model.use_case.value,
+                    llm_model_name=model.llm_model_name,
+                    group_category=model.group_category.value,
+                    display_order=model.display_order,
+                )
+            )
+
+        return ModelsResponse(
+            success=True,
+            message="Getting models successfully",
+            models=model_types,
         )

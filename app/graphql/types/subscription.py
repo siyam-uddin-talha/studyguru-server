@@ -5,9 +5,11 @@ from app.models.subscription import SubscriptionPlan
 
 SubscriptionPlanEnum = strawberry.enum(SubscriptionPlan)
 
+
 @strawberry.type
 class UsageLimitType:
     id: str
+
 
 @strawberry.type
 class SubscriptionType:
@@ -16,8 +18,11 @@ class SubscriptionType:
     usd_amount: float
     bdt_amount: float
     subscription_plan: SubscriptionPlanEnum
+    points_per_month: Optional[int] = None
+    points_per_day: Optional[int] = None
     usage_limit: Optional[UsageLimitType] = None
     created_at: Optional[datetime] = None
+
 
 @strawberry.type
 class PurchasedSubscriptionType:
@@ -28,16 +33,19 @@ class PurchasedSubscriptionType:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
 @strawberry.type
 class SubscriptionsResponse:
     success: bool
     message: Optional[str] = None
     subscriptions: Optional[List[SubscriptionType]] = None
 
+
 @strawberry.type
 class UsageCount:
     total_user_track: int
     image_deck: int
+
 
 @strawberry.type
 class AccountSubscriptionDetails:
@@ -46,6 +54,7 @@ class AccountSubscriptionDetails:
     purchased_subscription: Optional[PurchasedSubscriptionType] = None
     free_subscription: Optional[SubscriptionType] = None
     usage_count: Optional[UsageCount] = None
+
 
 @strawberry.type
 class SubscriptionHistory:
@@ -59,8 +68,26 @@ class SubscriptionHistory:
     currency: Optional[str] = None
     status: Optional[str] = None
 
+
 @strawberry.type
 class SubscriptionHistoryDetails:
     success: bool
     message: Optional[str] = None
     result: Optional[List[SubscriptionHistory]] = None
+
+
+@strawberry.type
+class ModelType:
+    id: str
+    display_name: str
+    use_case: str
+    llm_model_name: str
+    group_category: str
+    display_order: int
+
+
+@strawberry.type
+class ModelsResponse:
+    success: bool
+    message: Optional[str] = None
+    models: Optional[List[ModelType]] = None
