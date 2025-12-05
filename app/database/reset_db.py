@@ -29,7 +29,7 @@ async def reset_db():
             await conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
 
             # Recreate all tables
-            await conn.run_sync(Base.metadata.create_all)
+            # await conn.run_sync(Base.metadata.create_all)
         print("✅ Database reset successfully.")
     except Exception as e:
         print(f"❌ Error resetting database: {e}")

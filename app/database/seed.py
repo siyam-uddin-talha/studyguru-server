@@ -12,6 +12,7 @@ from app.models.subscription import (
     UsageLimit,
     Model,
     UseCase,
+    ModelGroup,
 )
 from app.database.rbac_seed import seed_rbac
 
@@ -96,8 +97,8 @@ async def seed_subscriptions():
         # Seed Usage Limits
         await seed_usage_limits(db, essential.id, plus.id, elite.id)
 
-        # Seed Models
-        await seed_models(db, essential.id, plus.id, elite.id)
+        # Seed Models (no subscription link - available to all plans)
+        await seed_models(db)
 
 
 async def seed_usage_limits(
@@ -141,86 +142,84 @@ async def seed_usage_limits(
     print("Usage limits seeded successfully")
 
 
-async def seed_models(db: AsyncSession, essential_id: str, plus_id: str, elite_id: str):
-    """Seed models for each subscription plan"""
+async def seed_models(db: AsyncSession):
+    """Seed models available to all subscription plans"""
+    # Check if models already exist
+    existing = await db.execute(select(Model))
+    if existing.scalars().first():
+        print("Models already seeded")
+        return
+
     models = [
-        # ESSENTIAL (FREE) Plan - row1_models
+        # Order 1: Gemini 2.5 Flash
         Model(
-            subscription_id=essential_id,
-            display_name="Gemini 3 Pro",
-            use_case=UseCase.VISUALIZE,
-            llm_model_name="gemini-3-pro-preview",
-            daily_calling_limit=None,  # Unlimited until tokens end
-            tier="row1",
-        ),
-        Model(
-            subscription_id=essential_id,
             display_name="Gemini 2.5 Flash",
             use_case=UseCase.CHAT,
             llm_model_name="gemini-2.5-flash",
+            group_category=ModelGroup.GEMINI,
+            display_order=1,
             daily_calling_limit=None,  # Unlimited until tokens end
-            tier="row1",
+            tier=None,
         ),
-        # ESSENTIAL - mini model
+        # Order 2: GPT 5 Mini
         Model(
-            subscription_id=essential_id,
-            display_name="Gemini Flash",
+            display_name="GPT 5 Mini",
             use_case=UseCase.CHAT,
-            llm_model_name="gemini-mini",
+            llm_model_name="gpt-5-mini",
+            group_category=ModelGroup.GPT,
+            display_order=2,
             daily_calling_limit=None,  # Unlimited until tokens end
-            tier="mini",
+            tier=None,
         ),
-        # PLUS Plan - row2_models
+        # Order 3: Gemini 2.5 Pro
         Model(
-            subscription_id=plus_id,
-            display_name="Gemini 3 Pro Preview",
-            use_case=UseCase.VISUALIZE,
-            llm_model_name="gemini-3-pro-preview",
-            daily_calling_limit=None,  # Unlimited until tokens end
-            tier="row2",
-        ),
-        Model(
-            subscription_id=plus_id,
             display_name="Gemini 2.5 Pro",
             use_case=UseCase.CHAT,
             llm_model_name="gemini-2.5-pro",
+            group_category=ModelGroup.GEMINI,
+            display_order=3,
             daily_calling_limit=None,  # Unlimited until tokens end
-            tier="row2",
+            tier=None,
         ),
-        # PLUS - mini model
+        # Order 4: GPT 5
         Model(
-            subscription_id=plus_id,
-            display_name="Gemini Mini",
+            display_name="GPT 5",
             use_case=UseCase.CHAT,
-            llm_model_name="gemini-mini",
+            llm_model_name="gpt-5",
+            group_category=ModelGroup.GPT,
+            display_order=4,
             daily_calling_limit=None,  # Unlimited until tokens end
-            tier="mini",
+            tier=None,
         ),
-        # ELITE Plan - row1_models (same as ESSENTIAL)
+        # Order 5: GPT 5.1
         Model(
-            subscription_id=elite_id,
-            display_name="Gemini 3 Pro Preview",
-            use_case=UseCase.VISUALIZE,
+            display_name="GPT 5.1",
+            use_case=UseCase.CHAT,
+            llm_model_name="gpt-5.1",
+            group_category=ModelGroup.GPT,
+            display_order=5,
+            daily_calling_limit=None,  # Unlimited until tokens end
+            tier=None,
+        ),
+        # Order 6: Kimi K2 Turbo
+        Model(
+            display_name="Kimi K2 Turbo",
+            use_case=UseCase.CHAT,
+            llm_model_name="kimi-k2-turbo-preview",
+            group_category=ModelGroup.KIMI,
+            display_order=6,
+            daily_calling_limit=None,  # Unlimited until tokens end
+            tier=None,
+        ),
+        # Order 7: Gemini 3 Pro Preview
+        Model(
+            display_name="Gemini 3 Pro",
+            use_case=UseCase.CHAT,
             llm_model_name="gemini-3-pro-preview",
+            group_category=ModelGroup.GEMINI,
+            display_order=7,
             daily_calling_limit=None,  # Unlimited until tokens end
-            tier="row1",
-        ),
-        Model(
-            subscription_id=elite_id,
-            display_name="Gemini 2.5 Flash",
-            use_case=UseCase.CHAT,
-            llm_model_name="gemini-2.5-flash",
-            daily_calling_limit=None,  # Unlimited until tokens end
-            tier="row1",
-        ),
-        # ELITE - mini model
-        Model(
-            subscription_id=elite_id,
-            display_name="Gemini Mini",
-            use_case=UseCase.CHAT,
-            llm_model_name="gemini-mini",
-            daily_calling_limit=None,  # Unlimited until tokens end
-            tier="mini",
+            tier=None,
         ),
     ]
 

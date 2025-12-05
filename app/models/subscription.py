@@ -27,6 +27,12 @@ class UseCase(enum.Enum):
     CHAT = "CHAT"
 
 
+class ModelGroup(enum.Enum):
+    GEMINI = "GEMINI"
+    GPT = "GPT"
+    KIMI = "KIMI"
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
@@ -54,9 +60,6 @@ class Subscription(Base):
     billing_logs = relationship("BillingLog", back_populates="subscription")
     usage_limits = relationship(
         "UsageLimit", back_populates="subscription", cascade="all, delete-orphan"
-    )
-    models = relationship(
-        "Model", back_populates="subscription", cascade="all, delete-orphan"
     )
 
 
@@ -171,27 +174,23 @@ class UserUsage(Base):
 
 
 class Model(Base):
-    """LLM models available per subscription plan"""
+    """LLM models available to all subscription plans"""
 
     __tablename__ = "model"
 
     id = Column(String(191), primary_key=True, default=lambda: str(uuid.uuid4()))
-    subscription_id = Column(
-        String(191), ForeignKey("subscriptions.id"), nullable=False
-    )
     display_name = Column(String(191), nullable=False)  # Frontend display name
     use_case = Column(Enum(UseCase), nullable=False)  # VISUALIZE or CHAT
     llm_model_name = Column(
         String(191), nullable=False
     )  # Actual model identifier for LLM
+    group_category = Column(Enum(ModelGroup), nullable=False)  # GEMINI, GPT, or KIMI
+    display_order = Column(Integer, nullable=False)  # Order for UI display
     daily_calling_limit = Column(
         Integer, nullable=True
     )  # Null = unlimited, -1 = unlimited
-    tier = Column(String(50), nullable=False)  # row1, row2, row3, mini
+    tier = Column(String(50), nullable=True)  # Optional tier (row1, row2, row3, mini)
     created_at = Column(DateTime, default=func.now(), nullable=True)
     updated_at = Column(
         DateTime, default=func.now(), onupdate=func.now(), nullable=True
     )
-
-    # Relationships
-    subscription = relationship("Subscription", back_populates="models")

@@ -9,6 +9,7 @@ from .subscription import (
     UserUsage,
     Model,
     UseCase,
+    ModelGroup,
 )
 from .interaction import Interaction
 from .pivot import Country
@@ -29,6 +30,7 @@ __all__ = [
     "UserUsage",
     "Model",
     "UseCase",
+    "ModelGroup",
     "Interaction",
     "Media",
     "Country",
